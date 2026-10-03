@@ -40,7 +40,7 @@ internal data class PlateKey(val latitudeDeg: Double, val trueObliquityDeg: Doub
  *
  * See https://astro.cas.cz/bh2010/files/praha.pdf, printed pages 4–5, for the north-pole plate.
  */
-internal class OrlojProjection(private val geometry: DialGeometry) {
+internal class OrlojProjection(val geometry: DialGeometry) {
     /** Identifies the static plate geometry this projection would produce. */
     val plateKey: PlateKey =
         PlateKey(
@@ -68,6 +68,9 @@ internal class OrlojProjection(private val geometry: DialGeometry) {
 
     /** The Sun's projected position, or `null` when no longitude has been calculated. */
     val sunPoint: DialPoint? get() = geometry.sunLongitudeDeg?.let(::eclipticPoint)
+
+    /** The Moon's projected position, or `null` when no longitude has been calculated. */
+    val moonPoint: DialPoint? get() = geometry.moonLongitudeDeg?.let(::eclipticPoint)
 
     fun eclipticPoint(longitudeDeg: Double): DialPoint {
         val longitude = Math.toRadians(longitudeDeg)

@@ -12,4 +12,6 @@ internal object DialStyle {
     const val TWILIGHT: Int = 0xFF9C6438.toInt()
     const val NIGHT: Int = 0xFF152433.toInt()
     const val HAND: Int = 0xFFF4E5B8.toInt()
+    const val MOON_ILLUMINATED: Int = 0xFFE8EEF5.toInt()
+    const val MOON_SHADOW: Int = 0xFF152433.toInt()
 }

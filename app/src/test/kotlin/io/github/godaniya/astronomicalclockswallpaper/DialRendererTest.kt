@@ -40,6 +40,35 @@ class DialRendererTest {
         assertEquals(0xFF9C6438.toInt(), DialStyle.TWILIGHT)
         assertEquals(0xFF152433.toInt(), DialStyle.NIGHT)
         assertEquals(0xFFF4E5B8.toInt(), DialStyle.HAND)
+        assertEquals(0xFFE8EEF5.toInt(), DialStyle.MOON_ILLUMINATED)
+        assertEquals(0xFF152433.toInt(), DialStyle.MOON_SHADOW)
+    }
+
+    @Test
+    fun moonMarkerRendersOnEcliptic() {
+        val geometryWithMoon = prague.copy(moonLongitudeDeg = 60.0, moonPhaseLongitudeDeg = 90.0)
+        val projection = OrlojProjection(geometryWithMoon)
+        val moonPoint = projection.moonPoint!!
+        val enabled = render(geometry = geometryWithMoon, layers = DialLayers(isMoonEnabled = true))
+        val disabled = render(geometry = geometryWithMoon, layers = DialLayers(isMoonEnabled = false))
+        assertTrue(
+            "Moon marker must be drawn when isMoonEnabled = true",
+            changedPixelsNear(first = enabled, second = disabled, point = moonPoint) > 20,
+        )
+    }
+
+    @Test
+    fun moonSuppressedWhenOmitted() {
+        val geometryWithoutMoon = prague.copy(moonLongitudeDeg = null, moonPhaseLongitudeDeg = null)
+        val enabled = render(geometry = geometryWithoutMoon, layers = DialLayers(isMoonEnabled = true))
+        val disabled = render(geometry = geometryWithoutMoon, layers = DialLayers(isMoonEnabled = false))
+        val projection = OrlojProjection(prague)
+        val testPoint = projection.eclipticPoint(60.0)
+        assertEquals(
+            "Moon marker must be suppressed when moon coordinates are null",
+            0,
+            changedPixelsNear(first = enabled, second = disabled, point = testPoint),
+        )
     }
 
     @Test

@@ -14,6 +14,7 @@ internal class DialRenderer {
     private val plate = OrlojPlateRenderer()
     private val zodiac = ZodiacRenderer()
     private val sun = SunRenderer()
+    private val moon = MoonRenderer()
     private val hand =
         Path().apply {
             moveTo(0f, -HAND_LENGTH)
@@ -56,6 +57,9 @@ internal class DialRenderer {
             val sunPoint = projection?.sunPoint
             if (sunPoint != null && layers.isSunEnabled) {
                 sun.draw(canvas, sunPoint)
+            }
+            if (projection != null && layers.isMoonEnabled) {
+                moon.draw(canvas, projection)
             }
             drawCivilHand(canvas, state.hourAngle)
         } finally {

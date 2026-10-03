@@ -89,10 +89,16 @@ class DialGeometryTest {
         for (angle in listOf(-0.1, 360.0, Double.NaN, Double.POSITIVE_INFINITY)) {
             assertRejected { valid.copy(sunLongitudeDeg = angle) }
         }
-        // An uncalculated Sun is a supported state, not an error: it is what suppresses the
-        // marker for a geometry that carries no site, and it must not trip the range check.
+        for (angle in listOf(-0.1, 360.0, Double.NaN, Double.POSITIVE_INFINITY)) {
+            assertRejected { valid.copy(moonLongitudeDeg = angle) }
+            assertRejected { valid.copy(moonPhaseLongitudeDeg = angle) }
+        }
+        // An uncalculated Sun or Moon is a supported state, not an error: it is what suppresses
+        // the marker for a geometry that carries no site, and it must not trip the range check.
         assertNull(valid.sunLongitudeDeg)
         assertNull(valid.copy(sunLongitudeDeg = null).sunLongitudeDeg)
+        assertNull(valid.moonLongitudeDeg)
+        assertNull(valid.moonPhaseLongitudeDeg)
     }
 
     private fun assertRejected(create: () -> DialGeometry) {

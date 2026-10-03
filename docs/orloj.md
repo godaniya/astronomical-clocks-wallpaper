@@ -93,13 +93,16 @@ The Roman scale shows 24 civil hours: XII at the top, XXIV at the bottom, VI on 
 on the right. One hand follows saved-site civil time including DST. Its angle is independent of
 the zodiac's sidereal rotation; it is not a solar position marker.
 
-**Zodiac ring** and **Sun** default to enabled and persist across recreation. The first controls the
-rotating zodiac and its labels; the second controls the radiant golden Sun marker on the ecliptic ring
-together with the day/twilight/night shading and its horizon and astronomical-night boundaries — with it
-off the plate degrades to a clean instrument grid, keeping the tropics, the equator, and the outer rim.
-With the Sun layer on, the marker is drawn only when the geometry carries a Sun longitude; a geometry
-without one (such as test or offline plate geometries constructed without a solar position), or an absent
-geometry when no site is saved, shows no marker at all.
+**Zodiac ring**, **Sun**, and **Moon** default to enabled and persist across recreation. The first
+controls the rotating zodiac and its labels; the second controls the radiant golden Sun marker on the
+ecliptic ring together with the day/twilight/night shading and its horizon and astronomical-night
+boundaries — with it off the plate degrades to a clean instrument grid, keeping the tropics, the
+equator, and the outer rim. With the Sun layer on, the marker is drawn only when the geometry carries a
+Sun longitude; a geometry without one (such as test or offline plate geometries constructed without a
+solar position), or an absent geometry when no site is saved, shows no marker at all. The third controls
+the astronomical Moon marker, drawn on the same ecliptic ring with its illuminated phase; like the Sun,
+it is drawn only when the geometry carries a lunar longitude, so a geometry without one shows no lunar
+marker.
 The toggle was renamed from "Day and night" to "Sun" before release; a stored value under the old
 `day_and_night` key is ignored rather than migrated, so the layer returns to its enabled default. Without
 a saved site, layer checkboxes in Settings are disabled and only the civil clock is shown, using the
