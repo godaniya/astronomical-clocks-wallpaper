@@ -3,6 +3,7 @@ package io.github.godaniya.astronomicalclockswallpaper
 import android.util.Log
 import java.time.DateTimeException
 import java.time.ZoneId
+import java.util.Locale
 import kotlin.math.cos
 
 /**
@@ -535,6 +536,20 @@ internal object TimeZoneLookup {
      */
     fun pickerZoneIds(currentZone: ZoneId, zoneOf: (String) -> ZoneId = ZoneId::of): List<String> =
         (resolvableZoneIds(zoneOf = zoneOf) + currentZone.id).distinct().sorted()
+
+    /**
+     * The entries in [ids] that match [query], ignoring case and the `/`, `_`, and space separators,
+     * so typing "new york" reaches `America/New_York`. Signs stay significant, so "gmt+2" does not
+     * match `Etc/GMT-2`. A blank [query] returns [ids] unchanged rather than an empty list.
+     */
+    fun filterZoneIds(ids: List<String>, query: String): List<String> {
+        val key = query.zoneFilterKey()
+        return if (key.isEmpty()) ids else ids.filter { it.zoneFilterKey().contains(key) }
+    }
+
+    // Case-folded and separator-free, so the filter is forgiving about how a zone is typed.
+    private fun String.zoneFilterKey(): String =
+        lowercase(Locale.ROOT).filterNot { it == '/' || it == '_' || it.isWhitespace() }
 
     /**
      * The nearest bundled anchor this device can resolve, or UTC when it can resolve none.

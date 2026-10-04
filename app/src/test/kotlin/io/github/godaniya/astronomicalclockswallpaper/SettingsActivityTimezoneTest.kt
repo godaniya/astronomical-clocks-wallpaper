@@ -9,6 +9,7 @@ import android.location.LocationManager
 import android.os.Looper
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ListView
 import android.widget.TextView
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -194,8 +195,7 @@ class SettingsActivityTimezoneTest {
 
             val dialog = ShadowAlertDialog.getLatestDialog() as AlertDialog
             val targetZone = "America/New_York"
-            val index = TimeZoneLookup.AVAILABLE_ZONE_IDS.indexOf(targetZone)
-            shadowOf(dialog).clickOnItem(index)
+            clickZone(dialog = dialog, zoneId = targetZone)
 
             activity.findViewById<Button>(R.id.save_location).performClick()
             assertSavedTimezone(activity, targetZone)
@@ -235,6 +235,15 @@ class SettingsActivityTimezoneTest {
     private fun enterCoordinates(activity: SettingsActivity, latitude: String, longitude: String) {
         activity.findViewById<EditText>(R.id.latitude_input).setText(latitude)
         activity.findViewById<EditText>(R.id.longitude_input).setText(longitude)
+    }
+
+    // A dialog with a custom view has no AlertDialog.listView; the rows live in the inflated
+    // R.id.timezone_list, and the click must resolve the position in that adapter.
+    private fun clickZone(dialog: AlertDialog, zoneId: String) {
+        val list = dialog.findViewById<ListView>(R.id.timezone_list)
+        val adapter = list.adapter
+        val index = (0 until adapter.count).first { adapter.getItem(it) == zoneId }
+        shadowOf(list).performItemClick(index)
     }
 
     private fun assertSavedTimezone(activity: SettingsActivity, expectedZone: String) {

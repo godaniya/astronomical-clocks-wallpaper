@@ -104,7 +104,7 @@ PR. Removing a finding by lowering global severity or excluding production/test 
 | Kotlin `DEPRECATION` | `LocationManager.requestSingleUpdate` is the single-update API available since API 9; its API 30 replacement `getCurrentLocation` is unavailable on devices at the API 26 minimum. | Only the `LocationProvider.requestSingleUpdate` helper, annotated in source |
 | Kotlin `OVERRIDE_DEPRECATION` | `LocationListener.onStatusChanged` is required on API 26 but deprecated on newer releases; status notifications need no action for this single fix. The required enabled/disabled callbacks are not deprecated; disabling completes the request with a logged failure. | Only the `LocationProvider` listener's `onStatusChanged` override, annotated in source |
 | Lint `MissingPermission` | `LocationManager.getLastKnownLocation` / `requestSingleUpdate` run only after `fetch` has confirmed `ACCESS_COARSE_LOCATION` at runtime; lint cannot see the helper-method guard. | Only the two `LocationProvider` methods, annotated in source |
-| Lint `SetTextI18n` | The settings tests type literal coordinates into the manual `EditText` fields; they are test inputs, not user-facing text. | Only the three `SettingsActivityTest` input methods and `SettingsActivityAcquisitionTest.saveManualLocation`, annotated in source |
+| Lint `SetTextI18n` | The settings tests type literal coordinates or a literal timezone-filter query into `EditText` fields; they are test inputs, not user-facing text. | Only the test helpers that type such literals, in `SettingsActivityTest`, `SettingsActivityLocaleTest`, `SettingsActivityAcquisitionTest`, `SettingsActivityManualTimezoneTest`, and `SettingsActivityTimezoneTest`, annotated in source |
 | Kotlin `DEPRECATION` | The provider tests use Robolectric's deprecated `ShadowLocationManager.setLastKnownLocation` to seed exact cached timestamps, including missing or future timestamps. | Only `LocationProviderCacheTest.seedCache`, annotated in source |
 | Kotlin `DEPRECATION` | Robolectric's deprecated `getLocationUpdateListeners` has no replacement exposing registered listeners. Race tests must retain a listener to simulate callbacks already queued before cancellation and verify registration cleanup. | Only the test helper `ShadowLocationManager.networkListeners`, annotated in source |
 | Lint `Range` | The malformed-fix test intentionally injects a `NaN` latitude into a platform `Location` to verify rejection and request cleanup. | Only `LocationProviderLifecycleTest.malformedFixFailsOnce`, annotated in source |
@@ -140,8 +140,10 @@ records and unsupported versions are logged and left untouched until the user ex
 a replacement. Both current-location acquisition and manual coordinate entry resolve the site's
 geographic timezone offline via nearest-anchor lookup against public-domain IANA tzdb reference
 points (`TimeZoneLookup`), independent of the phone's system timezone. Manual coordinate entry
-additionally provides an explicit timezone picker dialog allowing the user to inspect and override
-the geographic timezone (#21, #24). The anchors are zone representatives rather than boundaries, so
+additionally provides an explicit timezone picker dialog with a filter box, so a user can type to
+narrow the hundreds of offered entries and inspect or override the geographic timezone (#21, #24);
+only a listed zone can be chosen, and a query that matches none shows a no-match message and commits
+nothing. The anchors are zone representatives rather than boundaries, so
 an inferred zone can be wrong near a border; a zone that came from the lookup rather than from an
 explicit pick is presented as an estimate and must be confirmed before it is saved as the site's
 civil time. Once saved, subsequent changes to the phone's system timezone alter neither the saved

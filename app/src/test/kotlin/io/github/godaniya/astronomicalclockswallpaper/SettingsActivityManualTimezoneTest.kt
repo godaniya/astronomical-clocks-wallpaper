@@ -3,8 +3,11 @@ package io.github.godaniya.astronomicalclockswallpaper
 import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.os.Looper
+import android.view.View
+import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ListView
 import android.widget.TextView
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -51,9 +54,7 @@ class SettingsActivityManualTimezoneTest {
 
             button.performClick()
             val dialog = ShadowAlertDialog.getLatestDialog() as AlertDialog
-            val targetZone = "Pacific/Honolulu"
-            val index = TimeZoneLookup.AVAILABLE_ZONE_IDS.indexOf(targetZone)
-            shadowOf(dialog).clickOnItem(index)
+            clickZone(dialog = dialog, zoneId = "Pacific/Honolulu")
             assertEquals("Timezone: Pacific/Honolulu", button.text.toString())
 
             // Editing coordinates after explicit choice must NOT overwrite user's selected timezone
@@ -77,9 +78,7 @@ class SettingsActivityManualTimezoneTest {
 
             activity.findViewById<Button>(R.id.select_timezone).performClick()
             val dialog = ShadowAlertDialog.getLatestDialog() as AlertDialog
-            val targetZone = "America/Chicago"
-            val index = TimeZoneLookup.AVAILABLE_ZONE_IDS.indexOf(targetZone)
-            shadowOf(dialog).clickOnItem(index)
+            clickZone(dialog = dialog, zoneId = "America/Chicago")
 
             controller.recreate()
             val recreated = controller.get()
@@ -131,9 +130,10 @@ class SettingsActivityManualTimezoneTest {
             activity.findViewById<Button>(R.id.select_timezone).performClick()
             val dialog = ShadowAlertDialog.getLatestDialog() as AlertDialog
 
-            val adapter = dialog.listView.adapter
+            val list = dialog.findViewById<ListView>(R.id.timezone_list)
+            val adapter = list.adapter
             val entries = (0 until adapter.count).map { adapter.getItem(it) }
-            assertEquals("Etc/GMT+2", entries[dialog.listView.checkedItemPosition])
+            assertEquals("Etc/GMT+2", entries[list.checkedItemPosition])
         }
     }
 
@@ -175,11 +175,108 @@ class SettingsActivityManualTimezoneTest {
 
             val picker = ShadowAlertDialog.getLatestDialog() as AlertDialog
             val targetZone = "Pacific/Honolulu"
-            shadowOf(picker).clickOnItem(TimeZoneLookup.AVAILABLE_ZONE_IDS.indexOf(targetZone))
+            clickZone(dialog = picker, zoneId = targetZone)
 
             assertEquals(ZoneId.of(targetZone), LocationStore(application).load()?.zoneId)
             assertTrue(activity.findViewById<TextView>(R.id.location_current).text.contains(targetZone))
         }
+    }
+
+    // The owner's request end to end: a typed query narrows the offered rows and the narrowed row is
+    // what the picker commits through Save.
+    @Test
+    fun filterNarrowsPickerChoices() {
+        Robolectric.buildActivity(SettingsActivity::class.java).use { controller ->
+            val activity = controller.setup().get()
+            enterCoordinates(activity = activity, latitude = "50.0875", longitude = "14.4206")
+            activity.findViewById<Button>(R.id.select_timezone).performClick()
+            val dialog = ShadowAlertDialog.getLatestDialog() as AlertDialog
+            val list = dialog.findViewById<ListView>(R.id.timezone_list)
+            val fullCount = list.adapter.count
+
+            typeFilter(dialog = dialog, query = "new york")
+            assertEquals(1, list.adapter.count)
+            assertTrue(fullCount > list.adapter.count)
+
+            clickZone(dialog = dialog, zoneId = "America/New_York")
+            activity.findViewById<Button>(R.id.save_location).performClick()
+            assertEquals(ZoneId.of("America/New_York"), LocationStore(application).load()?.zoneId)
+        }
+    }
+
+    // A second query must still narrow the full list. This catches an adapter that aliases the
+    // source list: the first keystroke's clear() would empty the source for every later query.
+    @Test
+    fun secondQueryStillNarrows() {
+        Robolectric.buildActivity(SettingsActivity::class.java).use { controller ->
+            val activity = controller.setup().get()
+            activity.findViewById<Button>(R.id.select_timezone).performClick()
+            val dialog = ShadowAlertDialog.getLatestDialog() as AlertDialog
+            val list = dialog.findViewById<ListView>(R.id.timezone_list)
+
+            typeFilter(dialog = dialog, query = "pacific")
+            assertTrue(list.adapter.count > 1)
+            typeFilter(dialog = dialog, query = "new york")
+
+            assertEquals(listOf("America/New_York"), (0 until list.adapter.count).map { list.adapter.getItem(it) })
+        }
+    }
+
+    // A query that matches nothing empties the list, shows the no-match message, and commits nothing.
+    @Test
+    fun filterWithNoMatchShowsEmpty() {
+        Robolectric.buildActivity(SettingsActivity::class.java).use { controller ->
+            val activity = controller.setup().get()
+            val button = activity.findViewById<Button>(R.id.select_timezone)
+            val before = button.text.toString()
+            button.performClick()
+            val dialog = ShadowAlertDialog.getLatestDialog() as AlertDialog
+            val list = dialog.findViewById<ListView>(R.id.timezone_list)
+
+            typeFilter(dialog = dialog, query = "not a real zone")
+            assertEquals(0, list.adapter.count)
+            assertEquals(View.VISIBLE, dialog.findViewById<View>(R.id.timezone_empty).visibility)
+            // The highlight must not survive on a row the filter removed.
+            assertEquals(-1, list.checkedItemPosition)
+            assertEquals(before, button.text.toString())
+            assertNull(LocationStore(application).load())
+        }
+    }
+
+    // IME Done with a single remaining match picks it, so the search box can complete the choice
+    // without a tap on the row.
+    @Test
+    fun enterSelectsSoleMatch() {
+        Robolectric.buildActivity(SettingsActivity::class.java).use { controller ->
+            val activity = controller.setup().get()
+            activity.findViewById<Button>(R.id.select_timezone).performClick()
+            val dialog = ShadowAlertDialog.getLatestDialog() as AlertDialog
+            val list = dialog.findViewById<ListView>(R.id.timezone_list)
+
+            typeFilter(dialog = dialog, query = "new york")
+            assertEquals(1, list.adapter.count)
+            dialog.findViewById<EditText>(R.id.timezone_filter).onEditorAction(EditorInfo.IME_ACTION_DONE)
+
+            assertEquals(
+                "Timezone: America/New_York",
+                activity.findViewById<Button>(R.id.select_timezone).text.toString(),
+            )
+        }
+    }
+
+    // A dialog with a custom view has no AlertDialog.listView; the rows live in the inflated
+    // R.id.timezone_list, and the click must resolve the position in that adapter.
+    private fun clickZone(dialog: AlertDialog, zoneId: String) {
+        val list = dialog.findViewById<ListView>(R.id.timezone_list)
+        val adapter = list.adapter
+        val index = (0 until adapter.count).first { adapter.getItem(it) == zoneId }
+        shadowOf(list).performItemClick(index)
+    }
+
+    // Typing a literal filter query is a test input, not user-facing text.
+    @SuppressLint("SetTextI18n")
+    private fun typeFilter(dialog: AlertDialog, query: String) {
+        dialog.findViewById<EditText>(R.id.timezone_filter).setText(query)
     }
 
     // A dialog dispatches its button click through a message on the main looper, so the write it

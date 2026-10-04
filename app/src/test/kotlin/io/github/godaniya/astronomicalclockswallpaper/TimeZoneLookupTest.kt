@@ -99,6 +99,26 @@ class TimeZoneLookupTest {
         assertNull(TimeZoneLookup.resolveZone(id = "Not/AZone"))
     }
 
+    // The picker's filter ignores case and the `/`, `_`, and space separators, and a blank query
+    // leaves the offered list intact rather than emptying it.
+    @Test
+    fun filterIgnoresCaseAndSeparators() {
+        val ids = listOf("America/New_York", "Etc/GMT+2", "Etc/GMT-2", "Asia/Tokyo")
+        assertEquals(listOf("America/New_York"), TimeZoneLookup.filterZoneIds(ids = ids, query = "new york"))
+        assertEquals(listOf("America/New_York"), TimeZoneLookup.filterZoneIds(ids = ids, query = "AMERICA/NEW_YORK"))
+        assertEquals(ids, TimeZoneLookup.filterZoneIds(ids = ids, query = ""))
+        assertEquals(ids, TimeZoneLookup.filterZoneIds(ids = ids, query = "   "))
+        assertEquals(emptyList<String>(), TimeZoneLookup.filterZoneIds(ids = ids, query = "Nowhere"))
+    }
+
+    // Signs stay significant, so a signed-offset query reaches only the offset it names.
+    @Test
+    fun filterKeepsSignsSignificant() {
+        val ids = listOf("Etc/GMT+2", "Etc/GMT-2")
+        assertEquals(listOf("Etc/GMT+2"), TimeZoneLookup.filterZoneIds(ids = ids, query = "gmt+2"))
+        assertEquals(listOf("Etc/GMT-2"), TimeZoneLookup.filterZoneIds(ids = ids, query = "gmt-2"))
+    }
+
     // A device must not lose any anchor from the picker: an identifier its tzdb rejects still has
     // the alias map behind it, so the offered list is unchanged.
     @Test
