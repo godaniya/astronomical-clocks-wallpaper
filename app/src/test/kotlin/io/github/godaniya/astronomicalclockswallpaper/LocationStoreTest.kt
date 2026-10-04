@@ -56,13 +56,37 @@ class LocationStoreTest {
                 ZoneId.of("Europe/Prague")
             }
 
-        val loaded = store.load(repair = false)
+        val loaded = store.load()
         assertEquals(ZoneId.of("Europe/Prague"), loaded?.zoneId)
         assertEquals(1, zoneReads)
 
         val raw = preferences().getString("location", null)
         val json = JSONObject(requireNotNull(raw))
         assertEquals("Invalid/Zone", json.getString("zoneId"))
+    }
+
+    @Test
+    fun loadLegacyDoesNotPersist() {
+        preferences()
+            .edit()
+            .putString("latitude", "50.0")
+            .putString("longitude", "14.0")
+            .putString("source", "MANUAL")
+            .apply()
+
+        var zoneReads = 0
+        val store =
+            LocationStore(RuntimeEnvironment.getApplication()) {
+                zoneReads++
+                ZoneId.of("Europe/Prague")
+            }
+
+        val loaded = store.load()
+        assertEquals(ZoneId.of("Europe/Prague"), loaded?.zoneId)
+        assertEquals(50.0, loaded?.latitude ?: 0.0, 0.0)
+        assertEquals(1, zoneReads)
+
+        assertEquals(setOf("latitude", "longitude", "source"), preferences().all.keys)
     }
 
     @Test

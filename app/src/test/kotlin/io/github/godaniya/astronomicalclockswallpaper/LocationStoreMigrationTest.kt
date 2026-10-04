@@ -29,7 +29,6 @@ class LocationStoreMigrationTest {
                 zoneReads++
                 deviceZone
             }
-        val migrated = store.load()
         val expected =
             ObservingLocation(
                 latitude = 50.0,
@@ -37,12 +36,18 @@ class LocationStoreMigrationTest {
                 source = ObservingLocation.Source.MANUAL,
                 zoneId = deviceZone,
             )
-        assertEquals(expected, migrated)
+        // Purity check: load() reads legacy coordinates without mutating SharedPreferences.
+        assertEquals(expected, store.load())
+        assertEquals(setOf("latitude", "longitude", "source"), preferences().all.keys)
+
+        // Explicit migration: migrateAndRepair() persists the versioned record once.
+        store.migrateAndRepair()
+        assertEquals(expected, store.load())
         assertEquals(setOf("location"), preferences().all.keys)
         deviceZone = ZoneId.of("Asia/Tokyo")
         assertEquals(expected, store.load())
         assertEquals(expected, LocationStore(RuntimeEnvironment.getApplication()) { deviceZone }.load())
-        assertEquals(1, zoneReads)
+        assertEquals(2, zoneReads)
     }
 
     @Test
@@ -62,6 +67,9 @@ class LocationStoreMigrationTest {
                 source = ObservingLocation.Source.CURRENT_COARSE,
                 zoneId = zone,
             )
+        assertEquals(expected, store.load())
+        assertEquals(setOf("latitude", "longitude", "source"), preferences().all.keys)
+        store.migrateAndRepair()
         assertEquals(expected, store.load())
         assertEquals(setOf("location"), preferences().all.keys)
     }
@@ -103,6 +111,7 @@ class LocationStoreMigrationTest {
     fun invalidZonesRepairedOnce() {
         val invalidZones = listOf(null, "", "No/Such_Zone", JSONObject.NULL, 42, false)
         for (invalidZone in invalidZones) {
+            ShadowLog.clear()
             val record = JSONObject(VALID_RECORD).put("zoneId", invalidZone).put("retainedField", "keep")
             preferences().edit().putString("location", record.toString()).apply()
             var zoneReads = 0
@@ -118,15 +127,30 @@ class LocationStoreMigrationTest {
                     source = ObservingLocation.Source.MANUAL,
                     zoneId = ZoneId.of("Australia/Sydney"),
                 )
-            assertEquals(expected, store.load())
+            // Purity check: load() uses fallback in-memory without persisting or logging repair.
             assertEquals(expected, store.load())
             assertEquals(1, zoneReads)
+            assertTrue(ShadowLog.getLogsForTag("LocationStore").isEmpty())
+            val rawBeforeRepair = preferences().getString("location", null)
+            val jsonBeforeRepair = JSONObject(requireNotNull(rawBeforeRepair))
+            assertEquals(invalidZone?.toString().orEmpty(), jsonBeforeRepair.optString("zoneId"))
+
+            // Explicit repair: migrateAndRepair() updates SharedPreferences once and logs the repair.
+            store.migrateAndRepair()
+            assertEquals(expected, store.load())
+            assertEquals(2, zoneReads)
             val repaired = JSONObject(requireNotNull(preferences().getString("location", null)))
             assertEquals("Australia/Sydney", repaired.getString("zoneId"))
             assertEquals("keep", repaired.getString("retainedField"))
+            assertEquals(1, ShadowLog.getLogsForTag("LocationStore").size)
+            assertTrue(ShadowLog.getLogsForTag("LocationStore").all { it.msg.contains("repaired") })
+
+            // Subsequent load() and migrateAndRepair() do not re-read device zone or re-repair.
+            assertEquals(expected, store.load())
+            store.migrateAndRepair()
+            assertEquals(expected, store.load())
+            assertEquals(2, zoneReads)
         }
-        assertEquals(invalidZones.size, ShadowLog.getLogsForTag("LocationStore").size)
-        assertTrue(ShadowLog.getLogsForTag("LocationStore").all { it.msg.contains("repaired") })
     }
 
     @Test
@@ -155,6 +179,8 @@ class LocationStoreMigrationTest {
     private fun assertUntouched(store: LocationStore) {
         val before = preferences().all
         assertNull(store.load())
+        assertEquals(before, preferences().all)
+        store.migrateAndRepair()
         assertEquals(before, preferences().all)
     }
 
