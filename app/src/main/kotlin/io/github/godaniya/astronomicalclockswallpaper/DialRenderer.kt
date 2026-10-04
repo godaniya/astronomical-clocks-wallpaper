@@ -171,15 +171,42 @@ internal class DialRenderer {
     }
 }
 
-/** Contains argument and canvas-state failures while preserving the scheduled per-second redraw. */
-internal fun containRenderFailure(draw: () -> Unit) {
-    try {
-        draw()
-    } catch (e: IllegalArgumentException) {
-        Log.e(TAG, "skipping frame: invalid render argument: ${e.message.orEmpty()}", e)
-    } catch (e: IllegalStateException) {
-        Log.e(TAG, "skipping frame: canvas in an invalid state: ${e.message.orEmpty()}", e)
+/** Contains argument and canvas-state failures while bounding repeated per-frame error logs. */
+internal class RenderFailureContainment(
+    private val renderArgumentLog: RepeatedFailureLog =
+        RepeatedFailureLog(
+            tag = TAG,
+            message = "skipping frame: invalid render argument",
+            level = Log.ERROR,
+        ),
+    private val renderStateLog: RepeatedFailureLog =
+        RepeatedFailureLog(
+            tag = TAG,
+            message = "skipping frame: canvas in an invalid state",
+            level = Log.ERROR,
+        ),
+) {
+    fun containRenderFailure(draw: () -> Unit) {
+        try {
+            draw()
+            renderArgumentLog.recordSuccess()
+            renderStateLog.recordSuccess()
+        } catch (e: IllegalArgumentException) {
+            renderArgumentLog.recordFailure(e, detail = e.message.orEmpty())
+        } catch (e: IllegalStateException) {
+            renderStateLog.recordFailure(e, detail = e.message.orEmpty())
+        }
     }
+}
+
+private val defaultRenderFailureContainment = RenderFailureContainment()
+
+/** Contains argument and canvas-state failures while preserving the scheduled per-second redraw. */
+internal fun containRenderFailure(
+    containment: RenderFailureContainment = defaultRenderFailureContainment,
+    draw: () -> Unit,
+) {
+    containment.containRenderFailure(draw)
 }
 
 private const val TAG = "DialRenderer"

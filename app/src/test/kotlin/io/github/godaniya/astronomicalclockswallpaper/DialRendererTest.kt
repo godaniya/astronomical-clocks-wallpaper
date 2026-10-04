@@ -507,6 +507,20 @@ class DialRendererTest {
     }
 
     @Test
+    fun repeatedFailuresAreThrottled() {
+        ShadowLog.clear()
+        val containment = RenderFailureContainment()
+        repeat(5) {
+            containRenderFailure(containment = containment) {
+                throw IllegalArgumentException("repeated argument")
+            }
+        }
+        val logs = ShadowLog.getLogsForTag("DialRenderer").filter { it.type == Log.ERROR }
+        assertEquals(1, logs.size)
+        assertTrue(logs.single().msg.contains("repeated argument"))
+    }
+
+    @Test
     fun rendererReuseIsIndependent() {
         // A live engine keeps one DialRenderer for its lifetime while the saved site changes, and
         // OrlojPlateRenderer caches static plate geometry, so frames must be independent and reusable.

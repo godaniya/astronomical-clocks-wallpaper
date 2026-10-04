@@ -171,6 +171,95 @@ class WallpaperFrameTest {
     }
 
     @Test
+    fun repeatedNullCanvasLogsOnce() {
+        holder.isCanvasAvailable = false
+        engine.onVisibilityChanged(true)
+        val looper = shadowOf(Looper.getMainLooper())
+        repeat(5) {
+            val delay = looper.nextScheduledTaskTime.toMillis() - SystemClock.uptimeMillis()
+            looper.idleFor(Duration.ofMillis(delay))
+        }
+        assertEquals(6, holder.lockAttempts)
+        val warnings = ShadowLog.getLogsForTag(SERVICE_TAG).filter { it.type == Log.WARN }
+        assertEquals(1, warnings.size)
+        assertEquals("skipping frame: lockCanvas returned null", warnings.single().msg)
+    }
+
+    @Test
+    fun repeatedInvalidSurfaceLogsOnce() {
+        holder.surface.release()
+        engine.onVisibilityChanged(true)
+        val looper = shadowOf(Looper.getMainLooper())
+        repeat(5) {
+            val delay = looper.nextScheduledTaskTime.toMillis() - SystemClock.uptimeMillis()
+            looper.idleFor(Duration.ofMillis(delay))
+        }
+        val debugs = ShadowLog.getLogsForTag(SERVICE_TAG).filter { it.type == Log.DEBUG }
+        assertEquals(1, debugs.size)
+        assertEquals("skipping frame: surface not ready", debugs.single().msg)
+    }
+
+    @Test
+    fun repeatedLockFailureLogsOnce() {
+        holder.lockFailure = IllegalArgumentException("persistent lock")
+        engine.onVisibilityChanged(true)
+        val looper = shadowOf(Looper.getMainLooper())
+        repeat(5) {
+            val delay = looper.nextScheduledTaskTime.toMillis() - SystemClock.uptimeMillis()
+            looper.idleFor(Duration.ofMillis(delay))
+        }
+        assertEquals(6, holder.lockAttempts)
+        val warnings = ShadowLog.getLogsForTag(SERVICE_TAG).filter { it.type == Log.WARN }
+        assertEquals(1, warnings.size)
+        assertEquals("skipping frame: lockCanvas failed (surface released)", warnings.single().msg)
+    }
+
+    @Test
+    fun repeatedDrawFaultLogsOnce() {
+        drawFailure = IllegalArgumentException("persistent draw arg")
+        engine.onVisibilityChanged(true)
+        val looper = shadowOf(Looper.getMainLooper())
+        repeat(5) {
+            val delay = looper.nextScheduledTaskTime.toMillis() - SystemClock.uptimeMillis()
+            looper.idleFor(Duration.ofMillis(delay))
+        }
+        assertEquals(6, drawnCanvases.size)
+        val errors = ShadowLog.getLogsForTag(RENDER_TAG).filter { it.type == Log.ERROR }
+        assertEquals(1, errors.size)
+        assertEquals("skipping frame: invalid render argument: persistent draw arg", errors.single().msg)
+    }
+
+    @Test
+    fun repeatedPostFailureLogsOnce() {
+        holder.postFailure = IllegalStateException("persistent post state")
+        engine.onVisibilityChanged(true)
+        val looper = shadowOf(Looper.getMainLooper())
+        repeat(5) {
+            val delay = looper.nextScheduledTaskTime.toMillis() - SystemClock.uptimeMillis()
+            looper.idleFor(Duration.ofMillis(delay))
+        }
+        val errors = ShadowLog.getLogsForTag(SERVICE_TAG).filter { it.type == Log.ERROR }
+        assertEquals(1, errors.size)
+        assertEquals("unlockCanvasAndPost failed: invalid surface state", errors.single().msg)
+    }
+
+    @Test
+    fun burstRecoveryLogsRecovery() {
+        holder.isCanvasAvailable = false
+        engine.onVisibilityChanged(true)
+        val looper = shadowOf(Looper.getMainLooper())
+        val delay = looper.nextScheduledTaskTime.toMillis() - SystemClock.uptimeMillis()
+        looper.idleFor(Duration.ofMillis(delay))
+        holder.isCanvasAvailable = true
+        ShadowLog.clear()
+        val nextDelay = looper.nextScheduledTaskTime.toMillis() - SystemClock.uptimeMillis()
+        looper.idleFor(Duration.ofMillis(nextDelay))
+        val infos = ShadowLog.getLogsForTag(SERVICE_TAG).filter { it.type == Log.INFO }
+        assertEquals(1, infos.size)
+        assertTrue(infos.single().msg.contains("recovered after 2 consecutive failures"))
+    }
+
+    @Test
     fun hiddenEngineStopsDrawing() {
         engine.onVisibilityChanged(true)
         engine.onVisibilityChanged(false)
