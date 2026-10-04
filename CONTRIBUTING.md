@@ -48,7 +48,8 @@ reliability and developer reputation are indivisible:
 Live wallpapers interact deeply with Android surface lifecycles, lit lock screens,
 and OEM power management. Testing on physical devices is indispensable.
 
-To protect personal privacy while providing actionable diagnostic data (see
+Testers may record full device identity (OEM/model) and firmware build in private
+evidence, but must keep those values out of Git and public reports (see
 [docs/device-testing.md](docs/device-testing.md) and Issue #20):
 
 - **What to include in public reports**:

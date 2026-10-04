@@ -5,10 +5,9 @@ standards for AI coding assistants and autonomous agents operating in this
 repository.
 
 Read [README.md](README.md) for public project context, [CONTRIBUTING.md](CONTRIBUTING.md)
-for shared engineering and testing standards, and [docs/design.md](docs/design.md)
-as the Single Source of Truth (SSOT) for the product contract and astronomical
-geometry. [docs/development.md](docs/development.md) defines the pinned toolchain,
-strict checking policy, and justified exceptions.
+for shared engineering and testing standards, [docs/design.md](docs/design.md) for the product
+contract, and [docs/orloj.md](docs/orloj.md) for detailed astronomical geometry. [docs/development.md](docs/development.md)
+defines the pinned toolchain, strict checking policy, and justified exceptions.
 
 ## Machine operational guardrails
 

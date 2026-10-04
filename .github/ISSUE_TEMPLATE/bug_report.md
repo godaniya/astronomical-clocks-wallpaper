@@ -17,7 +17,8 @@ Describe what should happen and what happens instead.
 ## Environment
 
 - App version and install source (or APK SHA-256 / commit SHA):
-- Android version and API level (withhold device OEM, model name, and firmware build string):
+- Android version and API level:
+  - Keep device OEM, model name, and firmware build string out of public reports; see [device privacy guidance](../../CONTRIBUTING.md#physical-device-testing-and-privacy).
 - Surface: preview / home / lit lock screen:
 - Location mode and timezone (use a non-personal test location if relevant):
 
