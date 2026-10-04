@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Looper
 import android.service.wallpaper.WallpaperService
+import android.view.SurfaceView
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotSame
@@ -105,6 +106,41 @@ class AstronomicalClocksWallpaperServiceTest {
         engine.onVisibilityChanged(false)
         engine.onSurfaceChanged(holder, SURFACE_FORMAT, SURFACE_WIDTH, SURFACE_HEIGHT)
         assertEquals(Duration.ZERO, looper.nextScheduledTaskTime)
+    }
+
+    // onSurfaceDestroyed cancels the tick loop but leaves the engine visible, so a debug broadcast
+    // arriving in the gap must not restart it: runTick's finally would re-arm the periodic loop onto
+    // a released surface. The same broadcast still redraws once a surface exists again.
+    @Test
+    fun debugTickSkippedWithoutSurface() {
+        val service = controller.get()
+        val holder = ReadyFrameHolder(SurfaceView(service).holder)
+        var draws = 0
+        val engine =
+            service.createEngine(
+                draw = { _, _, _, _ -> draws++ },
+                holder = holder,
+            )
+        val offsetIntent =
+            Intent(AstronomicalClocksWallpaperService.ACTION_DEBUG_SET_TIME).apply {
+                putExtra(AstronomicalClocksWallpaperService.EXTRA_OFFSET_MINUTES, 30L)
+            }
+
+        engine.onSurfaceChanged(holder, SURFACE_FORMAT, SURFACE_WIDTH, SURFACE_HEIGHT)
+        engine.onVisibilityChanged(true)
+        assertEquals(1, draws)
+
+        engine.onSurfaceDestroyed(holder)
+        service.handleDebugSetTime(offsetIntent)
+        assertEquals(1, draws)
+
+        // Surface recreation resumes the loop, and the debug broadcast then ticks again on top of it.
+        engine.onSurfaceChanged(holder, SURFACE_FORMAT, SURFACE_WIDTH, SURFACE_HEIGHT)
+        service.handleDebugSetTime(offsetIntent)
+        assertEquals(3, draws)
+
+        engine.onDestroy()
+        holder.release()
     }
 
     // onDestroy sets isDestroyed so a late visibility callback cannot restart the tick loop on a

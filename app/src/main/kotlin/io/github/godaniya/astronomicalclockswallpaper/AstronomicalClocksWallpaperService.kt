@@ -172,6 +172,12 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
         // onSurfaceChanged can decide whether to resume ticking without a framework-only getter.
         private var isEngineVisible = false
 
+        // onSurfaceDestroyed cancels the tick loop but leaves isEngineVisible true, so the debug
+        // trigger must also check that a surface exists: runTick would otherwise draw onto a released
+        // surface and its finally would re-arm the periodic loop across the surface gap. Set from
+        // onSurfaceChanged, which the framework calls immediately after onSurfaceCreated.
+        private var isSurfaceAvailable = false
+
         // Both of these faults recur once a second while they last, so they log the first occurrence
         // and a periodic summary rather than a stack trace per tick.
         private val renderFailureLog =
@@ -212,6 +218,7 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
 
         override fun onSurfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
             super.onSurfaceChanged(holder, format, width, height)
+            isSurfaceAvailable = true
             // Redraw for the new surface and restart the tick. The framework can destroy and
             // recreate the surface without a visibility change, and onSurfaceDestroyed cancels the
             // loop, so this is the only place that can resume it in that case.
@@ -221,6 +228,7 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
         }
 
         override fun onSurfaceDestroyed(holder: SurfaceHolder) {
+            isSurfaceAvailable = false
             stopTicking()
             super.onSurfaceDestroyed(holder)
         }
@@ -236,9 +244,17 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
         }
 
         fun triggerDebugTick() {
-            if (!isDestroyed && isEngineVisible) {
-                runTick()
+            if (isDestroyed || !isEngineVisible || !isSurfaceAvailable) {
+                // The skip is deliberate, but naming the failed guard keeps the common "broadcast
+                // arrived yet the dial did not move" case diagnosable from the device harness.
+                Log.d(
+                    TAG,
+                    "skipping debug tick: destroyed=$isDestroyed " +
+                        "visible=$isEngineVisible surface=$isSurfaceAvailable",
+                )
+                return
             }
+            runTick()
         }
 
         // Draws a frame and posts the next tick. Safe to call repeatedly: scheduleNextTick clears any
