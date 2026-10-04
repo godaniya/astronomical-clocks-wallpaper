@@ -98,7 +98,8 @@ rotating zodiac and its labels; the second controls the radiant golden Sun marke
 together with the day/twilight/night shading and its horizon and astronomical-night boundaries — with it
 off the plate degrades to a clean instrument grid, keeping the tropics, the equator, and the outer rim.
 With the Sun layer on, the marker is drawn only when the geometry carries a Sun longitude; a geometry
-without one, such as the no-saved-site case, shows no marker at all.
+without one (such as test or offline plate geometries constructed without a solar position), or an absent
+geometry when no site is saved, shows no marker at all.
 The toggle was renamed from "Day and night" to "Sun" before release; a stored value under the old
 `day_and_night` key is ignored rather than migrated, so the layer returns to its enabled default. Without
 a saved site, layer checkboxes in Settings are disabled and only the civil clock is shown, using the
@@ -158,6 +159,6 @@ comparisons produce false positives across environments (see [device-testing.md]
 Representative PNGs for visual inspection are explicitly exported under `app/build/reports/orloj` with
 `./gradlew exportRepresentativeImages`.
 
-Run `./gradlew qualityGate :app:assembleDebug` and `scripts/verify-apk.sh`. These tests do not
-establish physical-device home or lit-lock-screen correctness, frame cost, or battery behavior.
-See [device-testing.md](device-testing.md) for the unrun physical-device checks.
+Run `./gradlew qualityGate :app:assembleDebug` and `scripts/verify-apk.sh`. Physical-device home and
+lit-lock-screen correctness for the Sun marker (#27) are documented in [device-testing.md](device-testing.md);
+frame cost and battery behavior remain unrun and are tracked in #6.
