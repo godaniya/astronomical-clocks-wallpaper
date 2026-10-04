@@ -30,6 +30,7 @@ internal fun Activity.showTimeZonePickerDialog(currentZone: ZoneId, onZoneSelect
     builder.setView(R.layout.dialog_timezone_picker)
     builder.setNegativeButton(android.R.string.cancel, null)
     val dialog = builder.show()
+    var isCommitted = false
 
     val filter = dialog.findViewById<EditText>(R.id.timezone_filter)
     val list = dialog.findViewById<ListView>(R.id.timezone_list)
@@ -49,6 +50,7 @@ internal fun Activity.showTimeZonePickerDialog(currentZone: ZoneId, onZoneSelect
     // reports consistent with what the filter is currently showing; resolveZone logs a rejection,
     // so an entry that stops resolving is diagnosable rather than a tap that silently does nothing.
     val commit = { position: Int ->
+        isCommitted = true
         val selectedId = adapter.getItem(position)
         if (selectedId != null) {
             TimeZoneLookup.resolveZone(id = selectedId)?.let(onZoneSelected)
@@ -90,6 +92,15 @@ internal fun Activity.showTimeZonePickerDialog(currentZone: ZoneId, onZoneSelect
             }
         },
     )
+    // A picker dismissed without a tap on a row (Cancel, Back, or the activity going away) commits
+    // nothing; logging it makes the estimated-zone flow's "Save that did nothing" case — Choose…,
+    // then abandon the picker — diagnosable. A row tap sets isCommitted, so exactly one line reports
+    // an abandonment and a completed choice logs nothing.
+    dialog.setOnDismissListener {
+        if (!isCommitted) {
+            Log.i(TAG, "timezone picker dismissed without a selection; nothing saved")
+        }
+    }
 }
 
 // Internal rather than private: the anonymous TextWatcher below is a separate class, and a private
@@ -127,10 +138,12 @@ internal fun Activity.confirmEstimatedZone(estimated: ZoneId, onZoneConfirmed: (
         showTimeZonePickerDialog(currentZone = estimated, onZoneSelected = onZoneConfirmed)
     }
     builder.setNegativeButton(android.R.string.cancel, null)
-    // A dismissal that is not one of those two buttons stores nothing and says nothing. That
-    // covers Cancel, the picker being cancelled after Choose, and the activity going away — which
-    // includes a configuration change, since this Activity does not handle those itself. Logging
-    // it keeps a Save that visibly did nothing diagnosable instead of silent.
+    // A dismissal that is not one of those two buttons stores nothing, and only Cancel and the
+    // activity going away reach this listener. Choose… sets isChosen before the picker opens, so
+    // abandoning the picker stays quiet here; the picker's own listener reports that case. Logging
+    // the Cancel case keeps a Save that visibly did nothing diagnosable instead of silent; the
+    // activity going away includes a configuration change, since this Activity does not handle
+    // those itself.
     builder.setOnDismissListener {
         if (!isChosen) {
             Log.i(TAG, "estimated-zone confirmation dismissed without a choice; nothing saved")

@@ -3,6 +3,7 @@ package io.github.godaniya.astronomicalclockswallpaper
 import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.os.Looper
+import android.util.Log
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
@@ -21,6 +22,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowAlertDialog
+import org.robolectric.shadows.ShadowLog
 import java.time.ZoneId
 
 /** Verifies manual coordinate resolution, estimate confirmation, picker overrides, and recreation. */
@@ -180,6 +182,27 @@ class SettingsActivityManualTimezoneTest {
             assertEquals(ZoneId.of(targetZone), LocationStore(application).load()?.zoneId)
             assertTrue(activity.findViewById<TextView>(R.id.location_current).text.contains(targetZone))
         }
+    }
+
+    // After Choose…, abandoning the picker saves nothing and must say so exactly once: the
+    // confirmation's own listener stays quiet because isChosen was set on the Choose button.
+    @Test
+    fun abandonedPickerSavesNothing() {
+        ShadowLog.clear()
+        Robolectric.buildActivity(SettingsActivity::class.java).use { controller ->
+            val activity = controller.setup().get()
+            enterCoordinates(activity = activity, latitude = "45.5", longitude = "-120.25")
+            activity.findViewById<Button>(R.id.save_location).performClick()
+            val estimate = ShadowAlertDialog.getLatestDialog() as AlertDialog
+            clickDialogButton(estimate, AlertDialog.BUTTON_NEUTRAL) // Choose…
+            val picker = ShadowAlertDialog.getLatestDialog() as AlertDialog
+            clickDialogButton(picker, AlertDialog.BUTTON_NEGATIVE) // Cancel
+        }
+        val entries = ShadowLog.getLogsForTag("TimeZoneControls")
+        assertEquals(1, entries.size)
+        assertEquals(Log.INFO, entries.single().type)
+        assertTrue(entries.single().msg.contains("without a selection"))
+        assertNull(LocationStore(application).load())
     }
 
     // The owner's request end to end: a typed query narrows the offered rows and the narrowed row is
