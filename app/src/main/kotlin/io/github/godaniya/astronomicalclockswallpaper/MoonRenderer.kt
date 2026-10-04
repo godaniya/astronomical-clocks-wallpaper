@@ -14,17 +14,14 @@ import kotlin.math.cos
 internal class MoonRenderer {
     private val shadowPaint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = DialStyle.MOON_SHADOW
             style = Paint.Style.FILL
         }
     private val illuminatedPaint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = DialStyle.MOON_ILLUMINATED
             style = Paint.Style.FILL
         }
     private val rimPaint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = DialStyle.GOLD
             style = Paint.Style.STROKE
             strokeWidth = RIM_STROKE_WIDTH
         }
@@ -35,9 +32,18 @@ internal class MoonRenderer {
      * [southernHemisphere] mirrors it horizontally rather than turning the bright limb to face the
      * Sun: the marker keeps one orientation around the whole ring.
      */
-    fun draw(canvas: Canvas, point: DialPoint, phaseLongitudeDeg: Double, southernHemisphere: Boolean) {
+    fun draw(
+        canvas: Canvas,
+        point: DialPoint,
+        phaseLongitudeDeg: Double,
+        southernHemisphere: Boolean,
+        palette: DialPalette = DialStyle.DARK_PALETTE,
+    ) {
         val checkpoint = canvas.save()
         try {
+            shadowPaint.color = palette.moonShadow
+            illuminatedPaint.color = palette.moonIlluminated
+            rimPaint.color = palette.gold
             canvas.translate(point.x.toFloat(), point.y.toFloat())
             if (southernHemisphere) {
                 canvas.scale(-1f, 1f)

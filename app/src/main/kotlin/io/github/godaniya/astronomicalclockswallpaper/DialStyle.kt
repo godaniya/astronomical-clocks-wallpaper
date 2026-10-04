@@ -10,6 +10,8 @@ internal data class DialPalette(
     val twilight: Int,
     val night: Int,
     val hand: Int,
+    val moonIlluminated: Int,
+    val moonShadow: Int,
 )
 
 /** Original Orloj-inspired palette; dimensions in the renderers are fractions of the sky radius. */
@@ -45,6 +47,8 @@ internal object DialStyle {
             twilight = TWILIGHT,
             night = NIGHT,
             hand = HAND,
+            moonIlluminated = MOON_ILLUMINATED,
+            moonShadow = MOON_SHADOW,
         )
 
     // Light appearance palette: ivory, bronze, and pale blue with recognizable twilight/night regions
@@ -57,6 +61,14 @@ internal object DialStyle {
     const val LIGHT_NIGHT: Int = 0xFF2C3E50.toInt()
     const val LIGHT_HAND: Int = 0xFF4E341B.toInt()
 
+    // LIGHT_NIGHT equals the dark MOON_SHADOW, so the dark pair cannot be reused here: the unlit
+    // two-thirds of the disc would vanish into the zodiac band exactly as MOON_SHADOW's comment
+    // records for the dark palette. The lit disc reuses the ivory plate tone, which stays legible
+    // because the marker rides the night-filled band rather than the background. This slate is 136
+    // RGB units (Euclidean) from LIGHT_NIGHT and 179 from the ivory, so the disc reads as a sphere.
+    const val LIGHT_MOON_ILLUMINATED: Int = 0xFFF7F4EB.toInt()
+    const val LIGHT_MOON_SHADOW: Int = 0xFF7A8CA0.toInt()
+
     val LIGHT_PALETTE =
         DialPalette(
             background = LIGHT_BACKGROUND,
@@ -67,6 +79,8 @@ internal object DialStyle {
             twilight = LIGHT_TWILIGHT,
             night = LIGHT_NIGHT,
             hand = LIGHT_HAND,
+            moonIlluminated = LIGHT_MOON_ILLUMINATED,
+            moonShadow = LIGHT_MOON_SHADOW,
         )
 
     fun paletteFor(appearance: DialAppearance, isSystemInNightMode: Boolean): DialPalette {

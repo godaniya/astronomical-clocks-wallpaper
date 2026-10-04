@@ -15,6 +15,8 @@ class DialPaletteTest {
         assertEquals(0xFF9C6438.toInt(), DialStyle.DARK_PALETTE.twilight)
         assertEquals(0xFF152433.toInt(), DialStyle.DARK_PALETTE.night)
         assertEquals(0xFFF4E5B8.toInt(), DialStyle.DARK_PALETTE.hand)
+        assertEquals(0xFFE8EEF5.toInt(), DialStyle.DARK_PALETTE.moonIlluminated)
+        assertEquals(0xFF2C3E50.toInt(), DialStyle.DARK_PALETTE.moonShadow)
     }
 
     @Test
@@ -27,6 +29,16 @@ class DialPaletteTest {
         assertEquals(0xFFC88B58.toInt(), DialStyle.LIGHT_PALETTE.twilight)
         assertEquals(0xFF2C3E50.toInt(), DialStyle.LIGHT_PALETTE.night)
         assertEquals(0xFF4E341B.toInt(), DialStyle.LIGHT_PALETTE.hand)
+        assertEquals(0xFFF7F4EB.toInt(), DialStyle.LIGHT_PALETTE.moonIlluminated)
+        assertEquals(0xFF7A8CA0.toInt(), DialStyle.LIGHT_PALETTE.moonShadow)
+    }
+
+    // LIGHT_NIGHT equals the dark palette's MOON_SHADOW, so a light palette that copied the dark
+    // pair would paint the unlit disc invisibly onto the band; the separation is the whole point.
+    @Test
+    fun lightMoonShadowDiffersFromBand() {
+        assertNotEquals(DialStyle.LIGHT_PALETTE.night, DialStyle.LIGHT_PALETTE.moonShadow)
+        assertNotEquals(DialStyle.LIGHT_PALETTE.moonIlluminated, DialStyle.LIGHT_PALETTE.moonShadow)
     }
 
     @Test

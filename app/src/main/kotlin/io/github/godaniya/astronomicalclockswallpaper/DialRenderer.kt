@@ -90,6 +90,7 @@ internal class DialRenderer {
                         point = moonPoint,
                         phaseLongitudeDeg = moonPhase,
                         southernHemisphere = projection.isSouthern,
+                        palette = palette,
                     )
                 }
             }
