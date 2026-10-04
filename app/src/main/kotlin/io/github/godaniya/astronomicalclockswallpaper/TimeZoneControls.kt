@@ -4,9 +4,12 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.text.Editable
 import android.text.TextWatcher
+import android.util.Log
 import android.widget.Button
 import android.widget.EditText
 import java.time.ZoneId
+
+private const val TAG = "TimeZoneControls"
 
 /** Encapsulates timezone selection controls and coordinate watchers for manual location entry. */
 internal fun Activity.updateTimeZoneButtonText(zoneId: ZoneId) {
@@ -22,8 +25,8 @@ internal fun Activity.showTimeZonePickerDialog(currentZone: ZoneId, onZoneSelect
     val builder = AlertDialog.Builder(this)
     builder.setTitle(R.string.choose_timezone_title)
     builder.setSingleChoiceItems(zones.toTypedArray(), initialSelection) { dialog, which ->
-        // resolveZone logs when it rejects an identifier; it cannot succeed here because the
-        // entries came from resolvableZoneIds.
+        // resolveZone logs a rejection, so an entry that stops resolving is diagnosable rather
+        // than a tap that silently does nothing.
         TimeZoneLookup.resolveZone(id = zones[which])?.let(onZoneSelected)
         dialog.dismiss()
     }
@@ -39,14 +42,28 @@ internal fun Activity.showTimeZonePickerDialog(currentZone: ZoneId, onZoneSelect
  * one, and never when the dialog is cancelled.
  */
 internal fun Activity.confirmEstimatedZone(estimated: ZoneId, onZoneConfirmed: (ZoneId) -> Unit) {
+    var isChosen = false
     val builder = AlertDialog.Builder(this)
     builder.setTitle(R.string.estimated_timezone_title)
     builder.setMessage(getString(R.string.estimated_timezone_message, estimated.id))
-    builder.setPositiveButton(R.string.estimated_timezone_save) { _, _ -> onZoneConfirmed(estimated) }
+    builder.setPositiveButton(R.string.estimated_timezone_save) { _, _ ->
+        isChosen = true
+        onZoneConfirmed(estimated)
+    }
     builder.setNeutralButton(R.string.estimated_timezone_choose) { _, _ ->
+        isChosen = true
         showTimeZonePickerDialog(currentZone = estimated, onZoneSelected = onZoneConfirmed)
     }
     builder.setNegativeButton(android.R.string.cancel, null)
+    // A dismissal that is not one of those two buttons stores nothing and says nothing. That
+    // covers Cancel, the picker being cancelled after Choose, and the activity going away — which
+    // includes a configuration change, since this Activity does not handle those itself. Logging
+    // it keeps a Save that visibly did nothing diagnosable instead of silent.
+    builder.setOnDismissListener {
+        if (!isChosen) {
+            Log.i(TAG, "estimated-zone confirmation dismissed without a choice; nothing saved")
+        }
+    }
     builder.show()
 }
 

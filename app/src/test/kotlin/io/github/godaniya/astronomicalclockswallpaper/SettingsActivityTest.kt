@@ -347,6 +347,10 @@ class SettingsActivityTest {
 
             activity.findViewById<Button>(R.id.save_location).performClick()
 
+            // -0.0 and 0.0 name the same place, so this Save takes the unchanged path and must not
+            // reach the estimate dialog. The toast is what distinguishes the two branches now that
+            // the write itself sits behind a confirmation.
+            assertEquals(activity.getString(R.string.location_unchanged), ShadowToast.getTextOfLatestToast())
             val saved = requireNotNull(LocationStore(activity).load())
             assertEquals(ObservingLocation.Source.CURRENT_COARSE, saved.source)
             assertEquals(ZoneId.of("Europe/Prague"), saved.zoneId)

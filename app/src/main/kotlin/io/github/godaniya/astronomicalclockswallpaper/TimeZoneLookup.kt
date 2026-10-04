@@ -472,9 +472,13 @@ internal object TimeZoneLookup {
         )
 
     /**
-     * Resolves [id] against the device tzdb, falling back to the identifier that held the same
-     * region before the zone's split or rename. Returns null, after logging, instead of throwing
-     * `ZoneRulesException` on a device that knows neither identifier.
+     * Resolves [id] against the device tzdb, substituting the identifier that held the same region
+     * before the zone's split or rename. Returns null rather than throwing `ZoneRulesException`
+     * when the device knows neither identifier.
+     *
+     * The outcome is reported in exactly one log line, because a substitution and a miss are
+     * different diagnoses and must not share wording: a caller that acts on the result can tell
+     * that a device degraded, and a genuine miss still reads as a failure.
      *
      * The anchor list follows current tzdb releases, while the API 26 floor can carry a tzdb as
      * old as 2017a, whose `ZoneRulesProvider` rejects six of the bundled identifiers; every alias
@@ -485,13 +489,23 @@ internal object TimeZoneLookup {
      * [zoneOf] is the injection seam for the device's `ZoneRulesProvider`, mirroring
      * `LocationStore`'s `deviceZone`.
      */
-    fun resolveZone(id: String, zoneOf: (String) -> ZoneId = ZoneId::of): ZoneId? =
-        attemptZone(id = id, zoneOf = zoneOf) ?: resolveAlias(id = id, zoneOf = zoneOf)
+    fun resolveZone(id: String, zoneOf: (String) -> ZoneId = ZoneId::of): ZoneId? {
+        val resolved = resolveWithoutLogging(id = id, zoneOf = zoneOf)
+        if (resolved == null) {
+            Log.w(TAG, "device tzdb has no timezone $id and no predecessor identifier for it")
+        } else if (resolved.id != id) {
+            Log.w(TAG, "device tzdb has no $id; substituting its predecessor ${resolved.id}")
+        }
+        return resolved
+    }
 
-    private fun resolveAlias(id: String, zoneOf: (String) -> ZoneId): ZoneId? {
-        val alias = ZONE_ALIASES[id] ?: return null
-        Log.w(TAG, "device tzdb has no $id; substituting its predecessor $alias")
-        return attemptZone(id = alias, zoneOf = zoneOf)
+    // Resolution with no logging, for lookup: it searches anchors nearest-first and takes the first
+    // that resolves, so a rejected identifier is an expected step of that search rather than a
+    // failure, and reporting it would repeat on every keystroke of manual coordinate entry.
+    private fun resolveWithoutLogging(id: String, zoneOf: (String) -> ZoneId): ZoneId? {
+        val alias = ZONE_ALIASES[id]
+        return attemptZone(id = id, zoneOf = zoneOf)
+            ?: alias?.let { attemptZone(id = it, zoneOf = zoneOf) }
     }
 
     private fun attemptZone(id: String, zoneOf: (String) -> ZoneId): ZoneId? {
@@ -502,7 +516,6 @@ internal object TimeZoneLookup {
             try {
                 zoneOf(id)
             } catch (_: DateTimeException) {
-                Log.w(TAG, "device tzdb does not provide timezone $id")
                 null
             }
         return resolved
@@ -539,7 +552,7 @@ internal object TimeZoneLookup {
         val resolvable =
             CANONICAL_ANCHORS
                 .sortedBy(squareDegreesTo)
-                .firstNotNullOfOrNull { anchor -> resolveZone(id = anchor.zoneId, zoneOf = zoneOf) }
+                .firstNotNullOfOrNull { anchor -> resolveWithoutLogging(id = anchor.zoneId, zoneOf = zoneOf) }
         return resolvable ?: ZoneId.of(UTC_ZONE_ID)
     }
 

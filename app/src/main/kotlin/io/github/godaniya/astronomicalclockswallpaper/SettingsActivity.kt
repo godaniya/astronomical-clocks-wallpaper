@@ -8,6 +8,7 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.util.Log
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
@@ -17,6 +18,7 @@ import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
 import java.text.NumberFormat
 import java.text.ParsePosition
+import java.time.DateTimeException
 import java.time.ZoneId
 import java.util.Locale
 import kotlin.math.roundToLong
@@ -58,8 +60,13 @@ class SettingsActivity : Activity() {
         displayLocation(location, seedInputs = savedInstanceState == null)
         if (savedInstanceState != null) {
             val restoredZone =
-                savedInstanceState.getString(STATE_MANUAL_ZONE)?.let {
-                    runCatching { ZoneId.of(it) }.getOrNull()
+                savedInstanceState.getString(STATE_MANUAL_ZONE)?.let { stored ->
+                    try {
+                        ZoneId.of(stored)
+                    } catch (_: DateTimeException) {
+                        Log.w(TAG, "ignoring unreadable restored timezone $stored")
+                        null
+                    }
                 }
             if (restoredZone != null) {
                 manualZone = restoredZone
@@ -254,6 +261,7 @@ class SettingsActivity : Activity() {
     }
 
     private companion object {
+        const val TAG = "SettingsActivity"
         const val REQUEST_LOCATION_PERMISSION = 1
         const val STATE_FORCE_FRESH_PENDING = "force_fresh_pending"
         const val STATE_MANUAL_ZONE = "manual_zone"
