@@ -15,6 +15,7 @@ import android.service.wallpaper.WallpaperService
 import android.util.Log
 import android.view.SurfaceHolder
 import java.time.Clock
+import java.time.DateTimeException
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
@@ -111,6 +112,7 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
         if (isReset) {
             mutableDebugClock.reset()
             Log.i(TAG, "Debug clock reset to system UTC")
+            triggerDebugTicks()
         } else {
             val instantStr = intent.getStringExtra(EXTRA_INSTANT)
             if (!instantStr.isNullOrBlank()) {
@@ -125,32 +127,68 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
                     }
                     mutableDebugClock.setInstant(instant)
                     Log.i(TAG, "Debug clock fixed to instant: $instant")
+                    triggerDebugTicks()
                 } catch (e: DateTimeParseException) {
                     Log.e(TAG, "Invalid instant extra: $instantStr", e)
-                    return
                 }
             } else {
-                val offsetMillis = intent.getLongExtra(EXTRA_OFFSET_MILLIS, 0L)
-                val offsetSeconds = intent.getLongExtra(EXTRA_OFFSET_SECONDS, 0L)
-                val offsetMinutes = intent.getLongExtra(EXTRA_OFFSET_MINUTES, 0L)
-                val offsetHours = intent.getLongExtra(EXTRA_OFFSET_HOURS, 0L)
-                val totalMillis =
-                    offsetMillis +
-                        offsetSeconds *
-                        MILLIS_PER_SECOND +
-                        offsetMinutes *
-                        SECONDS_PER_MINUTE *
-                        MILLIS_PER_SECOND +
-                        offsetHours *
-                        SECONDS_PER_HOUR *
-                        MILLIS_PER_SECOND
-
-                mutableDebugClock.setOffset(Duration.ofMillis(totalMillis))
-                Log.i(TAG, "Debug clock offset set to ${totalMillis}ms")
+                val totalMillis = combinedOffsetMillisOrNull(intent)
+                if (totalMillis != null) {
+                    mutableDebugClock.setOffset(Duration.ofMillis(totalMillis))
+                    Log.i(TAG, "Debug clock offset set to ${totalMillis}ms")
+                    triggerDebugTicks()
+                }
             }
         }
+    }
+
+    // Each accepted change redraws every live engine immediately, so a broadcast repaints without
+    // waiting for the next tick. Rejected input does not reach this, matching the instant path.
+    private fun triggerDebugTicks() {
         for (engine in activeEngines) {
             engine.triggerDebugTick()
+        }
+    }
+
+    // Sums the four offset extras, or returns null when the total is not one the clock can hold. The
+    // extras are external input, so the sum uses checked arithmetic instead of wrapping to an
+    // unrelated offset, and the instant it implies is then bounded to the epoch-millis range that
+    // MutableDebugClock.millis converts within. That bound is measured from system time, not from
+    // the debug clock's current value: setOffset replaces the offset and clears any fixed instant,
+    // so the stored offset is added to the system base.
+    private fun combinedOffsetMillisOrNull(intent: Intent): Long? {
+        val offsetMillis = intent.getLongExtra(EXTRA_OFFSET_MILLIS, 0L)
+        val offsetSeconds = intent.getLongExtra(EXTRA_OFFSET_SECONDS, 0L)
+        val offsetMinutes = intent.getLongExtra(EXTRA_OFFSET_MINUTES, 0L)
+        val offsetHours = intent.getLongExtra(EXTRA_OFFSET_HOURS, 0L)
+        return try {
+            val combinedMillis =
+                Math.addExact(
+                    Math.addExact(
+                        Math.addExact(
+                            offsetMillis,
+                            Math.multiplyExact(offsetSeconds, MILLIS_PER_SECOND),
+                        ),
+                        Math.multiplyExact(offsetMinutes, SECONDS_PER_MINUTE * MILLIS_PER_SECOND),
+                    ),
+                    Math.multiplyExact(offsetHours, SECONDS_PER_HOUR * MILLIS_PER_SECOND),
+                )
+            val effectiveInstant = Instant.now().plus(Duration.ofMillis(combinedMillis))
+            if (
+                effectiveInstant.isBefore(minSupportedInstant) ||
+                effectiveInstant.isAfter(maxSupportedInstant)
+            ) {
+                Log.e(TAG, "Offset extras out of supported range: ${combinedMillis}ms")
+                null
+            } else {
+                combinedMillis
+            }
+        } catch (e: ArithmeticException) {
+            Log.e(TAG, "Offset extras overflow the supported range", e)
+            null
+        } catch (e: DateTimeException) {
+            Log.e(TAG, "Offset extras overflow the supported range", e)
+            null
         }
     }
 

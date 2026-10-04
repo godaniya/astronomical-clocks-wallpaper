@@ -200,6 +200,36 @@ class AstronomicalClocksWallpaperServiceTest {
         assertNull(service.debugClock.currentFixedInstant)
     }
 
+    // The offset extras are external input. An hours value that overflows the checked
+    // multiplication, and a millis value that leaves the epoch-millis range once added to system
+    // time, must both be rejected rather than wrapping to an unrelated virtual time. A valid
+    // offset is seeded first so the assertion can tell rejection from "no offset was ever set".
+    @Test
+    fun debugBroadcastRejectsOverflow() {
+        val service = controller.get()
+        val validOffset =
+            Intent(AstronomicalClocksWallpaperService.ACTION_DEBUG_SET_TIME).apply {
+                putExtra(AstronomicalClocksWallpaperService.EXTRA_OFFSET_HOURS, 5L)
+            }
+        service.handleDebugSetTime(validOffset)
+        assertEquals(Duration.ofHours(5), service.debugClock.currentOffset)
+
+        val overflowing =
+            listOf(
+                Intent(AstronomicalClocksWallpaperService.ACTION_DEBUG_SET_TIME).apply {
+                    putExtra(AstronomicalClocksWallpaperService.EXTRA_OFFSET_HOURS, Long.MAX_VALUE)
+                },
+                Intent(AstronomicalClocksWallpaperService.ACTION_DEBUG_SET_TIME).apply {
+                    putExtra(AstronomicalClocksWallpaperService.EXTRA_OFFSET_MILLIS, Long.MAX_VALUE)
+                },
+            )
+        for (intent in overflowing) {
+            service.handleDebugSetTime(intent)
+        }
+
+        assertEquals(Duration.ofHours(5), service.debugClock.currentOffset)
+    }
+
     @Test
     fun debugBroadcastResetsTime() {
         val service = controller.get()
