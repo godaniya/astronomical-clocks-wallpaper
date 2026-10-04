@@ -189,13 +189,17 @@ Two accepted exceptions, both recorded here rather than worked around:
   by that tone but by its gold rim (8.12:1) and its lit limb (9.40:1), which is what makes it a
   sphere; `MOON_SHADOW`'s own comment records its separation from the other seven dark tones. The
   light palette's shadow needs no such exemption, because there the disc is dark on a pale band.
-- **The graticule** - the tropic and equator circles - is a deliberately faint reference line, and
-  parts of it fall below 3:1: `mutedGold` on the dark twilight is 1.07:1 and on the light daylight sky
-  1.92:1, and `gold` on the light twilight 2.65:1. The casing lifts the crossings that matter most
-  (the light theme's night region, 9.99:1, and the dark theme's twilight, 3.62:1). Clearing the
-  remainder would need both mid tones re-derived for every surface they cross, which would collapse
-  the tonal difference between the two circles and lose the faint-line character the reference is
-  drawn with. The information-bearing contract above is unaffected.
+- **The graticule** - the tropic and equator circles - is a deliberately faint reference line drawn
+  across every region, and the casing lifts most of its crossings but not all. Still below 3:1 with
+  the casing applied: the dark theme's `mutedGold` on the daylight sky (1.51:1 by ink, 2.56:1 cased),
+  and the light theme's `gold` on twilight (2.65:1, 2.62:1 cased), `mutedGold` on twilight (1.50:1,
+  2.62:1 cased), and `mutedGold` on the daylight sky (1.92:1, 2.05:1 cased). Every other crossing
+  clears the minimum by ink or by casing - `gold` on the dark twilight is 2.52:1 by ink but 3.62:1
+  cased, the dark `mutedGold` on twilight 1.07:1 but 3.62:1 cased, and both graticule inks reach
+  9.99:1 over the light theme's night region. Clearing the remainder would need both mid tones
+  re-derived for every surface they cross, which would collapse the tonal difference between the two
+  circles and lose the faint-line character the reference is drawn with. The information-bearing
+  contract above is unaffected.
 
 The `zodiacBand` split exists for the light palette's sake: the sign names sit in the band, and filling
 it with the plate's pale sand tone keeps a light dial light, while the night sky region stays dark

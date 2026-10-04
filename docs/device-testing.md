@@ -962,3 +962,66 @@ afterwards, and `stay_on_while_plugged_in` was left at 0. Everything else was re
 returned to the physical 1080x2408 with no override, the `…AstronomicalClocksWallpaperService`
 binding survived, and the debug clock was reset. Reboot, lock screen, and marker-position checks were
 not run.
+
+## Appearance themes (#31)
+
+Test build: local debug `app-debug.apk` from `feat/31-appearance` at 82817a7 (APK SHA-256
+`38b7135b8c854350130175c686e4250a2eeb7a01e5d8dc45f27ed63f7c837144`), the branch tip when the artifact
+was assembled, installed with `adb install -r` over the existing binding. The only later commit on
+this branch is this report, which leaves `app/src/` untouched and produces the identical APK.
+`./gradlew qualityGate :app:assembleDebug` passed with 526 unit tests per build variant and no detekt,
+ktlint, or Android Lint findings, and `scripts/verify-apk.sh` verified the application ID, SDK levels,
+debug flag, permissions, wallpaper declaration, Astronomy Engine notice, and APK Signature Scheme v2.
+
+Same physical device as the earlier passes. Android version: 16 (API 36). Firmware build: withheld
+(embeds the model identifier). The saved site remained the manual Prague entry `50.08, 14.42` from the
+previous pass, with the Zodiac ring, Sun, and Moon layers at their defaults.
+
+**Method.** The three appearance choices are driven through the Settings radio group, and the wallpaper
+result is read from an `adb shell screencap` frame by exact palette match. This device's screenshot
+pipeline returns the palette unmodified, as the Moon pass recorded, so each probe compares the rendered
+colour to the `DialStyle` literal rather than to a transformed approximation. Night mode is driven with
+`cmd uimode night yes|no|auto` rather than waiting for the schedule.
+
+| Date | Check | Observed |
+| --- | --- | --- |
+| 2026-10-04 | build + install | `qualityGate` 526 tests per variant, 0 failures, no static-analysis findings; `verify-apk.sh` passed; APK SHA-256 `38b7135b…c837144` installed in place |
+| 2026-10-04 | Settings theme, explicit Light and Dark | The window background read `#F7F4EB` under Light and `#111923` under Dark, matching the two style resources |
+| 2026-10-04 | Settings theme, System | Night mode forced on read `#111923`; forced off read `#F7F4EB`, so the `values-night` override resolves |
+| 2026-10-04 | choice survives recreation | Light was selected, the activity recreated itself, and re-entering Settings still showed Light checked and the light window |
+| 2026-10-04 | choice survives process recreation | Dark was selected and the app process was then killed as its own uid (`run-as … kill <pid>`; `am kill` skips a process the wallpaper keeps bound). The framework restarted it under a new pid (2463 → 5889) with the wallpaper binding intact, and Settings reopened showing Dark checked and the dark window `#111923`, with the wallpaper on the dark palette (`#101923`, 1842809 px) |
+| 2026-10-04 | light wallpaper palette | One frame held 1841426 px of `#F7F4EB` plate and 312180 px of `#E8E2D2` (the civil scale and the zodiac band share the pale sand tone), with the sign names in `#4E341B` (2730 px) and the night sky region still `#2C3E50` (97675 px) |
+| 2026-10-04 | dark wallpaper palette | One frame held 1842957 px of `#101923`, 130838 px of `#152433` (the night region and the zodiac band), and 20071 px of `#D8B66A`, with the sign names in `#F4E5B8` (2714 px) |
+| 2026-10-04 | Moon reads on the light band | The unlit limb measured 98 px of `#5A6B7D` at (296.3, 1408.3), with the ivory lit limb and the gold rim bounding the disc against the pale band |
+| 2026-10-04 | Moon reads on the dark band | The unlit limb measured 101 px of `#2C3E50` at (295.9, 1407.8) |
+| 2026-10-04 | night-mode change while visible | `cmd uimode night yes` repainted the visible wallpaper to `#101923` (1842979 px) and `cmd uimode night no` back to `#F7F4EB` (1841454 px); the wallpaper process's logcat held no warning or error line |
+| 2026-10-04 | sign names legible in light mode | A crop of the ring at the Aries–Pisces boundary shows `ARI` and `PIS` as bronze glyphs on the pale band, with the ring outline and the equinox star in the same bronze |
+| 2026-10-04 | tick cadence, hand, surface recreation | `scripts/device-smoke-test.py`: the civil hand advanced 7.531° against 7.500° expected (residual +0.031°), the broadcast took 110 ms, `wm size 1080x2000` then reset redrew the dial, and the run counted 0 renderer warnings |
+
+The light rows reflect the palette as reviewed: the zodiac band carries the civil scale's pale sand tone
+rather than the dark palette's navy, which is what makes the bronze sign names readable on it, and the
+night sky region stays the one deep navy area because there the dark tone is the night. The hand and the
+two reference circles cross both the pale plate and that night region, so they carry the page-toned
+casing described in [orloj.md](orloj.md#palette-contrast); in the device frames it shows as a pale
+outline where they cross the navy and is absent where they cross the plate.
+
+The night-mode row is the device-side counterpart of the surface guard commit 5d6c64f adds to
+`ClockEngine.onConfigurationChanged`: a configuration change arriving while the engine is visible must
+repaint, and it did, with no surface or renderer warning. The destroyed-surface case itself is covered
+on the host by `AstronomicalClocksWallpaperServiceAppearanceTest.nightChangeWithoutSurface`, because the
+gap between `onSurfaceDestroyed` and `onSurfaceChanged` is not reproducible from adb.
+
+Device settings changed for this pass and restored afterwards: the screen was held awake
+(`svc power stayon usb`) and pocket screen-off disabled (`screen_off_pocket 0`) to keep the
+accidental-touch overlay away, both restored (`svc power stayon false`, `screen_off_pocket 1`); night
+mode was moved to `yes` and `no` for their rows and returned to `auto`; the appearance choice was moved
+through Light, Dark, and System, and through Dark again for the process-recreation row, and left on
+System, its setting when the pass began. `wm size` returned
+to the physical 1080x2408, `proximity_sensor` was read back at 1, the wallpaper binding survived, and
+the device was left with the screen dozing.
+
+**What this pass did not run.** Reboot and the lit lock screen are not re-evidenced here; the earlier
+passes stand for those. Always On Display remains out of scope per #2. The screenshot
+pipeline returned the palette unchanged on these captures, so the probes match the palette literals
+exactly, but a capture still cannot adjudicate glyph antialiasing: the contrast contract in
+[orloj.md](orloj.md#palette-contrast) rests on the palette values, not on these frames.
