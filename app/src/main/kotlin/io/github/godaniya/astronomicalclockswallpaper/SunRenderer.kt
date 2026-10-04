@@ -12,10 +12,10 @@ internal class SunRenderer {
     private val sunPath = buildSunPath()
 
     /** Draws the marker at an already projected [point]; the caller owns suppression. */
-    fun draw(canvas: Canvas, point: DialPoint) {
+    fun draw(canvas: Canvas, point: DialPoint, palette: DialPalette = DialStyle.DARK_PALETTE) {
         val checkpoint = canvas.save()
         canvas.translate(point.x.toFloat(), point.y.toFloat())
-        paint.color = DialStyle.GOLD
+        paint.color = palette.gold
         paint.style = Paint.Style.FILL
         canvas.drawPath(sunPath, paint)
         canvas.restoreToCount(checkpoint)

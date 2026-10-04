@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
+import android.content.res.Configuration
 import android.graphics.Canvas
 import android.os.Build
 import android.os.Handler
@@ -47,16 +48,48 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
         val isDebuggable = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
         val clock = if (isDebuggable) mutableDebugClock else Clock.systemUTC()
         return createEngine(
-            draw = { canvas, state, geometry, layers ->
-                dialRenderer.renderDial(canvas = canvas, state = state, geometry = geometry, layers = layers)
+            draw = { canvas, state, geometry, layers, palette ->
+                dialRenderer.renderDial(
+                    canvas = canvas,
+                    state = state,
+                    geometry = geometry,
+                    layers = layers,
+                    palette = palette,
+                )
             },
             clock = clock,
         )
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        for (engine in activeEngines) {
+            engine.onConfigurationChanged(newConfig)
+        }
+    }
+
     /** Creates an engine with a frame draw operation and optional controlled surface holder. */
     internal fun createEngine(
         draw: (Canvas, ClockState, DialGeometry?, DialLayers) -> Unit,
+        holder: SurfaceHolder? = null,
+        clock: Clock = Clock.systemUTC(),
+        deviceZone: () -> ZoneId = ZoneId::systemDefault,
+        calculator: AstronomyCalculator = AstronomyEngineCalculator(),
+    ): Engine {
+        val engine =
+            createEngine(
+                draw = { canvas, state, geometry, layers, _ -> draw(canvas, state, geometry, layers) },
+                holder = holder,
+                clock = clock,
+                deviceZone = deviceZone,
+                calculator = calculator,
+            )
+        return engine
+    }
+
+    /** Creates an engine with palette awareness and optional controlled surface holder. */
+    internal fun createEngine(
+        draw: (Canvas, ClockState, DialGeometry?, DialLayers, DialPalette) -> Unit,
         holder: SurfaceHolder? = null,
         clock: Clock = Clock.systemUTC(),
         deviceZone: () -> ZoneId = ZoneId::systemDefault,
@@ -192,10 +225,13 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
         }
     }
 
-    // Engine is a non-static Java inner class and requires the enclosing service instance.
-    @Suppress("UnnecessaryInnerClass")
+    // Engine is a non-static Java inner class and requires the enclosing service instance. The
+    // appearance feature adds a fifth framework lifecycle override (onConfigurationChanged) to a
+    // class already at detekt's per-class function budget from #85's stopTicking helper, so the
+    // budget is suppressed narrowly here rather than by splitting the engine's lifecycle surface.
+    @Suppress("UnnecessaryInnerClass", "TooManyFunctions")
     private inner class ClockEngine(
-        private val draw: (Canvas, ClockState, DialGeometry?, DialLayers) -> Unit,
+        private val draw: (Canvas, ClockState, DialGeometry?, DialLayers, DialPalette) -> Unit,
         private val frameHolder: SurfaceHolder?,
         private val clock: Clock,
         private val deviceZone: () -> ZoneId,
@@ -204,8 +240,10 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
         private val handler = Handler(Looper.getMainLooper())
         private val locationStore = LocationStore(applicationContext, deviceZone)
         private val dialSettingsStore = DialSettingsStore(applicationContext)
+        private val appearanceStore = AppearanceStore(applicationContext)
         private var settings = loadSettings()
         private var isDestroyed = false
+        private var currentConfig: Configuration? = null
         private val settingsListener =
             SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
                 if (!isDestroyed) {
@@ -241,13 +279,30 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
 
         init {
             // Keep a strong listener reference for this engine's lifetime. Updates only replace the
-            // cached snapshot; hidden engines must not acquire a surface or schedule a tick.
+            // cached snapshot; hidden engines must not acquire a surface or schedule a tick. The
+            // engine itself is registered with activeEngines by createEngine, which owns every
+            // construction site.
             locationStore.registerListener(settingsListener)
             dialSettingsStore.registerListener(settingsListener)
+            appearanceStore.registerListener(settingsListener)
         }
 
-        private fun loadSettings(): WallpaperSettings =
-            WallpaperSettings(location = locationStore.load(), layers = dialSettingsStore.load())
+        private fun loadSettings(): WallpaperSettings {
+            val settings =
+                WallpaperSettings(
+                    location = locationStore.load(),
+                    layers = dialSettingsStore.load(),
+                    appearance = appearanceStore.load(),
+                )
+            return settings
+        }
+
+        fun onConfigurationChanged(newConfig: Configuration) {
+            currentConfig = newConfig
+            if (!isDestroyed && settings.appearance == DialAppearance.SYSTEM && isEngineVisible) {
+                runTick()
+            }
+        }
 
         override fun onVisibilityChanged(visible: Boolean) {
             if (isDestroyed) {
@@ -284,6 +339,7 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
             isEngineVisible = false
             locationStore.unregisterListener(settingsListener)
             dialSettingsStore.unregisterListener(settingsListener)
+            appearanceStore.unregisterListener(settingsListener)
             stopTicking()
             super.onDestroy()
         }
@@ -362,7 +418,12 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
                 val location = snapshot.location
                 val civilTime = instant.atZone(location?.zoneId ?: deviceZone()).toLocalTime()
                 val geometry = dialGeometryOrNull(instant, location)
-                draw(canvas, clockState(civilTime), geometry, snapshot.layers)
+                val config = currentConfig ?: resources.configuration
+                val isSystemNight =
+                    config.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
+                        Configuration.UI_MODE_NIGHT_YES
+                val palette = DialStyle.paletteFor(snapshot.appearance, isSystemNight)
+                draw(canvas, clockState(civilTime), geometry, snapshot.layers, palette)
             }
         }
     }

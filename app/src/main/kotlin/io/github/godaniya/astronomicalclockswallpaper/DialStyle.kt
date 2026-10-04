@@ -1,9 +1,23 @@
 package io.github.godaniya.astronomicalclockswallpaper
 
+/** Palette of colors for rendering the astronomical clock. */
+internal data class DialPalette(
+    val background: Int,
+    val gold: Int,
+    val mutedGold: Int,
+    val rim: Int,
+    val sky: Int,
+    val twilight: Int,
+    val night: Int,
+    val hand: Int,
+)
+
 /** Original Orloj-inspired palette; dimensions in the renderers are fractions of the sky radius. */
 internal object DialStyle {
     // Font shaping needs ordinary-size text: subpixel textSize rounds glyph advances to zero.
     const val TEXT_UNITS = 1_000f
+
+    // Pinned dark palette constants for backwards compatibility and tests
     const val BACKGROUND: Int = 0xFF101923.toInt()
     const val GOLD: Int = 0xFFD8B66A.toInt()
     const val MUTED_GOLD: Int = 0xFF887347.toInt()
@@ -20,4 +34,48 @@ internal object DialStyle {
     // RGB units from NIGHT and at least 42 from every other entry, so the disc reads as a sphere
     // whether it is over the band (zodiac on) or the plain grid (zodiac off).
     const val MOON_SHADOW: Int = 0xFF2C3E50.toInt()
+
+    val DARK_PALETTE =
+        DialPalette(
+            background = BACKGROUND,
+            gold = GOLD,
+            mutedGold = MUTED_GOLD,
+            rim = RIM,
+            sky = SKY,
+            twilight = TWILIGHT,
+            night = NIGHT,
+            hand = HAND,
+        )
+
+    // Light appearance palette: ivory, bronze, and pale blue with recognizable twilight/night regions
+    const val LIGHT_BACKGROUND: Int = 0xFFF7F4EB.toInt()
+    const val LIGHT_GOLD: Int = 0xFF6E4D25.toInt()
+    const val LIGHT_MUTED_GOLD: Int = 0xFF96734B.toInt()
+    const val LIGHT_RIM: Int = 0xFFE8E2D2.toInt()
+    const val LIGHT_SKY: Int = 0xFF89B2CC.toInt()
+    const val LIGHT_TWILIGHT: Int = 0xFFC88B58.toInt()
+    const val LIGHT_NIGHT: Int = 0xFF2C3E50.toInt()
+    const val LIGHT_HAND: Int = 0xFF4E341B.toInt()
+
+    val LIGHT_PALETTE =
+        DialPalette(
+            background = LIGHT_BACKGROUND,
+            gold = LIGHT_GOLD,
+            mutedGold = LIGHT_MUTED_GOLD,
+            rim = LIGHT_RIM,
+            sky = LIGHT_SKY,
+            twilight = LIGHT_TWILIGHT,
+            night = LIGHT_NIGHT,
+            hand = LIGHT_HAND,
+        )
+
+    fun paletteFor(appearance: DialAppearance, isSystemInNightMode: Boolean): DialPalette {
+        val palette =
+            when (appearance) {
+                DialAppearance.LIGHT -> LIGHT_PALETTE
+                DialAppearance.DARK -> DARK_PALETTE
+                DialAppearance.SYSTEM -> if (isSystemInNightMode) DARK_PALETTE else LIGHT_PALETTE
+            }
+        return palette
+    }
 }
