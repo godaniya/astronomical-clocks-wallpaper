@@ -299,9 +299,21 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
 
         fun onConfigurationChanged(newConfig: Configuration) {
             currentConfig = newConfig
-            if (!isDestroyed && settings.appearance == DialAppearance.SYSTEM && isEngineVisible) {
-                runTick()
+            if (settings.appearance != DialAppearance.SYSTEM) {
+                return
             }
+            // onSurfaceDestroyed cancels the loop but leaves isEngineVisible true, so a night-mode
+            // change in that gap must not runTick onto the released surface: its finally would
+            // re-arm the periodic loop across the whole surface gap. Same guard as triggerDebugTick.
+            if (isDestroyed || !isEngineVisible || !isSurfaceAvailable) {
+                Log.d(
+                    TAG,
+                    "skipping appearance redraw: destroyed=$isDestroyed " +
+                        "visible=$isEngineVisible surface=$isSurfaceAvailable",
+                )
+                return
+            }
+            runTick()
         }
 
         override fun onVisibilityChanged(visible: Boolean) {

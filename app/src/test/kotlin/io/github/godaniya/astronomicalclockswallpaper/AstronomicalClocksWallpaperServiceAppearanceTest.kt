@@ -99,14 +99,11 @@ class AstronomicalClocksWallpaperServiceAppearanceTest {
     fun systemFollowsNightOnVisible() {
         appearanceStore.save(DialAppearance.SYSTEM)
         val engine = createTestEngine()
+        engine.onSurfaceChanged(holder, SURFACE_FORMAT, SURFACE_WIDTH, SURFACE_HEIGHT)
         engine.onVisibilityChanged(true)
         val initialCount = renderedPalettes.size
 
-        val nightConfig = Configuration(controller.get().resources.configuration)
-        nightConfig.uiMode = nightConfig.uiMode and Configuration.UI_MODE_NIGHT_MASK.inv() or
-            Configuration.UI_MODE_NIGHT_YES
-
-        controller.get().onConfigurationChanged(nightConfig)
+        controller.get().onConfigurationChanged(nightConfiguration())
         assertEquals(initialCount + 1, renderedPalettes.size)
         assertEquals(DialStyle.DARK_PALETTE, renderedPalettes.last())
     }
@@ -115,14 +112,44 @@ class AstronomicalClocksWallpaperServiceAppearanceTest {
     fun systemDoesNotWakeHidden() {
         appearanceStore.save(DialAppearance.SYSTEM)
         val engine = createTestEngine()
+        engine.onSurfaceChanged(holder, SURFACE_FORMAT, SURFACE_WIDTH, SURFACE_HEIGHT)
         engine.onVisibilityChanged(false)
         renderedPalettes.clear()
 
+        controller.get().onConfigurationChanged(nightConfiguration())
+        assertEquals(0, renderedPalettes.size)
+    }
+
+    // Copilot review discussion_r4177344106: onSurfaceDestroyed cancels the loop but leaves the
+    // engine visible, so a night-mode change arriving in that gap must not redraw onto the released
+    // surface. Before the fix this ran a tick whose finally re-armed the per-second loop, so even the
+    // later tick kept rendering; both checks must stay at zero.
+    @Test
+    fun nightChangeWithoutSurface() {
+        appearanceStore.save(DialAppearance.SYSTEM)
+        val engine = createTestEngine()
+        engine.onSurfaceChanged(holder, SURFACE_FORMAT, SURFACE_WIDTH, SURFACE_HEIGHT)
+        engine.onVisibilityChanged(true)
+        renderedPalettes.clear()
+
+        engine.onSurfaceDestroyed(holder)
+        controller.get().onConfigurationChanged(nightConfiguration())
+        assertEquals(0, renderedPalettes.size)
+
+        tick()
+        assertEquals(0, renderedPalettes.size)
+    }
+
+    private fun nightConfiguration(): Configuration {
         val nightConfig = Configuration(controller.get().resources.configuration)
         nightConfig.uiMode = nightConfig.uiMode and Configuration.UI_MODE_NIGHT_MASK.inv() or
             Configuration.UI_MODE_NIGHT_YES
+        return nightConfig
+    }
 
-        controller.get().onConfigurationChanged(nightConfig)
-        assertEquals(0, renderedPalettes.size)
+    private companion object {
+        const val SURFACE_FORMAT = 1
+        const val SURFACE_WIDTH = 200
+        const val SURFACE_HEIGHT = 200
     }
 }
