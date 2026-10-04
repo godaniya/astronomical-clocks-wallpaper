@@ -488,21 +488,22 @@ class DialRendererTest {
     @Test
     fun renderFailuresAreContained() {
         ShadowLog.clear()
-        containRenderFailure { throw IllegalArgumentException("invalid argument") }
-        containRenderFailure { throw IllegalStateException("invalid state") }
+        val containment = RenderFailureContainment()
+        containment.containRenderFailure { throw IllegalArgumentException("invalid argument") }
+        containment.containRenderFailure { throw IllegalStateException("invalid state") }
         val logs = ShadowLog.getLogsForTag("DialRenderer").filter { it.type == Log.ERROR }
         assertEquals(2, logs.size)
         assertTrue(logs[0].msg.contains("invalid argument"))
         assertTrue(logs[1].msg.contains("invalid state"))
         var hasDrawn = false
-        containRenderFailure { hasDrawn = true }
+        containment.containRenderFailure { hasDrawn = true }
         assertTrue(hasDrawn)
     }
 
     @Test
     fun unrelatedFailuresPropagate() {
         assertThrows(UnsupportedOperationException::class.java) {
-            containRenderFailure { throw UnsupportedOperationException("not contained") }
+            RenderFailureContainment().containRenderFailure { throw UnsupportedOperationException("not contained") }
         }
     }
 
@@ -511,7 +512,7 @@ class DialRendererTest {
         ShadowLog.clear()
         val containment = RenderFailureContainment()
         repeat(5) {
-            containRenderFailure(containment = containment) {
+            containment.containRenderFailure {
                 throw IllegalArgumentException("repeated argument")
             }
         }

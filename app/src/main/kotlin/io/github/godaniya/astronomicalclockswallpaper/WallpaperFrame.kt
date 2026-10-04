@@ -8,43 +8,41 @@ import android.view.SurfaceHolder
  * Acquires, draws, and posts wallpaper frames while bounding repeated surface and rendering log noise.
  * Instances are confined to the engine's tick thread.
  */
-internal class WallpaperFrame(
-    tag: String = TAG,
-    private val renderFailures: RenderFailureContainment = RenderFailureContainment(),
-) {
+internal class WallpaperFrame {
+    private val renderFailures = RenderFailureContainment()
     private val surfaceNotReadyLog =
         RepeatedFailureLog(
-            tag = tag,
+            tag = TAG,
             message = "skipping frame: surface not ready",
             level = Log.DEBUG,
         )
     private val nullCanvasLog =
         RepeatedFailureLog(
-            tag = tag,
+            tag = TAG,
             message = "skipping frame: lockCanvas returned null",
             level = Log.WARN,
         )
     private val lockSurfaceReleasedLog =
         RepeatedFailureLog(
-            tag = tag,
+            tag = TAG,
             message = "skipping frame: lockCanvas failed (surface released)",
             level = Log.WARN,
         )
     private val lockInvalidStateLog =
         RepeatedFailureLog(
-            tag = tag,
+            tag = TAG,
             message = "skipping frame: lockCanvas failed (invalid surface state)",
             level = Log.WARN,
         )
     private val unlockSurfaceReleasedLog =
         RepeatedFailureLog(
-            tag = tag,
+            tag = TAG,
             message = "unlockCanvasAndPost failed: surface already released",
             level = Log.WARN,
         )
     private val unlockInvalidStateLog =
         RepeatedFailureLog(
-            tag = tag,
+            tag = TAG,
             message = "unlockCanvasAndPost failed: invalid surface state",
             level = Log.ERROR,
         )
@@ -101,15 +99,4 @@ internal class WallpaperFrame(
     private companion object {
         const val TAG = "AstronomicalClocksWallpaperService"
     }
-}
-
-private val defaultWallpaperFrame = WallpaperFrame()
-
-/** Acquires, draws, and posts one frame using the default frame runner. */
-internal fun drawWallpaperFrame(
-    holder: SurfaceHolder,
-    frame: WallpaperFrame = defaultWallpaperFrame,
-    draw: (Canvas) -> Unit,
-) {
-    frame.drawWallpaperFrame(holder, draw)
 }

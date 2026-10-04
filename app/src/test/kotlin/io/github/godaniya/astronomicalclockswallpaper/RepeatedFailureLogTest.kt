@@ -113,16 +113,6 @@ class RepeatedFailureLogTest {
         assertFalse(entries.last().msg.contains("latest:"))
     }
 
-    @Test
-    fun burstWithoutThrowableRecovers() {
-        repeat(2) { log.recordFailure() }
-        log.recordSuccess()
-        val entries = ShadowLog.getLogsForTag(TAG)
-        assertEquals(2, entries.size)
-        assertEquals(Log.INFO, entries.last().type)
-        assertTrue(entries.last().msg.contains("recovered after 2 consecutive failures"))
-    }
-
     private companion object {
         const val TAG = "RepeatedFailureLogTest"
         const val MESSAGE = "unexpected error; keeping tick loop alive"

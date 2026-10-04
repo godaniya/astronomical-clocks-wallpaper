@@ -158,11 +158,7 @@ class WallpaperFrameTest {
     fun repeatedDrawFailureLogsOnce() {
         drawFailure = UnsupportedOperationException("persistent draw")
         engine.onVisibilityChanged(true)
-        val looper = shadowOf(Looper.getMainLooper())
-        repeat(5) {
-            val delay = looper.nextScheduledTaskTime.toMillis() - SystemClock.uptimeMillis()
-            looper.idleFor(Duration.ofMillis(delay))
-        }
+        advanceTicks()
         // Six failed ticks in total; only the first carries a stack trace.
         assertEquals(6, drawnCanvases.size)
         val errors = ShadowLog.getLogsForTag(SERVICE_TAG).filter { it.type == Log.ERROR }
@@ -174,11 +170,7 @@ class WallpaperFrameTest {
     fun repeatedNullCanvasLogsOnce() {
         holder.isCanvasAvailable = false
         engine.onVisibilityChanged(true)
-        val looper = shadowOf(Looper.getMainLooper())
-        repeat(5) {
-            val delay = looper.nextScheduledTaskTime.toMillis() - SystemClock.uptimeMillis()
-            looper.idleFor(Duration.ofMillis(delay))
-        }
+        advanceTicks()
         assertEquals(6, holder.lockAttempts)
         val warnings = ShadowLog.getLogsForTag(SERVICE_TAG).filter { it.type == Log.WARN }
         assertEquals(1, warnings.size)
@@ -189,11 +181,7 @@ class WallpaperFrameTest {
     fun repeatedInvalidSurfaceLogsOnce() {
         holder.surface.release()
         engine.onVisibilityChanged(true)
-        val looper = shadowOf(Looper.getMainLooper())
-        repeat(5) {
-            val delay = looper.nextScheduledTaskTime.toMillis() - SystemClock.uptimeMillis()
-            looper.idleFor(Duration.ofMillis(delay))
-        }
+        advanceTicks()
         val debugs = ShadowLog.getLogsForTag(SERVICE_TAG).filter { it.type == Log.DEBUG }
         assertEquals(1, debugs.size)
         assertEquals("skipping frame: surface not ready", debugs.single().msg)
@@ -203,11 +191,7 @@ class WallpaperFrameTest {
     fun repeatedLockFailureLogsOnce() {
         holder.lockFailure = IllegalArgumentException("persistent lock")
         engine.onVisibilityChanged(true)
-        val looper = shadowOf(Looper.getMainLooper())
-        repeat(5) {
-            val delay = looper.nextScheduledTaskTime.toMillis() - SystemClock.uptimeMillis()
-            looper.idleFor(Duration.ofMillis(delay))
-        }
+        advanceTicks()
         assertEquals(6, holder.lockAttempts)
         val warnings = ShadowLog.getLogsForTag(SERVICE_TAG).filter { it.type == Log.WARN }
         assertEquals(1, warnings.size)
@@ -218,11 +202,7 @@ class WallpaperFrameTest {
     fun repeatedDrawFaultLogsOnce() {
         drawFailure = IllegalArgumentException("persistent draw arg")
         engine.onVisibilityChanged(true)
-        val looper = shadowOf(Looper.getMainLooper())
-        repeat(5) {
-            val delay = looper.nextScheduledTaskTime.toMillis() - SystemClock.uptimeMillis()
-            looper.idleFor(Duration.ofMillis(delay))
-        }
+        advanceTicks()
         assertEquals(6, drawnCanvases.size)
         val errors = ShadowLog.getLogsForTag(RENDER_TAG).filter { it.type == Log.ERROR }
         assertEquals(1, errors.size)
@@ -233,11 +213,7 @@ class WallpaperFrameTest {
     fun repeatedPostFailureLogsOnce() {
         holder.postFailure = IllegalStateException("persistent post state")
         engine.onVisibilityChanged(true)
-        val looper = shadowOf(Looper.getMainLooper())
-        repeat(5) {
-            val delay = looper.nextScheduledTaskTime.toMillis() - SystemClock.uptimeMillis()
-            looper.idleFor(Duration.ofMillis(delay))
-        }
+        advanceTicks()
         val errors = ShadowLog.getLogsForTag(SERVICE_TAG).filter { it.type == Log.ERROR }
         assertEquals(1, errors.size)
         assertEquals("unlockCanvasAndPost failed: invalid surface state", errors.single().msg)
@@ -247,13 +223,10 @@ class WallpaperFrameTest {
     fun burstRecoveryLogsRecovery() {
         holder.isCanvasAvailable = false
         engine.onVisibilityChanged(true)
-        val looper = shadowOf(Looper.getMainLooper())
-        val delay = looper.nextScheduledTaskTime.toMillis() - SystemClock.uptimeMillis()
-        looper.idleFor(Duration.ofMillis(delay))
+        advanceTicks(count = 1)
         holder.isCanvasAvailable = true
         ShadowLog.clear()
-        val nextDelay = looper.nextScheduledTaskTime.toMillis() - SystemClock.uptimeMillis()
-        looper.idleFor(Duration.ofMillis(nextDelay))
+        advanceTicks(count = 1)
         val infos = ShadowLog.getLogsForTag(SERVICE_TAG).filter { it.type == Log.INFO }
         assertEquals(1, infos.size)
         assertTrue(infos.single().msg.contains("recovered after 2 consecutive failures"))
@@ -308,6 +281,14 @@ class WallpaperFrameTest {
         assertEquals(level, entry.type)
         assertEquals(message, entry.msg)
         assertSame(failure, entry.throwable)
+    }
+
+    private fun advanceTicks(count: Int = 5) {
+        val looper = shadowOf(Looper.getMainLooper())
+        repeat(count) {
+            val delay = looper.nextScheduledTaskTime.toMillis() - SystemClock.uptimeMillis()
+            looper.idleFor(Duration.ofMillis(delay))
+        }
     }
 
     private fun assertNextFrameSucceeds() {

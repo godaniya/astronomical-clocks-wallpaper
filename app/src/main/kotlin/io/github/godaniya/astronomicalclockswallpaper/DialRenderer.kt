@@ -172,20 +172,20 @@ internal class DialRenderer {
 }
 
 /** Contains argument and canvas-state failures while bounding repeated per-frame error logs. */
-internal class RenderFailureContainment(
-    private val renderArgumentLog: RepeatedFailureLog =
+internal class RenderFailureContainment {
+    private val renderArgumentLog =
         RepeatedFailureLog(
             tag = TAG,
             message = "skipping frame: invalid render argument",
             level = Log.ERROR,
-        ),
-    private val renderStateLog: RepeatedFailureLog =
+        )
+    private val renderStateLog =
         RepeatedFailureLog(
             tag = TAG,
             message = "skipping frame: canvas in an invalid state",
             level = Log.ERROR,
-        ),
-) {
+        )
+
     fun containRenderFailure(draw: () -> Unit) {
         try {
             draw()
@@ -197,16 +197,6 @@ internal class RenderFailureContainment(
             renderStateLog.recordFailure(e, detail = e.message.orEmpty())
         }
     }
-}
-
-private val defaultRenderFailureContainment = RenderFailureContainment()
-
-/** Contains argument and canvas-state failures while preserving the scheduled per-second redraw. */
-internal fun containRenderFailure(
-    containment: RenderFailureContainment = defaultRenderFailureContainment,
-    draw: () -> Unit,
-) {
-    containment.containRenderFailure(draw)
 }
 
 private const val TAG = "DialRenderer"
