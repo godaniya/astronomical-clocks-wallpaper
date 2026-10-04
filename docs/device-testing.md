@@ -908,7 +908,32 @@ This clock moves the civil hand and the astronomy together from one instant, so 
 marker follows the ephemeris but does not replace the independent ERFA comparison in the Sun and Moon
 passes. A smoke run only measures the hand; it does not exercise lifecycle, reboot, or the lock screen.
 
-Smoke run on 2026-10-04, Android 16 (API 36), three consecutive runs: hand advance 7.502°, 7.511°,
-and 7.492° against 7.500° expected (residuals +0.002°, +0.011°, −0.008°); the surface recreation
-check and the logcat check passed each time. An earlier version of the probe read 6.56° and 9.11°
-because a naive mean over all cream-coloured pixels was biased; it now takes the dominant wedge.
+### Smoke run (2026-10-04)
+
+Test build: local debug `app-debug.apk` from `feat/6-test-acceleration` at ef181cb (APK SHA-256
+c1e7080e67101aad0a749ff95fce6a8c57e168be91ff57009cbad65124018e0c), built from a clean tree at that
+revision and installed in place with `adb install -r` over the previous debug build.
+
+Android version: 16 (API 36)
+Firmware build: withheld (embeds the model identifier)
+
+| Date | Check | Observed |
+| --- | --- | --- |
+| 2026-10-04 | virtual time travel (+30m) | Two runs advanced the civil hand 7.529° and 7.581° against 7.500° expected (residuals +0.029° and +0.081°); the broadcasts took 89 ms and 119 ms |
+| 2026-10-04 | surface recreation | `wm size 1080x2000` then reset; the hand was drawn after each recreation |
+| 2026-10-04 | renderer log | 0 warnings or errors from `AstronomicalClocksWallpaperService` or `DialRenderer` in either run |
+
+Both residuals sit well inside the harness's ±0.5° tolerance. Five captures one second apart moved
+the probe's estimate by 0.002° to 0.046° per second, against the 0.004° the running hand advances in
+that second, so the probe's own estimate carries up to about 0.04° of jitter — the order of these
+residuals. They therefore bound the probe's precision rather than the renderer's; the check asserts
+that the hand advanced, not the probe's absolute accuracy. An earlier version of the probe read
+6.56° and 9.11° because a naive mean over all cream-coloured pixels was biased; it now takes the
+dominant wedge, whose dominant-bin selection is what leaves the small jitter above.
+
+The restore and log-isolation behavior was exercised on the device, not only in a host stub. A
+throwaway copy of the script with an injected mid-run failure left `wm size` at its physical
+1080x2408 and reset the clock, and a stale `Invalid instant extra` error planted before a run was
+excluded from that run's warning count while remaining in the buffer, so the filter isolates entries
+without clearing any other session's evidence. Reboot, lock screen, and marker-position checks were
+not run.
