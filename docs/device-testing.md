@@ -568,10 +568,10 @@ the rebase at 80e1a9f (APK SHA-256
 1e165b93b8cb1b07b1744ddfc86d3f81cc5c358aebdc064bfd94a07facd46b47), the artifact installed on the
 device below. Subsequent commits on this branch (c0cb0ba and later) are documentation and host-test
 changes only, leaving `app/src/main/` untouched and producing the identical APK bytecode and SHA-256.
-`./gradlew qualityGate :app:assembleDebug` passed with 376 unit tests per build variant
-and no detekt, ktlint, or Android Lint findings, and `scripts/verify-apk.sh` verified the application
-ID, SDK levels, debug flag, permissions, wallpaper declaration, Astronomy Engine notice, and APK
-Signature Scheme v2.
+At 4ffa962, `./gradlew qualityGate :app:assembleDebug` passed with 376 unit tests per build variant
+(now 377 following subsequent host-test additions) and no detekt, ktlint, or Android Lint findings,
+and `scripts/verify-apk.sh` verified the application ID, SDK levels, debug flag, permissions, wallpaper
+declaration, Astronomy Engine notice, and APK Signature Scheme v2.
 
 Same physical device as the earlier passes. Android version: 16 (API 36). Firmware build: withheld
 (embeds the model identifier), per issue #20. The saved site was the device's own current-location
@@ -605,7 +605,7 @@ declination, and so with the Sun's longitude, not only with the hour angle.
 
 | Date | Check | Observed |
 | --- | --- | --- |
-| 2026-10-04 | build + install | `qualityGate` 376 tests per variant, no static-analysis findings; `verify-apk.sh` passed; APK SHA-256 `1e165b93…d46b47` installed with `adb install -r` over the existing binding |
+| 2026-10-04 | build + install | `qualityGate` 376 tests per variant at build time (377 at PR tip), no static-analysis findings; `verify-apk.sh` passed; APK SHA-256 `1e165b93…d46b47` installed with `adb install -r` over the existing binding |
 | 2026-10-04 | marker, Prague | Measured bearing 182.907° against 182.881° expected, residual **+0.026°**; projected radius 206.9 px against 206.9 px, residual **+0.01 px**; 0.09 px apart on the dial |
 | 2026-10-04 | distinct from the 0° Aries star | With the zodiac ring on, the star's five-pointed glyph sits at radius 0.657 (the equator circle) and bearing 15.8°, and the marker's radiant disc at radius 0.608 and bearing 185.4°; the two never share a probe |
 | 2026-10-04 | marker, Sydney | Measured bearing 322.821° against 322.796° expected, residual **+0.025°**; projected radius 239.1 px against 240.0 px, residual **−0.95 px**; 0.95 px apart, and a different bearing and radius from Prague at the same instant |

@@ -2,7 +2,7 @@
 
 The wallpaper uses accurate astronomical geometry with an original Canvas design inspired by
 the Prague Orloj. This is the foundation for #5. It includes the civil clock, zodiac,
-equator, tropics, horizon, and astronomical-night boundary. Sun rendering is tracked in #27;
+equator, tropics, horizon, and astronomical-night boundary. Sun rendering is implemented in #27;
 Moon position and illuminated phase are tracked in #28. Other astronomy layers, display size,
 position and brightness controls, calendar artwork, apostles, historical hour systems, and
 mechanical approximations remain outside this slice. It does not complete all of #5.
