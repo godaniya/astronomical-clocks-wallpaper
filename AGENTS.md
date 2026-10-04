@@ -23,7 +23,9 @@ Agents must observe the project's quality, stability, and release boundaries:
 - **Inviolable quality gates**: Never bypass, lower, or suppress compiler warnings,
   detekt analysis, or Android Lint rules (`allWarningsAsErrors = true`). Do not
   introduce baseline files or blanket `@Suppress` annotations. Fix the underlying
-  code.
+  code. Narrowly-scoped, justified exceptions are recorded in
+  [docs/development.md](docs/development.md#rule-exceptions); preserve those
+  annotations and record any new exception there and in the PR.
 - **Live wallpaper lifecycle contract**: Live wallpapers execute in the device
   background. Maintain the strict visibility contract: render exclusively when
   visible; never trigger continuous background polling, GPS location requests,
@@ -55,8 +57,10 @@ Agents must observe the project's quality, stability, and release boundaries:
 
 ## Architecture and product constraints
 
-Product and astronomical architecture are defined authoritatively in
-[docs/design.md](docs/design.md). Key machine constraints include:
+The product contract is defined authoritatively in [docs/design.md](docs/design.md),
+detailed projection geometry in [docs/orloj.md](docs/orloj.md), and astronomy
+implementation limits in [docs/astronomy.md](docs/astronomy.md). Key machine
+constraints include:
 
 - Use Kotlin, Canvas, and `WallpaperService` with a small settings app. Keep
   astronomy calculations separable from Android lifecycle and drawing code.
