@@ -15,11 +15,10 @@ internal fun Activity.updateTimeZoneButtonText(zoneId: ZoneId) {
 }
 
 internal fun Activity.showTimeZonePickerDialog(currentZone: ZoneId, onZoneSelected: (ZoneId) -> Unit) {
-    // Only zones this device can resolve are offered, so a bundled ID its tzdb rejects is never
-    // shown as an entry that would fail when tapped.
-    val zones = TimeZoneLookup.resolvableZoneIds()
-    val currentZoneId = currentZone.id
-    val initialSelection = zones.indexOf(currentZoneId).coerceAtLeast(0)
+    // The list is the zones this device can resolve, plus the zone in effect even when it has no
+    // anchor, so the current zone is highlighted rather than replaced by the first entry.
+    val zones = TimeZoneLookup.pickerZoneIds(currentZone)
+    val initialSelection = zones.indexOf(currentZone.id)
     val builder = AlertDialog.Builder(this)
     builder.setTitle(R.string.choose_timezone_title)
     builder.setSingleChoiceItems(zones.toTypedArray(), initialSelection) { dialog, which ->

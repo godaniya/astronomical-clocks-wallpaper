@@ -112,6 +112,29 @@ class SettingsActivityManualTimezoneTest {
         }
     }
 
+    // A valid saved zone with no zone.tab anchor, which a migrated record can hold, must be shown
+    // and highlighted rather than replaced by the alphabetically first entry.
+    @Test
+    fun pickerPreselectsNonAnchorZone() {
+        LocationStore(application).save(
+            ObservingLocation(
+                latitude = 50.0875,
+                longitude = 14.4206,
+                source = ObservingLocation.Source.MANUAL,
+                zoneId = ZoneId.of("Etc/GMT+2"),
+            ),
+        )
+        Robolectric.buildActivity(SettingsActivity::class.java).use { controller ->
+            val activity = controller.setup().get()
+            activity.findViewById<Button>(R.id.select_timezone).performClick()
+            val dialog = ShadowAlertDialog.getLatestDialog() as AlertDialog
+
+            val adapter = dialog.listView.adapter
+            val entries = (0 until adapter.count).map { adapter.getItem(it) }
+            assertEquals("Etc/GMT+2", entries[dialog.listView.checkedItemPosition])
+        }
+    }
+
     @SuppressLint("SetTextI18n")
     private fun enterCoordinates(activity: SettingsActivity, latitude: String, longitude: String) {
         activity.findViewById<EditText>(R.id.latitude_input).setText(latitude)

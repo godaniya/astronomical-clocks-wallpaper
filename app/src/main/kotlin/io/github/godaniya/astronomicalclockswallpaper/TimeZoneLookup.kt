@@ -513,6 +513,17 @@ internal object TimeZoneLookup {
         AVAILABLE_ZONE_IDS.filter { resolveZone(id = it, zoneOf = zoneOf) != null }
 
     /**
+     * The picker's entries: every bundled identifier this device can resolve, plus [currentZone].
+     *
+     * [currentZone] can be a valid zone that has no anchor, such as `UTC`, `Etc/GMT+2`, or a bare
+     * offset inherited from a migrated record. Including it makes the dialog show and highlight
+     * the zone actually in effect instead of the alphabetically first entry, so inspecting or
+     * correcting the saved zone does not start from a misleading selection.
+     */
+    fun pickerZoneIds(currentZone: ZoneId, zoneOf: (String) -> ZoneId = ZoneId::of): List<String> =
+        (resolvableZoneIds(zoneOf = zoneOf) + currentZone.id).distinct().sorted()
+
+    /**
      * The nearest bundled anchor this device can resolve, or UTC when it can resolve none.
      *
      * Anchors are visited in increasing distance so that a device missing the nearest anchor
