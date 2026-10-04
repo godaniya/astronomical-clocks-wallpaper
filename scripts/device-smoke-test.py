@@ -12,6 +12,7 @@ Exercises live wallpaper on an attached Android device via ADB:
 
 import argparse
 import math
+import re
 import subprocess
 import struct
 import sys
@@ -24,32 +25,121 @@ ANGLE_TOLERANCE_DEG = 0.5
 # Action the debug build listens on to move or reset the wallpaper's virtual clock.
 DEBUG_ACTION = "io.github.godaniya.astronomicalclockswallpaper.DEBUG_SET_TIME"
 
+# Bound every ADB call: a stalled transport would otherwise block the run forever, after a mutating
+# command, and prevent control from reaching the `finally` that restores the device.
+ADB_TIMEOUT_SECONDS = 30
 
-def run_adb(args, serial=None):
+# The restore path gets a longer budget than the calls it recovers from: it runs precisely when the
+# transport is already slow or wedged, so it must not share the tight limit that triggered it.
+ADB_RESTORE_TIMEOUT_SECONDS = 60
+
+# `wm size` prints the physical size first and the active override, if any, after it. Anchoring and
+# taking the last match avoids matching a line whose text merely contains the words.
+OVERRIDE_SIZE_PATTERN = re.compile(r"^Override size:\s*(\d+x\d+)$")
+
+
+def run_adb(args, serial=None, timeout=ADB_TIMEOUT_SECONDS):
     cmd = ["adb"]
     if serial:
         cmd.extend(["-s", serial])
     cmd.extend(args)
-    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    res = subprocess.run(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=timeout
+    )
     return res.stdout
 
 
-def restore_device(serial):
+def list_devices():
+    """
+    Returns {serial: state} for every entry `adb devices` reports, with the header dropped.
+
+    Each line is split on whitespace and the state token compared exactly. A substring test for
+    "device" would also match a serial, a model, or an "unauthorized"/"offline" state.
+    """
+    output = run_adb(["devices"]).decode("utf-8")
+    devices = {}
+    for line in output.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) >= 2:
+            devices[parts[0]] = parts[1]
+    return devices
+
+
+def select_target_serial(requested):
+    """
+    Resolves the one device to operate on, refusing to guess.
+
+    Every later step mutates the device (wake, resize, virtual clock) and the device is shared, so
+    an ambiguous list must not silently resolve to its first entry. Exits non-zero on any ambiguity.
+    """
+    devices = list_devices()
+    active = [serial for serial, state in devices.items() if state == "device"]
+    if requested is not None:
+        if requested in active:
+            return requested
+        state = devices.get(requested, "not attached")
+        active_text = ", ".join(active) if active else "none"
+        print(
+            f"ERROR: --serial {requested} is not an active device (state: {state}).",
+            file=sys.stderr,
+        )
+        print(f"Active devices: {active_text}", file=sys.stderr)
+        sys.exit(1)
+    if len(active) == 1:
+        return active[0]
+    print(
+        f"ERROR: expected exactly one active ADB device but found {len(active)}.",
+        file=sys.stderr,
+    )
+    if active:
+        print(f"Active devices: {', '.join(active)}", file=sys.stderr)
+    inactive = [f"{serial} ({state})" for serial, state in devices.items() if state != "device"]
+    if inactive:
+        print(f"Attached but not ready: {', '.join(inactive)}", file=sys.stderr)
+    print("Pass --serial to choose one.", file=sys.stderr)
+    sys.exit(1)
+
+
+def read_display_size(serial):
+    """
+    Returns the active `wm size` override as "WxH", or None when the physical size is in effect.
+
+    Only an override needs restoring verbatim; with none, `wm size reset` is the correct restore,
+    and a bare `Physical size:` line is not an override to put back.
+    """
+    output = run_adb(["shell", "wm", "size"], serial=serial).decode("utf-8")
+    override = None
+    for line in output.splitlines():
+        match = OVERRIDE_SIZE_PATTERN.match(line.strip())
+        if match:
+            override = match.group(1)
+    return override
+
+
+def size_restore_command(override):
+    """The `wm size` invocation that puts the display back to the size the run found."""
+    if override:
+        return ["shell", "wm", "size", override]
+    return ["shell", "wm", "size", "reset"]
+
+
+def restore_device(serial, size_override):
     """
     Best-effort reset of every setting the run changes, never raising.
 
     Called from a `finally`, so a failed step cannot leave the shared device resized or on virtual
-    time. A failing restore is reported without masking the original exception, which still
-    propagates and keeps the run's non-zero exit code. Returns False if any restore command failed,
-    so a pass that leaked device state is not reported as clean.
+    time. The display is restored to the override the run found, not unconditionally reset, so a
+    pre-existing override is not discarded. A failing restore is reported without masking the
+    original exception, which still propagates and keeps the run's non-zero exit code. Returns False
+    if any restore command failed, so a pass that leaked device state is not reported as clean.
     """
     restored = True
     for command in (
-        ["shell", "wm", "size", "reset"],
+        size_restore_command(size_override),
         ["shell", "am", "broadcast", "-a", DEBUG_ACTION, "--ez", "reset", "true"],
     ):
         try:
-            run_adb(command, serial=serial)
+            run_adb(command, serial=serial, timeout=ADB_RESTORE_TIMEOUT_SECONDS)
         except (subprocess.SubprocessError, OSError) as error:
             restored = False
             print(f"WARNING: restore command failed: {error}", file=sys.stderr)
@@ -131,13 +221,7 @@ def main():
     parser.add_argument("-s", "--serial", help="ADB device serial", default=None)
     args = parser.parse_args()
 
-    serial = args.serial
-    devices_out = run_adb(["devices"]).decode("utf-8")
-    device_lines = [l for l in devices_out.strip().splitlines()[1:] if "device" in l]
-    if not device_lines:
-        print("ERROR: No active ADB devices found.", file=sys.stderr)
-        sys.exit(1)
-    target_serial = serial or device_lines[0].split()[0]
+    target_serial = select_target_serial(args.serial)
     print(f"Targeting ADB device: {target_serial}")
 
     # Device-time marker for the logcat filter below. Reading only entries newer than the run start
@@ -147,28 +231,47 @@ def main():
     log_start = run_adb(["shell", "date +'%m-%d %H:%M:%S.000'"], serial=target_serial).decode().strip()
     print(f"Logcat start marker: {log_start}")
 
-    # 1. Reset debug clock to baseline and show the home screen
-    print("Waking the screen and showing the home screen...")
-    run_adb(["shell", "input", "keyevent", "KEYCODE_WAKEUP"], serial=target_serial)
-    run_adb(["shell", "input", "keyevent", "KEYCODE_HOME"], serial=target_serial)
-    time.sleep(1.0)
-    print("Resetting virtual clock...")
-    run_adb(["shell", "am", "broadcast", "-a", DEBUG_ACTION, "--ez", "reset", "true"], serial=target_serial)
-    time.sleep(0.5)
+    # A pre-existing override is put back verbatim rather than reset, so the run leaves the display
+    # as it found it. Report it: an override leaked by another session would otherwise be silently
+    # reproduced and read as this run's own state.
+    size_override = read_display_size(target_serial)
+    if size_override is not None:
+        print(
+            f"WARNING: display-size override {size_override} is already active; "
+            "it will be restored as found, not reset",
+            file=sys.stderr,
+        )
 
-    # 2. Capture baseline frame t0
-    print("Capturing baseline frame t0...")
-    w0, h0, px0 = capture_frame(serial=target_serial)
-    angle0 = detect_hand_angle(w0, h0, px0)
-    if angle0 is not None:
-        print(f"Baseline hand angle at t0: {angle0:.3f}°")
-    else:
-        print("Warning: Could not isolate hand pixels at t0 (wallpaper might be obstructed)")
+    # Recreate the surface with a size that differs from the one in effect, so the resize is never a
+    # no-op that passes without a recreation. An active 1080x2000 override is the one case where the
+    # default target would coincide, so fall back to 1080x1800 there.
+    recreate_size = "1080x1800" if size_override == "1080x2000" else "1080x2000"
 
     delta = residual = None
     angle2 = None
     restored = True
+    # Steps 1 and 2 mutate the device (it is woken, and its debug clock is reset) before step 3, so
+    # they run inside the try as well: with a bounded ADB timeout a stall can now raise from either,
+    # and a raise here must still reach the finally that restores the device.
     try:
+        # 1. Reset debug clock to baseline and show the home screen
+        print("Waking the screen and showing the home screen...")
+        run_adb(["shell", "input", "keyevent", "KEYCODE_WAKEUP"], serial=target_serial)
+        run_adb(["shell", "input", "keyevent", "KEYCODE_HOME"], serial=target_serial)
+        time.sleep(1.0)
+        print("Resetting virtual clock...")
+        run_adb(["shell", "am", "broadcast", "-a", DEBUG_ACTION, "--ez", "reset", "true"], serial=target_serial)
+        time.sleep(0.5)
+
+        # 2. Capture baseline frame t0
+        print("Capturing baseline frame t0...")
+        w0, h0, px0 = capture_frame(serial=target_serial)
+        angle0 = detect_hand_angle(w0, h0, px0)
+        if angle0 is not None:
+            print(f"Baseline hand angle at t0: {angle0:.3f}°")
+        else:
+            print("Warning: Could not isolate hand pixels at t0 (wallpaper might be obstructed)")
+
         # 3. Advance virtual time by +30 minutes
         print("Advancing virtual time +30 minutes via debug broadcast...")
         start_t = time.time()
@@ -192,9 +295,9 @@ def main():
 
         # 5. Test surface recreation
         print("Testing surface recreation...")
-        run_adb(["shell", "wm", "size", "1080x2000"], serial=target_serial)
+        run_adb(["shell", "wm", "size", recreate_size], serial=target_serial)
         time.sleep(0.5)
-        run_adb(["shell", "wm", "size", "reset"], serial=target_serial)
+        run_adb(size_restore_command(size_override), serial=target_serial)
         time.sleep(0.5)
         w2, h2, px2 = capture_frame(serial=target_serial)
         angle2 = detect_hand_angle(w2, h2, px2)
@@ -203,7 +306,7 @@ def main():
         # failed run cannot strand the shared device resized or on virtual time. This also covers
         # the collect-results path, so a pass leaves the device as it was found.
         print("Restoring virtual clock and display size...")
-        restored = restore_device(target_serial)
+        restored = restore_device(target_serial, size_override)
 
     # 6. Check renderer logs, isolated to the entries this run produced. Both renderer tags are
     # watched: the dial draw logs render failures under DialRenderer, so a filter on the service tag
@@ -233,7 +336,8 @@ def main():
         print(f"| {today} | virtual time travel (+30m) | Hand advanced {delta:.3f}° against 7.500° expected, "
               f"residual {residual:+.3f}°; broadcast took {elapsed * 1000.0:.0f}ms |")
     recreated = "drawn" if angle2 is not None else "NOT found"
-    print(f"| {today} | surface recreation | `wm size 1080x2000` then reset; hand {recreated} afterwards |")
+    restore_desc = f"`wm size {size_override}`" if size_override else "`wm size reset`"
+    print(f"| {today} | surface recreation | `wm size {recreate_size}` then {restore_desc}; hand {recreated} afterwards |")
     print(f"| {today} | renderer log | {len(warnings)} warning(s) or error(s) from either renderer tag in logcat |")
     print("---------------------------------------------------------------------------\n")
     if failures:
