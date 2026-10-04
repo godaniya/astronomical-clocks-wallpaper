@@ -10,12 +10,27 @@ internal class AppearanceStore(context: Context) {
 
     fun load(): DialAppearance {
         val snapshot = preferences.all
-        val raw = snapshot[KEY_APPEARANCE]
-        if (raw != null && raw !is String) {
-            Log.w("AppearanceStore", "ignoring malformed appearance setting $raw; using system default")
-            return DialAppearance.SYSTEM
+        return when (val raw = snapshot[KEY_APPEARANCE]) {
+            null -> {
+                DialAppearance.SYSTEM
+            }
+
+            is String -> {
+                // An absent key and an unrecognized value both resolve to SYSTEM, but only the
+                // latter is a fault: it means corrupted storage or a value a newer build wrote, and
+                // without this line a user who chose a theme would see it silently revert.
+                val appearance = DialAppearance.fromString(raw)
+                if (appearance == DialAppearance.SYSTEM && raw != DialAppearance.SYSTEM.name) {
+                    Log.w(TAG, "ignoring unrecognized appearance value \"$raw\"; using system default")
+                }
+                appearance
+            }
+
+            else -> {
+                Log.w(TAG, "ignoring malformed appearance setting $raw; using system default")
+                DialAppearance.SYSTEM
+            }
         }
-        return DialAppearance.fromString(raw)
     }
 
     fun save(appearance: DialAppearance) {
@@ -35,5 +50,6 @@ internal class AppearanceStore(context: Context) {
 
     companion object {
         const val KEY_APPEARANCE = "appearance"
+        private const val TAG = "AppearanceStore"
     }
 }

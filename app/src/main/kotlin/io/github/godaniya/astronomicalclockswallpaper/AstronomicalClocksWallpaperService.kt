@@ -300,6 +300,9 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
         fun onConfigurationChanged(newConfig: Configuration) {
             currentConfig = newConfig
             if (settings.appearance != DialAppearance.SYSTEM) {
+                // A fixed theme cannot change with night mode, so the palette is unaffected; the skip
+                // is logged so a device harness does not read the missing repaint as a failure.
+                Log.d(TAG, "skipping appearance redraw: fixed appearance=${settings.appearance}")
                 return
             }
             // onSurfaceDestroyed cancels the loop but leaves isEngineVisible true, so a night-mode

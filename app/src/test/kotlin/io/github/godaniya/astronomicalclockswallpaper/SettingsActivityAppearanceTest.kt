@@ -1,6 +1,7 @@
 package io.github.godaniya.astronomicalclockswallpaper
 
 import android.content.Context
+import android.util.TypedValue
 import android.widget.RadioButton
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -68,5 +69,29 @@ class SettingsActivityAppearanceTest {
         val recreated = controller.recreate().get()
         val recreatedDarkRadio = recreated.findViewById<RadioButton>(R.id.appearance_dark)
         assertTrue(recreatedDarkRadio.isChecked)
+    }
+
+    // The radio selection alone does not prove the screen re-themed: this checks the window background
+    // the theme actually resolved to, so dropping setTheme(), swapping the LIGHT/DARK style names, or
+    // applying a theme that never reaches the window all fail here.
+    @Test
+    fun savedThemeReachesTheWindow() {
+        AppearanceStore(application).save(DialAppearance.DARK)
+        val darkActivity = Robolectric.buildActivity(SettingsActivity::class.java).setup().get()
+        assertEquals(0xFF111923.toInt(), windowBackgroundOf(darkActivity))
+
+        AppearanceStore(application).save(DialAppearance.LIGHT)
+        val lightActivity = Robolectric.buildActivity(SettingsActivity::class.java).setup().get()
+        assertEquals(0xFFF7F4EB.toInt(), windowBackgroundOf(lightActivity))
+    }
+
+    // Reads the activity's own resolved theme, which is what applyAppearanceTheme() sets before
+    // super.onCreate. That catches a missing setTheme and a swapped LIGHT/DARK mapping; it does not
+    // distinguish the order of setTheme relative to super.onCreate, which the theme object alone
+    // cannot show.
+    private fun windowBackgroundOf(activity: SettingsActivity): Int {
+        val value = TypedValue()
+        activity.theme.resolveAttribute(android.R.attr.windowBackground, value, true)
+        return value.data
     }
 }

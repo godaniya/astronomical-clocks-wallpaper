@@ -3,12 +3,14 @@ package io.github.godaniya.astronomicalclockswallpaper
 import android.content.Context
 import android.content.SharedPreferences
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowLog
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [26, 36])
@@ -51,6 +53,22 @@ class AppearanceStoreTest {
 
         preferences.edit().putString(AppearanceStore.KEY_APPEARANCE, "UNKNOWN_MODE").apply()
         assertEquals(DialAppearance.SYSTEM, store.load())
+    }
+
+    // An unrecognized stored value is a fault (corruption or a value a newer build wrote), unlike an
+    // absent key, which is the ordinary first-run default. Only the fault is logged, so a user whose
+    // theme silently reverted leaves a trace.
+    @Test
+    fun unrecognizedValueIsLogged() {
+        ShadowLog.clear()
+        assertEquals(DialAppearance.SYSTEM, store.load())
+        assertTrue(ShadowLog.getLogsForTag("AppearanceStore").isEmpty())
+
+        preferences.edit().putString(AppearanceStore.KEY_APPEARANCE, "UNKNOWN_MODE").apply()
+        assertEquals(DialAppearance.SYSTEM, store.load())
+        val logs = ShadowLog.getLogsForTag("AppearanceStore")
+        assertEquals(1, logs.size)
+        assertTrue(logs.single().msg.contains("unrecognized appearance value"))
     }
 
     @Test
