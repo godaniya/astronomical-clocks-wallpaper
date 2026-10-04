@@ -1,24 +1,55 @@
 package io.github.godaniya.astronomicalclockswallpaper
 
+import android.annotation.SuppressLint
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
+import android.content.pm.ApplicationInfo
 import android.graphics.Canvas
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.service.wallpaper.WallpaperService
 import android.util.Log
 import android.view.SurfaceHolder
 import java.time.Clock
+import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
+import java.time.format.DateTimeParseException
+import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
 
 /** An animated astronomical clock wallpaper. */
 class AstronomicalClocksWallpaperService : WallpaperService() {
+    private val mutableDebugClock = MutableDebugClock()
+    private val activeEngines = Collections.newSetFromMap(ConcurrentHashMap<ClockEngine, Boolean>())
+    private var debugReceiver: BroadcastReceiver? = null
+
+    internal val debugClock: MutableDebugClock
+        get() = mutableDebugClock
+
+    override fun onCreate() {
+        super.onCreate()
+        registerDebugReceiver()
+    }
+
+    override fun onDestroy() {
+        unregisterDebugReceiver()
+        super.onDestroy()
+    }
+
     override fun onCreateEngine(): Engine {
         val dialRenderer = DialRenderer()
+        val isDebuggable = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+        val clock = if (isDebuggable) mutableDebugClock else Clock.systemUTC()
         return createEngine(
             draw = { canvas, state, geometry, layers ->
                 dialRenderer.renderDial(canvas = canvas, state = state, geometry = geometry, layers = layers)
             },
+            clock = clock,
         )
     }
 
@@ -38,7 +69,82 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
                 deviceZone = deviceZone,
                 calculator = calculator,
             )
+        activeEngines.add(engine)
         return engine
+    }
+
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
+    private fun registerDebugReceiver() {
+        val isDebuggable = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+        if (!isDebuggable) return
+
+        val receiver =
+            object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    if (intent.action == ACTION_DEBUG_SET_TIME) {
+                        handleDebugSetTime(intent)
+                    }
+                }
+            }
+        debugReceiver = receiver
+        val filter = IntentFilter(ACTION_DEBUG_SET_TIME)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(receiver, filter, RECEIVER_EXPORTED)
+        } else {
+            registerReceiver(receiver, filter)
+        }
+    }
+
+    private fun unregisterDebugReceiver() {
+        debugReceiver?.let { receiver ->
+            try {
+                unregisterReceiver(receiver)
+            } catch (e: IllegalArgumentException) {
+                Log.w(TAG, "Debug receiver was not registered or already unregistered", e)
+            }
+            debugReceiver = null
+        }
+    }
+
+    internal fun handleDebugSetTime(intent: Intent) {
+        val isReset = intent.getBooleanExtra(EXTRA_RESET, false)
+        if (isReset) {
+            mutableDebugClock.reset()
+            Log.i(TAG, "Debug clock reset to system UTC")
+        } else {
+            val instantStr = intent.getStringExtra(EXTRA_INSTANT)
+            if (!instantStr.isNullOrBlank()) {
+                try {
+                    val instant = Instant.parse(instantStr)
+                    mutableDebugClock.setInstant(instant)
+                    Log.i(TAG, "Debug clock fixed to instant: $instant")
+                } catch (e: DateTimeParseException) {
+                    Log.e(TAG, "Invalid instant extra: $instantStr", e)
+                    return
+                }
+            } else {
+                val offsetMillis = intent.getLongExtra(EXTRA_OFFSET_MILLIS, 0L)
+                val offsetSeconds = intent.getLongExtra(EXTRA_OFFSET_SECONDS, 0L)
+                val offsetMinutes = intent.getLongExtra(EXTRA_OFFSET_MINUTES, 0L)
+                val offsetHours = intent.getLongExtra(EXTRA_OFFSET_HOURS, 0L)
+                val totalMillis =
+                    offsetMillis +
+                        offsetSeconds *
+                        MILLIS_PER_SECOND +
+                        offsetMinutes *
+                        SECONDS_PER_MINUTE *
+                        MILLIS_PER_SECOND +
+                        offsetHours *
+                        SECONDS_PER_HOUR *
+                        MILLIS_PER_SECOND
+
+                mutableDebugClock.setOffset(Duration.ofMillis(totalMillis))
+                Log.i(TAG, "Debug clock offset set to ${totalMillis}ms")
+            }
+        }
+        for (engine in activeEngines) {
+            engine.triggerDebugTick()
+        }
     }
 
     // Engine is a non-static Java inner class and requires the enclosing service instance.
@@ -120,12 +226,19 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
         }
 
         override fun onDestroy() {
+            activeEngines.remove(this)
             isDestroyed = true
             isEngineVisible = false
             locationStore.unregisterListener(settingsListener)
             dialSettingsStore.unregisterListener(settingsListener)
             stopTicking()
             super.onDestroy()
+        }
+
+        fun triggerDebugTick() {
+            if (!isDestroyed && isEngineVisible) {
+                runTick()
+            }
         }
 
         // Draws a frame and posts the next tick. Safe to call repeatedly: scheduleNextTick clears any
@@ -151,10 +264,11 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
 
         private fun scheduleNextTick() {
             handler.removeCallbacksAndMessages(null)
+            val millisInSecond = Math.floorMod(clock.millis(), MILLIS_PER_SECOND)
             val isScheduled =
                 handler.postDelayed(
                     Runnable { runTick() },
-                    millisUntilNextWholeSecond(),
+                    MILLIS_PER_SECOND - millisInSecond,
                 )
             if (!isScheduled) {
                 Log.w(
@@ -162,11 +276,6 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
                     "scheduleNextTick: postDelayed returned false; looper exiting or message queue shutting down",
                 )
             }
-        }
-
-        private fun millisUntilNextWholeSecond(): Long {
-            val millisInSecond = Math.floorMod(clock.millis(), MILLIS_PER_SECOND)
-            return MILLIS_PER_SECOND - millisInSecond
         }
 
         // Geometry failures degrade to the civil dial instead of blanking the frame. A fault that
@@ -197,8 +306,32 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
         }
     }
 
-    private companion object {
-        const val MILLIS_PER_SECOND = 1000L
-        const val TAG = "AstronomicalClocksWallpaperService"
+    /** Debug broadcast intent action and extra constants. */
+    internal companion object {
+        /** Intent action to set or reset debug virtual time. */
+        const val ACTION_DEBUG_SET_TIME = "io.github.godaniya.astronomicalclockswallpaper.DEBUG_SET_TIME"
+
+        /** Long extra in milliseconds to add to the virtual time offset. */
+        const val EXTRA_OFFSET_MILLIS = "offset_millis"
+
+        /** Long extra in seconds to add to the virtual time offset. */
+        const val EXTRA_OFFSET_SECONDS = "offset_seconds"
+
+        /** Long extra in minutes to add to the virtual time offset. */
+        const val EXTRA_OFFSET_MINUTES = "offset_minutes"
+
+        /** Long extra in hours to add to the virtual time offset. */
+        const val EXTRA_OFFSET_HOURS = "offset_hours"
+
+        /** String extra with ISO-8601 instant string to fix virtual time to. */
+        const val EXTRA_INSTANT = "instant"
+
+        /** Boolean extra to reset virtual time back to system UTC. */
+        const val EXTRA_RESET = "reset"
+
+        private const val MILLIS_PER_SECOND = 1000L
+        private const val SECONDS_PER_MINUTE = 60L
+        private const val SECONDS_PER_HOUR = 3600L
+        private const val TAG = "AstronomicalClocksWallpaperService"
     }
 }

@@ -10,6 +10,7 @@ import android.service.wallpaper.WallpaperService
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -19,6 +20,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.time.Duration
+import java.time.Instant
 
 /** Verifies Android discovery, binding protection, metadata, service teardown, and tick scheduling. */
 @RunWith(RobolectricTestRunner::class)
@@ -115,6 +117,50 @@ class AstronomicalClocksWallpaperServiceTest {
         engine.onDestroy()
         engine.onVisibilityChanged(true)
         assertEquals(Duration.ZERO, looper.nextScheduledTaskTime)
+    }
+
+    @Test
+    fun debugBroadcastSetsOffset() {
+        val service = controller.get()
+        val intent =
+            Intent(AstronomicalClocksWallpaperService.ACTION_DEBUG_SET_TIME).apply {
+                putExtra(AstronomicalClocksWallpaperService.EXTRA_OFFSET_MINUTES, 30L)
+            }
+        service.handleDebugSetTime(intent)
+
+        assertEquals(Duration.ofMinutes(30), service.debugClock.currentOffset)
+    }
+
+    @Test
+    fun debugBroadcastSetsInstant() {
+        val service = controller.get()
+        val fixedInstant = "2026-06-21T00:00:00Z"
+        val intent =
+            Intent(AstronomicalClocksWallpaperService.ACTION_DEBUG_SET_TIME).apply {
+                putExtra(AstronomicalClocksWallpaperService.EXTRA_INSTANT, fixedInstant)
+            }
+        service.handleDebugSetTime(intent)
+
+        assertEquals(Instant.parse(fixedInstant), service.debugClock.currentFixedInstant)
+    }
+
+    @Test
+    fun debugBroadcastResetsTime() {
+        val service = controller.get()
+        val offsetIntent =
+            Intent(AstronomicalClocksWallpaperService.ACTION_DEBUG_SET_TIME).apply {
+                putExtra(AstronomicalClocksWallpaperService.EXTRA_OFFSET_HOURS, 2L)
+            }
+        service.handleDebugSetTime(offsetIntent)
+        assertEquals(Duration.ofHours(2), service.debugClock.currentOffset)
+
+        val resetIntent =
+            Intent(AstronomicalClocksWallpaperService.ACTION_DEBUG_SET_TIME).apply {
+                putExtra(AstronomicalClocksWallpaperService.EXTRA_RESET, true)
+            }
+        service.handleDebugSetTime(resetIntent)
+        assertEquals(Duration.ZERO, service.debugClock.currentOffset)
+        assertNull(service.debugClock.currentFixedInstant)
     }
 
     private companion object {

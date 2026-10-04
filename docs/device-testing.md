@@ -885,3 +885,30 @@ as found.
 dial-hour, and force-stop rows stay as recorded in the section above. The reboot row and
 process-recreation evidence are unchanged. No current-location fix was acquired, because doing so
 would write the device's own coordinates.
+
+## Virtual time
+
+Debug builds (the `debuggable` flag, so never release builds) accept a broadcast that moves the
+wallpaper's clock without touching the phone's real time, so a drift check no longer needs a
+30-minute wait. Every engine redraws immediately.
+
+```sh
+ACTION=io.github.godaniya.astronomicalclockswallpaper.DEBUG_SET_TIME
+adb shell am broadcast -a $ACTION --el offset_minutes 30        # also offset_millis/seconds/hours
+adb shell am broadcast -a $ACTION --es instant 2026-06-21T00:00:00Z   # fix an exact instant
+adb shell am broadcast -a $ACTION --ez reset true               # back to system time
+```
+
+Offsets are added to the real clock, so they keep running; an `instant` freezes it. Always reset
+afterwards. `scripts/device-smoke-test.py` wakes the screen, advances 30 minutes, measures the civil
+hand's advance (7.5° expected on the 24-hour dial), recreates the surface, checks logcat, resets the
+clock, and exits non-zero on failure. It needs the wallpaper applied and visible on the home screen.
+
+This clock moves the civil hand and the astronomy together from one instant, so it shows that the
+marker follows the ephemeris but does not replace the independent ERFA comparison in the Sun and Moon
+passes. A smoke run only measures the hand; it does not exercise lifecycle, reboot, or the lock screen.
+
+Smoke run on 2026-10-04, Android 16 (API 36), three consecutive runs: hand advance 7.502°, 7.511°,
+and 7.492° against 7.500° expected (residuals +0.002°, +0.011°, −0.008°); the surface recreation
+check and the logcat check passed each time. An earlier version of the probe read 6.56° and 9.11°
+because a naive mean over all cream-coloured pixels was biased; it now takes the dominant wedge.
