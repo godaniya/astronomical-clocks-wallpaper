@@ -58,17 +58,22 @@ class DialRendererTest {
     }
 
     @Test
-    fun moonSuppressedWhenOmitted() {
-        val geometryWithoutMoon = prague.copy(moonLongitudeDeg = null, moonPhaseLongitudeDeg = null)
-        val enabled = render(geometry = geometryWithoutMoon, layers = DialLayers(isMoonEnabled = true))
-        val disabled = render(geometry = geometryWithoutMoon, layers = DialLayers(isMoonEnabled = false))
-        val projection = OrlojProjection(prague)
-        val testPoint = projection.eclipticPoint(60.0)
-        assertEquals(
-            "Moon marker must be suppressed when moon coordinates are null",
-            0,
-            changedPixelsNear(first = enabled, second = disabled, point = testPoint),
-        )
+    fun moonSuppressedWhenIncomplete() {
+        // The marker needs a longitude and a phase, and DialGeometry allows each to be absent on
+        // its own. Every combination must paint nothing anywhere in the frame rather than inventing
+        // a position: comparing whole frames catches a marker drawn at some other default place,
+        // which probing a single point would miss.
+        val incomplete =
+            listOf(
+                prague.copy(moonLongitudeDeg = null, moonPhaseLongitudeDeg = null),
+                prague.copy(moonLongitudeDeg = 60.0, moonPhaseLongitudeDeg = null),
+                prague.copy(moonLongitudeDeg = null, moonPhaseLongitudeDeg = 90.0),
+            )
+        for (geometry in incomplete) {
+            val enabled = render(geometry = geometry, layers = DialLayers(isMoonEnabled = true))
+            val disabled = render(geometry = geometry, layers = DialLayers(isMoonEnabled = false))
+            assertTrue("Moon must be suppressed for $geometry", enabled.sameAs(disabled))
+        }
     }
 
     @Test

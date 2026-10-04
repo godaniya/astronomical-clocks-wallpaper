@@ -93,6 +93,7 @@ class DialSettingsStoreTest {
             val moon = activity.findViewById<CheckBox>(R.id.moon_layer)
             assertTrue(zodiac.isEnabled)
             assertTrue(sun.isEnabled)
+            assertTrue(moon.isEnabled)
             assertTrue(zodiac.isChecked)
             assertTrue(sun.isChecked)
             assertTrue(moon.isChecked)
