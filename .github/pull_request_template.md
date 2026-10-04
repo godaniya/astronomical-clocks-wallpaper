@@ -11,7 +11,7 @@
 ## Verification
 
 <!-- Replace with checks actually performed. Keep unrun checks unchecked and explain.
-     Assess new tests against AGENTS.md's "Test scope and proportionality" guidance;
+     Assess new tests against CONTRIBUTING.md's "Test scope and proportionality" guidance;
      no per-test paperwork is required. -->
 - [ ] Relevant automated/build checks: <!-- commands and results, or not run and why -->
 - [ ] Manual/device checks: <!-- actual device and firmware, or not run and why -->
