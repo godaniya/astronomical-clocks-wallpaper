@@ -206,6 +206,33 @@ class DialRendererTest {
     }
 
     @Test
+    fun noSunMarkerWhenSunLayerOff() {
+        // When the Sun layer is disabled, the marker must not be drawn even if the geometry
+        // carries a valid Sun longitude. With the zodiac ring disabled, the rest of the dial
+        // (civil scale, hand, and blank plate grid) is independent of sunLongitudeDeg.
+        // A Sun-off render with an explicit longitude must therefore match a Sun-off render
+        // with unknown longitude pixel-for-pixel; if the layer toggle failed to suppress the
+        // marker, the explicit longitude would paint gold marker pixels at its projected point.
+        val withSun = prague.copy(sunLongitudeDeg = 90.0)
+        val withoutSun = prague.copy(sunLongitudeDeg = null)
+        val sunOff = DialLayers(isZodiacRingEnabled = false, isSunEnabled = false)
+        val renderedWithSun = render(time = LocalTime.MIDNIGHT, geometry = withSun, layers = sunOff)
+        val renderedWithoutSun = render(time = LocalTime.MIDNIGHT, geometry = withoutSun, layers = sunOff)
+        assertTrue(
+            "Disabling the Sun layer must leave no marker even when longitude is present",
+            renderedWithSun.sameAs(renderedWithoutSun),
+        )
+
+        val sunPoint = OrlojProjection(withSun).eclipticPoint(90.0)
+        val sunOn = DialLayers(isZodiacRingEnabled = false, isSunEnabled = true)
+        val renderedOn = render(time = LocalTime.MIDNIGHT, geometry = withSun, layers = sunOn)
+        assertTrue(
+            "Enabling the Sun layer must draw the marker at the projected point",
+            goldAreaNear(renderedOn, sunPoint) - goldAreaNear(renderedWithSun, sunPoint) > 20,
+        )
+    }
+
+    @Test
     fun sunMarkerMovesWithSunLongitude() {
         val sun0 = prague.copy(sunLongitudeDeg = 0.0)
         val sun90 = prague.copy(sunLongitudeDeg = 90.0)

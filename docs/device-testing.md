@@ -566,7 +566,9 @@ not re-run against this build.
 Test build: local debug `app-debug.apk` from `feat/27-render-sun` at 4ffa962, the review fix on top of
 the rebase at 80e1a9f (APK SHA-256
 1e165b93b8cb1b07b1744ddfc86d3f81cc5c358aebdc064bfd94a07facd46b47), the artifact installed on the
-device below. `./gradlew qualityGate :app:assembleDebug` passed with 376 unit tests per build variant
+device below. Subsequent commits on this branch (c0cb0ba and later) are documentation and host-test
+changes only, leaving `app/src/main/` untouched and producing the identical APK bytecode and SHA-256.
+`./gradlew qualityGate :app:assembleDebug` passed with 376 unit tests per build variant
 and no detekt, ktlint, or Android Lint findings, and `scripts/verify-apk.sh` verified the application
 ID, SDK levels, debug flag, permissions, wallpaper declaration, Astronomy Engine notice, and APK
 Signature Scheme v2.
