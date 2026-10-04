@@ -834,3 +834,54 @@ this project does not publish. Always On Display remains out of scope per #2, an
 cost remain #6. One cosmetic observation is outside this change: `android.R.string.cancel` renders in
 the device's language ("Abbrechen") beside the app's own English strings in both dialogs, as the
 picker already did before this branch.
+
+### Searchable picker (2026-10-04)
+
+Automated coverage types a query, narrows the adapter, and picks from the narrowed rows under
+Robolectric. The rows below re-check that behavior on the physical device against the build this
+branch now produces, with every tested site entered by hand from published coordinates.
+
+Test build: local debug `app-debug.apk` from `feat/21-manual-timezone` at 43229f0 (APK SHA-256
+5e64ade776b7f2df481a6a5b24a692d66762fa59215672b29ed3d34707a60612), installed in place with
+`adb install -r` over the previous debug build.
+
+Android version: 16 (API 36)
+Firmware build: withheld (embeds the model identifier)
+
+| Date | Check | Observed |
+| --- | --- | --- |
+| 2026-10-04 | build + install + version | `qualityGate` and `:app:assembleDebug` clean, `verify-apk.sh` passed; installed in place and Settings read `0.1.0-debug` (versionCode 1, minSdk 26, targetSdk 37). The phone was on `Europe/Prague` |
+| 2026-10-04 | hand-entered site | Entered the published Prague coordinates `50.0800, 14.4200` by hand; the timezone button read **Timezone: Europe/Prague** from the geographic suggestion, and the saved record still held the site the pass found until **Save coordinates** was tapped |
+| 2026-10-04 | picker opens on the saved zone | Tapping the timezone button opened **Select timezone** with an empty **Filter timezones** box and the list scrolled to `Europe/Prague` with its radio filled, not to the alphabetically first entry. On the build before the scroll fix the same dialog opened at `Africa/Abidjan` with `Europe/Prague` checked but hundreds of rows below the fold, so `list.setSelection` was added and this row is the check for it |
+| 2026-10-04 | typing narrows the list | Typing `new york` in the filter narrowed the hundreds of rows to the single row `America/New_York`; the timezone button behind the dialog still read `Timezone: Europe/Prague`, so a query that only narrows commits nothing |
+| 2026-10-04 | a filtered row stores and displays | Tapping the `America/New_York` row closed the dialog and the button read `Timezone: America/New_York`; **Save coordinates** showed a "Location saved." toast, the screen read `50.0800, 14.4200 (manual)` with `Timezone: America/New_York`, and the `run-as` record became `{"latitude":50.08,"longitude":14.42,"source":"MANUAL","zoneId":"America\/New_York"}` — the row the filter offered, and no other |
+| 2026-10-04 | a matchless query | Reopening the picker and typing `zzzzzz` emptied the list, showed **No matching timezone**, and left the button reading `Timezone: America/New_York`; the `run-as` record read while the dialog was up was byte-identical to the saved one, so the query committed nothing |
+| 2026-10-04 | restore | The record was restored to the one the pass found — a `current` record for the Prague area, coordinates withheld as an acquired fix — and Settings read that record's coordinates with `Timezone: Europe/Prague`. The phone's wallpaper was reapplied to the home screen afterwards (see below) |
+
+The first picker row is the reason this subsection exists alongside the earlier section: the picker
+offers hundreds of entries, so opening it on the alphabetically first row would hide the zone
+actually in effect several hundred rows down. The scroll fix has no Robolectric assertion — with no
+layout pass, `ListView.getSelectedItemPosition()` reports `-1` — so this device row, not the unit
+suite, is what establishes it. The filter and the no-match row are what make a hundreds-long list
+usable: a query that reaches no listed zone shows **No matching timezone** and cannot commit a zone
+the list never offered.
+
+The record was restored by writing it back after `am force-stop` rather than through the UI, because
+storing a picked zone rewrites the record's `source` from `current` to `manual`, and the
+originally-found `current` record cannot be re-created without acquiring a new fix, which this pass
+does not do.
+
+Two device settings were changed for this pass and restored: `screen_off_pocket`, set to 0 so the
+screen could not sleep mid-pass and restored to 1; and `stay_on_while_plugged_in`, raised to USB (2)
+by `svc power stayon usb` to keep the screen awake and reset to 0, this device's previously recorded
+resting value, since the command was issued before the pass read it. `proximity_sensor` read back
+unchanged at 1, and the screen timeout at 300000 ms. The phone timezone was never changed, and no
+accidental-touch-protection overlay armed during the pass. Because `am force-stop` was used to
+reload the restored record, the wallpaper binding dropped to the stock `ImageWallpaper` and was
+reapplied to the home screen through the app's **Open wallpaper preview**; the lock screen was left
+as found.
+
+**What this subsection did not run.** Only the picker was exercised here; the estimate-confirmation,
+dial-hour, and force-stop rows stay as recorded in the section above. The reboot row and
+process-recreation evidence are unchanged. No current-location fix was acquired, because doing so
+would write the device's own coordinates.
