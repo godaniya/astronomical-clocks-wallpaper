@@ -39,7 +39,7 @@ PHYSICAL_SIZE_PATTERN = re.compile(r"^Physical size:\s*(\d+x\d+)$")
 OVERRIDE_SIZE_PATTERN = re.compile(r"^Override size:\s*(\d+x\d+)$")
 
 # `dumpsys power` reports wakefulness directly; `dumpsys display` is the fallback for a build that
-# does not expose it. Both forms were read on the target device (SM-G736B, API 36).
+# does not expose it. Both forms were verified on the target device (API 36).
 WAKE_READ_PATTERN = re.compile(r"mWakefulness=(\w+)")
 DISPLAY_STATE_PATTERN = re.compile(r"Display State=(ON|OFF)")
 
@@ -152,8 +152,8 @@ def read_screen_on(serial):
 
     The run wakes the screen, so the state it found must be captured first to put it back. Wakefulness
     is the primary source; the display state is the fallback for a build that does not expose it. An
-    unreadable state is reported as None and no restore is attempted, rather than guessing a state
-    that would change a device the run may not have altered.
+    unreadable state is reported as None; no sleep is then issued — guessing one could switch off a
+    screen the run did not wake — and the restore is reported incomplete rather than assumed clean.
     """
     power = run_adb(["shell", "dumpsys", "power"], serial=serial).decode("utf-8")
     for line in power.splitlines():
@@ -178,10 +178,13 @@ def restore_device(serial, size_override, screen_was_on):
     Called from a `finally`, so a failed step cannot leave the shared device resized, on virtual time,
     or awake when it was found asleep. The display is restored to the override the run found, not
     unconditionally reset, so a pre-existing override is not discarded. The screen is put back to
-    sleep only when it was found off (False); a True or undetermined state issues nothing, leaving the
-    device as found or untouched rather than guessing. A failing restore is reported without masking
-    the original exception, which still propagates and keeps the run's non-zero exit code. Returns
-    False if any restore command failed, so a pass that leaked device state is not reported as clean.
+    sleep only when it was found off (False); a True state issues nothing because the device was
+    already awake. An undetermined state also issues nothing — a guessed sleep could switch off a
+    screen the run did not wake — but is reported as unrestored, so a run that never read the state
+    cannot claim it put the screen back. A failing restore is reported without masking the original
+    exception, which still propagates and keeps the run's non-zero exit code. Returns False if any
+    restore command failed or the screen state was undetermined, so a pass that leaked device state
+    is not reported as clean.
     """
     restored = True
     commands = [
@@ -197,6 +200,14 @@ def restore_device(serial, size_override, screen_was_on):
         except (subprocess.SubprocessError, OSError) as error:
             restored = False
             print(f"WARNING: restore command failed: {error}", file=sys.stderr)
+    # An unreadable initial state cannot be put back: issuing no sleep above may have left a screen
+    # this run woke still awake, so report the restore incomplete rather than claiming a clean pass.
+    if screen_was_on is None:
+        restored = False
+        print(
+            "WARNING: initial screen state was unreadable; the screen cannot be reported as restored",
+            file=sys.stderr,
+        )
     return restored
 
 

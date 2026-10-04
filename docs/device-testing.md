@@ -945,14 +945,17 @@ still issues both restores after the failure, a restore that itself times out is
 masking the original error, a two-device list exits non-zero having issued only the listing, an
 unknown `--serial` and an `unauthorized` entry are refused, a pre-existing `1080x1200` `wm size`
 override is restored verbatim with no reset issued, a device whose effective size is the default
-1080x2000 is resized to 1080x1800 rather than issuing a no-op, and an initial screen that is off
-issues `KEYCODE_SLEEP` after the clock reset while one that is on issues none.
+1080x2000 is resized to 1080x1800 rather than issuing a no-op, an initial screen that is off issues
+`KEYCODE_SLEEP` after the clock reset while one that is on issues none, and an initial screen state
+that cannot be read issues no sleep at all and exits non-zero instead of reporting a clean pass.
 
 One setting the harness still cannot restore. It has no read path for a pre-existing virtual-clock
 offset — the debug broadcast only sets an offset or fixes an instant, it never reports the current
 one — so the run resets the clock to system time rather than to whatever it found. The screen is now
 restored: the harness reads `mWakefulness` before it wakes the screen and sleeps it again when it did
-not start `Awake`, so this run began and ended with the screen Dozing. `KEYCODE_SLEEP` is a no-op
+not start `Awake`, so this run began and ended with the screen Dozing. When `mWakefulness` cannot be
+read at all it issues no sleep — it will not guess a state the run never found — and reports the
+restore incomplete, so a screen it may have woken is never counted as restored. `KEYCODE_SLEEP` is a no-op
 when the device is set to stay awake while plugged in, so that remains a best-effort limit;
 `screen_off_pocket 0`, set before the run to avoid the accidental-touch overlay, was put back to 1
 afterwards, and `stay_on_while_plugged_in` was left at 0. Everything else was restored: `wm size`
