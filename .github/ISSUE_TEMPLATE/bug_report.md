@@ -16,9 +16,8 @@ Describe what should happen and what happens instead.
 
 ## Environment
 
-- App version and install source:
-- Device model:
-- Android version and firmware build:
+- App version and install source (or APK SHA-256 / commit SHA):
+- Android version and API level (withhold device OEM, model name, and firmware build string):
 - Surface: preview / home / lit lock screen:
 - Location mode and timezone (use a non-personal test location if relevant):
 
