@@ -38,10 +38,14 @@ reliability and developer reputation are indivisible:
   ktlint formatting, and Android Lint are strictly enforced with warnings treated
   as errors. Never resolve a build issue by lowering severity, adding blanket
   suppressions, or introducing lint baseline files. Fix the root cause.
+  Narrowly-scoped, justified exceptions are recorded in
+  [docs/development.md](docs/development.md#rule-exceptions); preserve those
+  annotations and record any new one there and in the PR.
 - **Dependency and provenance integrity**: Third-party libraries, bundled assets,
-  and astronomical data must be auditable, permissively licensed, and pinned to
-  cryptographic checksums or commit SHAs in [docs/dependencies.md](docs/dependencies.md).
-  Zero analytics or proprietary tracking SDKs are permitted.
+  and astronomical data must be auditable, licensed compatibly with the intended
+  distribution, and pinned to an exact upstream version, revision, or checksum in
+  [docs/dependencies.md](docs/dependencies.md). Zero analytics or proprietary
+  tracking SDKs are permitted.
 
 ## Physical device testing and privacy
 
@@ -96,7 +100,7 @@ java -version
 # Run the complete quality gate and build the debug APK
 ./gradlew qualityGate :app:assembleDebug
 
-# Verify the resulting APK against architecture, manifest, and license contracts
+# Verify the resulting APK against manifest, permission, and license contracts
 scripts/verify-apk.sh
 
 # Reformat Kotlin code and Gradle scripts explicitly (CI never auto-formats)
