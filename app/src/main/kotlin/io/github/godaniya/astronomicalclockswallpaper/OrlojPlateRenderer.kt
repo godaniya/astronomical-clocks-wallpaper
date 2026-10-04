@@ -101,6 +101,14 @@ internal class OrlojPlateRenderer {
     // the boundaries need the plate, and they are drawn only when the Sun layer built it.
     private fun drawGrid(canvas: Canvas, projection: OrlojProjection, plate: CachedPlate?, palette: DialPalette) {
         paint.style = Paint.Style.STROKE
+        // The two reference circles cross the sky, twilight, and night regions in one stroke, and no
+        // single gold clears the graphics minimum against all three (bronze on the light palette's
+        // night is 1.44:1, mutedGold on twilight 1.07:1 in the dark palette). A page-toned casing
+        // underlines them on the surfaces the ink cannot reach and vanishes on the ones it can.
+        paint.color = palette.casing
+        paint.strokeWidth = GRID_CASING_WIDTH
+        canvas.drawCircle(0f, 0f, projection.capricornRadius.toFloat(), paint)
+        canvas.drawCircle(0f, 0f, projection.equatorRadius.toFloat(), paint)
         paint.color = palette.mutedGold
         paint.strokeWidth = GRID_WIDTH
         canvas.drawCircle(0f, 0f, projection.capricornRadius.toFloat(), paint)
@@ -150,6 +158,7 @@ internal class OrlojPlateRenderer {
         const val NIGHT_ALTITUDE = -18.0
         const val HORIZON_ALTITUDE = 0.0
         const val GRID_WIDTH = 0.0035f
+        const val GRID_CASING_WIDTH = 0.0095f
         const val BOUNDARY_WIDTH = 0.006f
         const val OUTER_WIDTH = 0.008f
     }

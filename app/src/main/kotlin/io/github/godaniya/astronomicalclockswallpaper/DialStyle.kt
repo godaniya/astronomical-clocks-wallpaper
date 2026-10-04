@@ -1,6 +1,15 @@
 package io.github.godaniya.astronomicalclockswallpaper
 
-/** Palette of colors for rendering the astronomical clock. */
+/**
+ * Palette of colors for rendering the astronomical clock.
+ *
+ * The palette is a contract about contrast, not just taste: every [ink][DialPalette.gold] is drawn on
+ * a known [surface][DialPalette.night], and the pair must clear WCAG 2.1 against that surface - 4.5:1
+ * for text and 3:1 for graphics - unless a stroke bounds it (see [DialPalette.casing]). The dark
+ * palette clears this by being dark throughout; the light palette keeps one dark surface, the night
+ * sky region, and needs the casing for the thin lines that cross it. DialPaletteTest holds the
+ * measured ratios: docs/orloj.md#palette-contrast records the full audit and the accepted exceptions.
+ */
 internal data class DialPalette(
     val background: Int,
     val gold: Int,
@@ -12,8 +21,8 @@ internal data class DialPalette(
     val hand: Int,
     val moonIlluminated: Int,
     val moonShadow: Int,
-    val nightGold: Int,
-    val nightText: Int,
+    val zodiacBand: Int,
+    val casing: Int,
 )
 
 /** Original Orloj-inspired palette; dimensions in the renderers are fractions of the sky radius. */
@@ -32,11 +41,11 @@ internal object DialStyle {
     const val HAND: Int = 0xFFF4E5B8.toInt()
     const val MOON_ILLUMINATED: Int = 0xFFE8EEF5.toInt()
 
-    // The Moon marker rides the zodiac band, and ZodiacRenderer fills that band with NIGHT, so the
-    // shadow tone must be its own colour: at NIGHT the unlit two-thirds of the disc vanished into
-    // its background and only the gold rim separated a crescent from the band. This slate is 45
-    // RGB units from NIGHT and at least 42 from every other entry, so the disc reads as a sphere
-    // whether it is over the band (zodiac on) or the plain grid (zodiac off).
+    // The Moon marker rides the zodiac band, and the band is filled with the palette's own tone, so
+    // the shadow must be its own colour: at NIGHT the unlit two-thirds of the disc vanished into its
+    // background and only the gold rim separated a crescent from the band. This slate is 45 RGB units
+    // from NIGHT and at least 42 from every other entry, so the disc reads as a sphere whether it is
+    // over the band (zodiac on) or the plain grid (zodiac off).
     const val MOON_SHADOW: Int = 0xFF2C3E50.toInt()
 
     val DARK_PALETTE =
@@ -51,8 +60,11 @@ internal object DialStyle {
             hand = HAND,
             moonIlluminated = MOON_ILLUMINATED,
             moonShadow = MOON_SHADOW,
-            nightGold = GOLD,
-            nightText = HAND,
+            zodiacBand = NIGHT,
+            // The dark palette's plate is already dark, so a page-toned casing only outlines the thin
+            // lines where they cross the mid-toned twilight band, which the gold inks cannot clear on
+            // their own (mutedGold on TWILIGHT is 1.07:1). It is invisible against NIGHT.
+            casing = BACKGROUND,
         )
 
     // Light appearance palette: ivory, bronze, and pale blue with recognizable twilight/night regions
@@ -65,22 +77,18 @@ internal object DialStyle {
     const val LIGHT_NIGHT: Int = 0xFF2C3E50.toInt()
     const val LIGHT_HAND: Int = 0xFF4E341B.toInt()
 
-    // LIGHT_NIGHT equals the dark MOON_SHADOW, so the dark pair cannot be reused here: the unlit
-    // two-thirds of the disc would vanish into the zodiac band exactly as MOON_SHADOW's comment
-    // records for the dark palette. The lit disc reuses the ivory plate tone, which stays legible
-    // because the marker rides the night-filled band rather than the background. This slate is 136
-    // RGB units (Euclidean) from LIGHT_NIGHT and 179 from the ivory, so the disc reads as a sphere.
-    const val LIGHT_MOON_ILLUMINATED: Int = 0xFFF7F4EB.toInt()
-    const val LIGHT_MOON_SHADOW: Int = 0xFF7A8CA0.toInt()
+    // The light theme keeps the zodiac ring light: it sits just inside the ivory civil scale, and a
+    // dark band there read as a stray dark ring in an otherwise light dial. It reuses the pale sand
+    // rim tone, which the bronze inks clear comfortably (gold 5.90:1, sign names in `hand` 8.87:1),
+    // and the night sky region stays the one dark area because there it is semantically the night.
+    const val LIGHT_ZODIAC_BAND: Int = LIGHT_RIM
 
-    // The zodiac ring is filled with `night`, which is dark in both palettes, so the light palette
-    // cannot reuse its plate inks there: bronze #6E4D25 on #2C3E50 measured 1.44:1 and the `hand`
-    // label tone 1.04:1, leaving the sign names unreadable. These two tones are chosen for that dark
-    // surface instead - nightGold 5.80:1 against the band for the ring outline, dividers, sign star,
-    // and the Sun and Moon markers that ride the ring, and nightText 8.92:1 for the sign names. Both
-    // clear the WCAG 2.1 minimums (4.5:1 text, 3:1 graphics); DialPaletteTest pins them.
-    const val LIGHT_NIGHT_GOLD: Int = 0xFFD9B87A.toInt()
-    const val LIGHT_NIGHT_TEXT: Int = 0xFFF1E7CE.toInt()
+    // On the pale band the Moon must be dark-on-light, unlike the dark palette: an ivory disc would
+    // vanish into the band the way the dark palette's shadow vanished into NIGHT. The shadow is
+    // therefore the disc's visible mass (4.24:1 against the band) and the lit limb keeps the ivory
+    // plate tone (4.98:1 against the shadow), bounded by the gold rim.
+    const val LIGHT_MOON_ILLUMINATED: Int = 0xFFF7F4EB.toInt()
+    const val LIGHT_MOON_SHADOW: Int = 0xFF5A6B7D.toInt()
 
     val LIGHT_PALETTE =
         DialPalette(
@@ -94,8 +102,12 @@ internal object DialStyle {
             hand = LIGHT_HAND,
             moonIlluminated = LIGHT_MOON_ILLUMINATED,
             moonShadow = LIGHT_MOON_SHADOW,
-            nightGold = LIGHT_NIGHT_GOLD,
-            nightText = LIGHT_NIGHT_TEXT,
+            zodiacBand = LIGHT_ZODIAC_BAND,
+            // The night region is the one dark surface left, where the bronze inks measure 1.04:1
+            // (hand) to 1.44:1 (gold). A page-toned casing under the thin lines that cross it reads
+            // at 9.99:1 there and disappears over the pale plate, so the hand and the reference
+            // circles stay legible on both.
+            casing = LIGHT_BACKGROUND,
         )
 
     fun paletteFor(appearance: DialAppearance, isSystemInNightMode: Boolean): DialPalette {

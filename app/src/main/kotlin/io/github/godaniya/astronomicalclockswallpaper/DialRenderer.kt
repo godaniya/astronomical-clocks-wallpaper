@@ -156,6 +156,13 @@ internal class DialRenderer {
     private fun drawCivilHand(canvas: Canvas, angleDegrees: Float, palette: DialPalette) {
         val checkpoint = canvas.save()
         canvas.rotate(angleDegrees)
+        // The hand crosses both the pale plate and the dark night region, and no single ink clears the
+        // graphics minimum against both (bronze on night measured 1.04:1). The page-toned casing
+        // underlay outlines it over the dark region and disappears over the pale one.
+        paint.color = palette.casing
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = HAND_CASING_WIDTH
+        canvas.drawPath(hand, paint)
         paint.color = palette.hand
         paint.style = Paint.Style.FILL
         canvas.drawPath(hand, paint)
@@ -185,6 +192,10 @@ internal class DialRenderer {
         const val HAND_TIP_WIDTH = 0.034f
         const val HAND_SHAFT_WIDTH = 0.011f
         const val HAND_TAIL = 0.13f
+
+        // A stroke is centred on the path outline, so half of it widens the blade; 0.010 leaves a rim of
+        // about 1.7 px at the 1080 px wallpaper size on each side of the 7.5 px shaft.
+        const val HAND_CASING_WIDTH = 0.010f
         const val HUB_RADIUS = 0.039f
         const val HUB_INNER_RADIUS = 0.018f
         private val HOURS_TYPEFACE: Typeface = Typeface.create("serif", Typeface.NORMAL)

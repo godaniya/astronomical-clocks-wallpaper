@@ -34,10 +34,10 @@ internal class ZodiacRenderer {
     fun draw(canvas: Canvas, projection: OrlojProjection, palette: DialPalette = DialStyle.DARK_PALETTE) {
         val circle = projection.zodiacCircle
         paint.style = Paint.Style.STROKE
-        paint.color = palette.nightGold
+        paint.color = palette.gold
         paint.strokeWidth = RING_OUTER_WIDTH
         canvas.drawCircle(circle.center.x.toFloat(), circle.center.y.toFloat(), circle.radius.toFloat(), paint)
-        paint.color = palette.night
+        paint.color = palette.zodiacBand
         paint.strokeWidth = RING_INNER_WIDTH
         canvas.drawCircle(circle.center.x.toFloat(), circle.center.y.toFloat(), circle.radius.toFloat(), paint)
         drawDividers(canvas, projection, palette)
@@ -48,7 +48,7 @@ internal class ZodiacRenderer {
     private fun drawDividers(canvas: Canvas, projection: OrlojProjection, palette: DialPalette) {
         val circle = projection.zodiacCircle
         paint.style = Paint.Style.STROKE
-        paint.color = palette.nightGold
+        paint.color = palette.gold
         paint.strokeWidth = DIVIDER_WIDTH
         val halfBand = RING_INNER_WIDTH / 2
         for (index in SIGNS.indices) {
@@ -94,7 +94,7 @@ internal class ZodiacRenderer {
         try {
             canvas.translate(point.x.toFloat(), point.y.toFloat())
             paint.style = Paint.Style.FILL
-            paint.color = palette.nightGold
+            paint.color = palette.gold
             canvas.drawPath(equinoxStarPath, paint)
         } finally {
             canvas.restoreToCount(checkpoint)
@@ -106,7 +106,7 @@ internal class ZodiacRenderer {
         try {
             canvas.scale(1 / DialStyle.TEXT_UNITS, 1 / DialStyle.TEXT_UNITS)
             paint.style = Paint.Style.FILL
-            paint.color = palette.nightText
+            paint.color = palette.hand
             paint.typeface = SIGNS_TYPEFACE
             paint.textAlign = Paint.Align.CENTER
             paint.textSize = SIGN_SIZE * DialStyle.TEXT_UNITS

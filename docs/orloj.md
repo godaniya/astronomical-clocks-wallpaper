@@ -150,6 +150,58 @@ and draws each frame from one instant. Updates take effect on the next visible t
 engines do not start rendering, and destroyed engines unregister both preference listeners.
 Rendering stays at one frame per second while visible.
 
+## Palette contrast
+
+The dial is drawn from a `DialPalette`, and the dark and light palettes are a contract about contrast
+rather than only taste. Every information-bearing ink - the sign names, the civil numerals, the hand,
+the Sun and Moon markers, and the zodiac ring - must clear
+[WCAG 2.1](https://www.w3.org/TR/WCAG21/) against the surface it is drawn on: 4.5:1 for text, 3:1 for
+graphics. Contrast is the WCAG relative-luminance ratio, `(L_lighter + 0.05) / (L_darker + 0.05)`, and
+`DialPaletteTest.inksClearTheirSurfaces` asserts it.
+
+Two consequences shape the palettes.
+
+- The **dark** palette is dark on every surface, so its bright cream and gold inks clear whatever they
+  meet without help.
+- The **light** palette deliberately keeps one dark surface, the night sky region, because there the
+  dark tone *is* the meaning. Two elements cross it while also crossing the pale plate: the civil hand
+  and the two reference circles. No single ink clears 3:1 against both, so each carries a **casing** -
+  an underlay stroke in the palette's page tone, drawn wider than the ink. The casing stands out over
+  the dark region and disappears over the pale one, the way a map line is cased where it crosses
+  varied ground.
+
+The table is the audit the test encodes; the ratios are relative-luminance contrast against the stated
+surface.
+
+| Ink on surface | Dark | Light | Minimum |
+| --- | --- | --- | --- |
+| Sign names (`hand`) on the zodiac band | 12.57 | 8.87 | 4.5 |
+| Civil numerals (`gold`) on the rim | 7.37 | 5.90 | 4.5 |
+| Zodiac ring, dividers, and star (`gold`) on the band | 8.12 | 5.90 | 3.0 |
+| Moon rim (`gold`) on the band | 8.12 | 5.90 | 3.0 |
+| Moon lit limb (`moonIlluminated`) against the moon shadow | 9.40 | 4.98 | 3.0 |
+| Moon shadow against the band | 1.44 (see below) | 4.24 | 3.0 |
+| Hand over the night region, by ink or casing | 12.57 | 9.99 | 3.0 |
+
+Two accepted exceptions, both recorded here rather than worked around:
+
+- **The dark Moon's unlit limb** is `MOON_SHADOW` at 1.44:1 against the band. The disc does not read
+  by that tone but by its gold rim (8.12:1) and its lit limb (9.40:1), which is what makes it a
+  sphere; `MOON_SHADOW`'s own comment records its separation from the other seven dark tones. The
+  light palette's shadow needs no such exemption, because there the disc is dark on a pale band.
+- **The graticule** - the tropic and equator circles - is a deliberately faint reference line, and
+  parts of it fall below 3:1: `mutedGold` on the dark twilight is 1.07:1 and on the light daylight sky
+  1.92:1, and `gold` on the light twilight 2.65:1. The casing lifts the crossings that matter most
+  (the light theme's night region, 9.99:1, and the dark theme's twilight, 3.62:1). Clearing the
+  remainder would need both mid tones re-derived for every surface they cross, which would collapse
+  the tonal difference between the two circles and lose the faint-line character the reference is
+  drawn with. The information-bearing contract above is unaffected.
+
+The `zodiacBand` split exists for the light palette's sake: the sign names sit in the band, and filling
+it with the plate's pale sand tone keeps a light dial light, while the night sky region stays dark
+because it is the night. The dark palette fills both with `NIGHT`, so the split leaves its rendering
+unchanged.
+
 ## Sources
 
 The projection, the day/twilight/night regions, and the night circle follow these descriptions of

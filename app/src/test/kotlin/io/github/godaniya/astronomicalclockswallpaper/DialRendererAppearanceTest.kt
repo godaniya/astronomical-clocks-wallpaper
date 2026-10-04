@@ -76,12 +76,11 @@ class DialRendererAppearanceTest {
         assertNotEquals(0, differingPixels)
     }
 
-    // LIGHT_NIGHT (#2C3E50) is exactly the dark palette's MOON_SHADOW, so reusing the dark pair
-    // would paint the unlit two-thirds of the disc invisibly onto the zodiac band it rides. The
-    // Moon layer is the only source of LIGHT_MOON_SHADOW, so a band-only render of the same frame
-    // shows whether the tone comes from the marker rather than the ring underneath it.
+    // The light band is a pale tone, so the Moon must be dark-on-light there: the disc's visible mass
+    // is its shadow (#5A6B7D), and the lit limb keeps the ivory plate tone. The Moon layer is the only
+    // source of that shadow tone, so a band-only render of the same frame proves where it comes from.
     @Test
-    fun lightMoonShadowLeavesBand() {
+    fun lightMoonDiscReadsOnBand() {
         val geometry = prague.copy(moonLongitudeDeg = 60.0, moonPhaseLongitudeDeg = 90.0)
         val moonPoint = OrlojProjection(geometry).moonPoint!!
         val withMoon = render(palette = DialStyle.LIGHT_PALETTE, geometry = geometry)
@@ -94,53 +93,40 @@ class DialRendererAppearanceTest {
 
         val shadowPixels = countPixels(bitmap = withMoon, color = DialStyle.LIGHT_MOON_SHADOW)
         val discPixels = changedPixelsNear(first = withMoon, second = bandOnly, point = moonPoint)
-        assertNotEquals(DialStyle.LIGHT_NIGHT, DialStyle.LIGHT_MOON_SHADOW)
+        assertNotEquals(DialStyle.LIGHT_PALETTE.zodiacBand, DialStyle.LIGHT_MOON_SHADOW)
         assertEquals(0, countPixels(bitmap = bandOnly, color = DialStyle.LIGHT_MOON_SHADOW))
         assertTrue(
             "the unlit disc must paint the light Moon shadow, found $shadowPixels pixels",
             shadowPixels > MIN_SHADOW_PIXELS,
         )
-        // The disc must replace the band across its footprint, not just at one edge: under the dark
-        // palette's shadow (equal to LIGHT_NIGHT) this count would collapse to the rim and sliver.
+        // The disc must replace the band across its footprint, not just at one edge.
         assertTrue(
             "the disc must differ from the band over its whole footprint, found $discPixels pixels",
             discPixels > MIN_DISC_PIXELS,
         )
     }
 
-    // The sign names sit on the navy zodiac band, so a light render must paint them in the band's own
-    // text tone. The earlier palette reused `hand` (#4E341B) there, which measured 1.04:1 against the
-    // band; this asserts the marker ink actually reaches the glyphs, and DialPaletteTest holds the
-    // tone's contrast.
-    // The sign names sit on the navy zodiac band, so a light render must paint them in the band's own
-    // text tone. The earlier palette reused `hand` (#4E341B) there, which measured 1.04:1 against the
-    // band; this asserts the band ink reaches the glyphs, and DialPaletteTest holds the tone's contrast.
+    // The light zodiac band is a pale ring just inside the ivory civil scale, so the sign names are
+    // painted in the plate's own bronze ink rather than a band-specific one; the pixel probe shows the
+    // glyphs reach the band, and DialPaletteTest holds the ink's contrast against it.
     @Test
-    fun lightZodiacLabelsUseBandInk() {
+    fun lightZodiacBandIsLegible() {
         val bitmap = render(palette = DialStyle.LIGHT_PALETTE, geometry = prague)
         val signCentre = OrlojProjection(prague).eclipticPoint(15.0)
-        val labelPixels = countPixelsNear(bitmap = bitmap, point = signCentre, color = DialStyle.LIGHT_NIGHT_TEXT)
+        val labelPixels = countPixelsNear(bitmap = bitmap, point = signCentre, color = DialStyle.LIGHT_PALETTE.hand)
         // The 11 px glyphs are mostly antialiased, so only a few pixels land on the exact tone; the
         // tolerance also counts the blends, which no other element in this window produces.
-        val blendedPixels = countPixelsNearInk(bitmap = bitmap, point = signCentre, ink = DialStyle.LIGHT_NIGHT_TEXT)
+        val blendedPixels =
+            countPixelsNearInk(bitmap = bitmap, point = signCentre, ink = DialStyle.LIGHT_PALETTE.hand)
         assertTrue(
-            "the light sign names must be painted in the band text tone at $signCentre; " +
+            "the light sign names must be painted in the plate ink at $signCentre; " +
                 "exact=$labelPixels blended=$blendedPixels",
             labelPixels >= 5 && blendedPixels > 15,
         )
-    }
-
-    // The Sun marker rides the ecliptic ring too, so in light mode it must take the band gold as well:
-    // the plate's bronze #6E4D25 measured 1.44:1 on the navy band, which hid the marker entirely.
-    @Test
-    fun lightSunMarkerUsesBandInk() {
-        val geometry = prague.copy(sunLongitudeDeg = 200.0)
-        val bitmap = render(palette = DialStyle.LIGHT_PALETTE, geometry = geometry)
-        val sunPoint = OrlojProjection(geometry).sunPoint!!
-        val bandInk = countPixelsNearInk(bitmap = bitmap, point = sunPoint, ink = DialStyle.LIGHT_NIGHT_GOLD)
-        assertTrue(
-            "the light Sun marker must be painted in the band gold, found $bandInk pixels",
-            bandInk > 10,
+        // The band under the glyphs must be the pale tone, not the dark night region showing through.
+        assertEquals(
+            0,
+            countPixelsNear(bitmap = bitmap, point = signCentre, color = DialStyle.LIGHT_PALETTE.night),
         )
     }
 
