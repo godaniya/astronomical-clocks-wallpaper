@@ -141,8 +141,11 @@ a replacement. Both current-location acquisition and manual coordinate entry res
 geographic timezone offline via nearest-anchor lookup against public-domain IANA tzdb reference
 points (`TimeZoneLookup`), independent of the phone's system timezone. Manual coordinate entry
 additionally provides an explicit timezone picker dialog allowing the user to inspect and override
-the geographic timezone (#21, #24). Once saved, subsequent changes to the phone's system timezone
-alter neither the saved site nor its civil clock.
+the geographic timezone (#21, #24). The anchors are zone representatives rather than boundaries, so
+an inferred zone can be wrong near a border; a zone that came from the lookup rather than from an
+explicit pick is presented as an estimate and must be confirmed before it is saved as the site's
+civil time. Once saved, subsequent changes to the phone's system timezone alter neither the saved
+site nor its civil clock.
 
 The astronomy tests need no Robolectric environment: `AstronomyCalculator` and everything under it
 are free of Android types, so they run as plain JUnit against published USNO, JPL Horizons, and

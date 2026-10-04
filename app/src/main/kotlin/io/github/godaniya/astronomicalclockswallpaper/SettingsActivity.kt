@@ -133,16 +133,20 @@ class SettingsActivity : Activity() {
     private fun fetchCurrentLocation(forceFresh: Boolean) {
         locationProvider.fetch(forceFresh = forceFresh) { fix ->
             if (fix != null) {
-                val zoneId = TimeZoneLookup.lookup(latitude = fix.latitude, longitude = fix.longitude)
-                val location =
-                    ObservingLocation(
-                        latitude = fix.latitude,
-                        longitude = fix.longitude,
-                        source = ObservingLocation.Source.CURRENT_COARSE,
-                        zoneId = zoneId,
-                    )
-                locationStore.save(location)
-                displayLocation(location, seedInputs = true)
+                // An acquired fix has no explicit choice behind it, so its zone is always an
+                // estimate from the lookup and goes through the confirmation dialog.
+                val estimate = TimeZoneLookup.lookup(latitude = fix.latitude, longitude = fix.longitude)
+                confirmEstimatedZone(estimated = estimate) { zoneId ->
+                    val location =
+                        ObservingLocation(
+                            latitude = fix.latitude,
+                            longitude = fix.longitude,
+                            source = ObservingLocation.Source.CURRENT_COARSE,
+                            zoneId = zoneId,
+                        )
+                    locationStore.save(location)
+                    displayLocation(location, seedInputs = true)
+                }
             } else {
                 // Preserve the previous selection; prompt for manual entry.
                 Toast.makeText(this, R.string.location_fetch_failed, Toast.LENGTH_LONG).show()
@@ -171,16 +175,27 @@ class SettingsActivity : Activity() {
             Toast.makeText(this, R.string.location_unchanged, Toast.LENGTH_SHORT).show()
             return
         }
-        val location =
-            ObservingLocation(
-                latitude = latitude,
-                longitude = longitude,
-                source = ObservingLocation.Source.MANUAL,
-                zoneId = zoneId,
-            )
-        locationStore.save(location)
-        displayLocation(location)
-        Toast.makeText(this, R.string.location_saved, Toast.LENGTH_SHORT).show()
+        // A local rather than a member function: SettingsActivity is already at detekt's
+        // 11-function limit, and this write is only reached from here.
+        val writeZone = { confirmed: ZoneId ->
+            val location =
+                ObservingLocation(
+                    latitude = latitude,
+                    longitude = longitude,
+                    source = ObservingLocation.Source.MANUAL,
+                    zoneId = confirmed,
+                )
+            locationStore.save(location)
+            displayLocation(location)
+            Toast.makeText(this, R.string.location_saved, Toast.LENGTH_SHORT).show()
+        }
+        if (isManualZoneExplicit) {
+            writeZone(zoneId)
+        } else {
+            // The zone came from the lookup, not a choice, so confirm it before it is stored as
+            // the site's authoritative civil time.
+            confirmEstimatedZone(estimated = zoneId, onZoneConfirmed = writeZone)
+        }
     }
 
     private fun parseCoordinate(input: EditText): Double? {

@@ -26,7 +26,8 @@ import org.robolectric.shadows.ShadowAlertDialog
 import java.time.ZoneId
 import java.util.TimeZone
 
-/** Captures the phone timezone on a first save and keeps a saved site's zone when refreshing. */
+/** Resolves each fix to its own geographic zone, and keeps a confirmed zone across refreshes,
+ *  recreation, and phone-timezone changes. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [26, 36])
 class SettingsActivityTimezoneTest {
@@ -63,6 +64,8 @@ class SettingsActivityTimezoneTest {
             locationShadow.simulateLocation(LocationManager.NETWORK_PROVIDER, fix)
             shadowOf(Looper.getMainLooper()).idle()
 
+            acceptEstimatedZone()
+
             assertSavedTimezone(activity, "America/Los_Angeles")
         }
     }
@@ -95,6 +98,7 @@ class SettingsActivityTimezoneTest {
                 locationShadow.simulateLocation(LocationManager.NETWORK_PROVIDER, fix)
                 shadowOf(Looper.getMainLooper()).idle()
 
+                acceptEstimatedZone()
                 assertSavedTimezone(activity, "America/Los_Angeles")
                 val saved = LocationStore(application).load()
                 assertEquals(37.42, saved?.latitude)
@@ -155,6 +159,7 @@ class SettingsActivityTimezoneTest {
             val activity = controller.setup().get()
             activity.findViewById<EditText>(R.id.latitude_input).setText("51.5074")
             activity.findViewById<Button>(R.id.save_location).performClick()
+            acceptEstimatedZone()
 
             assertSavedTimezone(activity, "Europe/Berlin")
             val saved = LocationStore(application).load()
@@ -171,6 +176,7 @@ class SettingsActivityTimezoneTest {
             enterCoordinates(activity, latitude = "45.5", longitude = "-120.25")
             TimeZone.setDefault(TimeZone.getTimeZone("America/New_York"))
             activity.findViewById<Button>(R.id.save_location).performClick()
+            acceptEstimatedZone()
 
             assertSavedTimezone(activity, "America/Boise")
             TimeZone.setDefault(TimeZone.getTimeZone("Asia/Tokyo"))
@@ -214,6 +220,16 @@ class SettingsActivityTimezoneTest {
                 activity.findViewById<TextView>(R.id.location_timezone_help).text.toString(),
             )
         }
+    }
+
+    // A zone that came from the nearest-anchor lookup is presented as an estimate and must be
+    // confirmed before it is written; accepting it is the path these tests exercise. The dialog
+    // dispatches its button click through a message on the main looper, so the write it triggers
+    // has not happened until that looper drains.
+    private fun acceptEstimatedZone() {
+        val dialog = ShadowAlertDialog.getLatestDialog() as AlertDialog
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+        shadowOf(Looper.getMainLooper()).idle()
     }
 
     private fun enterCoordinates(activity: SettingsActivity, latitude: String, longitude: String) {

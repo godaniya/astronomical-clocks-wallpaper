@@ -31,6 +31,25 @@ internal fun Activity.showTimeZonePickerDialog(currentZone: ZoneId, onZoneSelect
     builder.show()
 }
 
+/**
+ * Confirms a timezone that the nearest-anchor lookup estimated rather than the user choosing it.
+ *
+ * The bundled anchors are reference points, not boundaries, so an estimated zone can be wrong near
+ * a border; [onZoneConfirmed] receives the zone only once the user accepts the estimate or picks
+ * one, and never when the dialog is cancelled.
+ */
+internal fun Activity.confirmEstimatedZone(estimated: ZoneId, onZoneConfirmed: (ZoneId) -> Unit) {
+    val builder = AlertDialog.Builder(this)
+    builder.setTitle(R.string.estimated_timezone_title)
+    builder.setMessage(getString(R.string.estimated_timezone_message, estimated.id))
+    builder.setPositiveButton(R.string.estimated_timezone_save) { _, _ -> onZoneConfirmed(estimated) }
+    builder.setNeutralButton(R.string.estimated_timezone_choose) { _, _ ->
+        showTimeZonePickerDialog(currentZone = estimated, onZoneSelected = onZoneConfirmed)
+    }
+    builder.setNegativeButton(android.R.string.cancel, null)
+    builder.show()
+}
+
 internal fun setupCoordinateTimezoneWatcher(
     latitudeInput: EditText,
     longitudeInput: EditText,

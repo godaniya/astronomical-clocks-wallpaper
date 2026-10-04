@@ -1,6 +1,7 @@
 package io.github.godaniya.astronomicalclockswallpaper
 
 import android.Manifest
+import android.app.AlertDialog
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
@@ -19,6 +20,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowAlertDialog
 import org.robolectric.shadows.ShadowToast
 
 /** Checks permission-result edge cases and preserves the requested cache policy across recreation. */
@@ -44,6 +46,7 @@ class SettingsActivityPermissionTest {
             locationShadow
                 .simulateLocation(LocationManager.NETWORK_PROVIDER, location(latitude = 37.42, longitude = -122.08))
             shadowOf(Looper.getMainLooper()).idle()
+            acceptEstimatedZone()
             assertEquals(
                 ObservingLocation(
                     latitude = 37.42,
@@ -66,6 +69,7 @@ class SettingsActivityPermissionTest {
 
             grantPermission(recreatedActivity)
 
+            acceptEstimatedZone()
             assertEquals(
                 ObservingLocation(
                     latitude = 1.0,
@@ -110,6 +114,16 @@ class SettingsActivityPermissionTest {
             assertTrue(locationShadow.networkListeners().isEmpty())
             assertEquals(activity.getString(R.string.location_permission_denied), ShadowToast.getTextOfLatestToast())
         }
+    }
+
+    // A zone that came from the nearest-anchor lookup is presented as an estimate and must be
+    // confirmed before it is written; accepting it is the path these tests exercise. The dialog
+    // dispatches its button click through a message on the main looper, so the write it triggers
+    // has not happened until that looper drains.
+    private fun acceptEstimatedZone() {
+        val dialog = ShadowAlertDialog.getLatestDialog() as AlertDialog
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+        shadowOf(Looper.getMainLooper()).idle()
     }
 
     private fun seedRecentCache() {

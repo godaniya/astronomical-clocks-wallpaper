@@ -2,11 +2,13 @@ package io.github.godaniya.astronomicalclockswallpaper
 
 import android.annotation.SuppressLint
 import android.app.AlertDialog
+import android.os.Looper
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -18,7 +20,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowAlertDialog
 import java.time.ZoneId
 
-/** Verifies manual coordinate timezone resolution, picker overrides, and recreation state. */
+/** Verifies manual coordinate resolution, estimate confirmation, picker overrides, and recreation. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [26, 36])
 class SettingsActivityManualTimezoneTest {
@@ -133,6 +135,58 @@ class SettingsActivityManualTimezoneTest {
             val entries = (0 until adapter.count).map { adapter.getItem(it) }
             assertEquals("Etc/GMT+2", entries[dialog.listView.checkedItemPosition])
         }
+    }
+
+    // An estimated zone is offered before it becomes the site's civil time: cancelling leaves the
+    // site unsaved, and only accepting the estimate writes it.
+    @Test
+    fun estimateNotSavedUntilConfirmed() {
+        Robolectric.buildActivity(SettingsActivity::class.java).use { controller ->
+            val activity = controller.setup().get()
+            enterCoordinates(activity = activity, latitude = "45.5", longitude = "-120.25")
+            activity.findViewById<Button>(R.id.save_location).performClick()
+
+            val dialog = ShadowAlertDialog.getLatestDialog() as AlertDialog
+            assertTrue(shadowOf(dialog).message.toString().contains("America/Boise"))
+            assertNull(LocationStore(application).load())
+
+            clickDialogButton(dialog, AlertDialog.BUTTON_NEGATIVE)
+            assertNull(LocationStore(application).load())
+
+            activity.findViewById<Button>(R.id.save_location).performClick()
+            val confirmed = ShadowAlertDialog.getLatestDialog() as AlertDialog
+            clickDialogButton(confirmed, AlertDialog.BUTTON_POSITIVE)
+
+            assertEquals(ZoneId.of("America/Boise"), LocationStore(application).load()?.zoneId)
+        }
+    }
+
+    // The estimate dialog's Choose… path opens the picker and must hand the picked zone to the
+    // save, overriding the estimate that prompted it.
+    @Test
+    fun chooseFromEstimateSavesChoice() {
+        Robolectric.buildActivity(SettingsActivity::class.java).use { controller ->
+            val activity = controller.setup().get()
+            enterCoordinates(activity = activity, latitude = "45.5", longitude = "-120.25")
+            activity.findViewById<Button>(R.id.save_location).performClick()
+
+            val estimateDialog = ShadowAlertDialog.getLatestDialog() as AlertDialog
+            clickDialogButton(estimateDialog, AlertDialog.BUTTON_NEUTRAL)
+
+            val picker = ShadowAlertDialog.getLatestDialog() as AlertDialog
+            val targetZone = "Pacific/Honolulu"
+            shadowOf(picker).clickOnItem(TimeZoneLookup.AVAILABLE_ZONE_IDS.indexOf(targetZone))
+
+            assertEquals(ZoneId.of(targetZone), LocationStore(application).load()?.zoneId)
+            assertTrue(activity.findViewById<TextView>(R.id.location_current).text.contains(targetZone))
+        }
+    }
+
+    // A dialog dispatches its button click through a message on the main looper, so the write it
+    // triggers has not happened until that looper drains.
+    private fun clickDialogButton(dialog: AlertDialog, which: Int) {
+        dialog.getButton(which).performClick()
+        shadowOf(Looper.getMainLooper()).idle()
     }
 
     @SuppressLint("SetTextI18n")
