@@ -158,6 +158,7 @@ class SettingsActivityLocaleTest {
         expectedLongitude: Double,
         expectedLocale: Locale = Locale.GERMANY,
     ) {
+        val expectedZoneId = TimeZoneLookup.lookup(latitude = expectedLatitude, longitude = expectedLongitude)
         Robolectric.buildActivity(SettingsActivity::class.java).use { controller ->
             val activity = controller.setup().get()
             enterCoordinates(
@@ -172,7 +173,7 @@ class SettingsActivityLocaleTest {
                     latitude = expectedLatitude,
                     longitude = expectedLongitude,
                     source = ObservingLocation.Source.MANUAL,
-                    zoneId = ZoneId.systemDefault(),
+                    zoneId = expectedZoneId,
                 ),
                 LocationStore(activity).load(),
             )

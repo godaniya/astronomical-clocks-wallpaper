@@ -28,7 +28,10 @@ class SettingsActivity : Activity() {
     private val locationCurrent by lazy { findViewById<TextView>(R.id.location_current) }
     private val latitudeInput by lazy { findViewById<EditText>(R.id.latitude_input) }
     private val longitudeInput by lazy { findViewById<EditText>(R.id.longitude_input) }
+    private val selectTimezoneButton by lazy { findViewById<Button>(R.id.select_timezone) }
     private var isForceFreshPending = false
+    private var manualZone: ZoneId? = null
+    private var isManualZoneExplicit = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,13 +46,45 @@ class SettingsActivity : Activity() {
         ).setOnClickListener { requestCurrentLocation(forceFresh = false) }
         findViewById<Button>(R.id.refresh_location).setOnClickListener { requestCurrentLocation(forceFresh = true) }
         findViewById<Button>(R.id.save_location).setOnClickListener { saveManualLocation() }
+        selectTimezoneButton.setOnClickListener {
+            val current = manualZone ?: locationStore.load(repair = false)?.zoneId ?: ZoneId.systemDefault()
+            showTimeZonePickerDialog(currentZone = current) { chosen ->
+                manualZone = chosen
+                isManualZoneExplicit = true
+                updateTimeZoneButtonText(chosen)
+            }
+        }
         val location = locationStore.load()
         displayLocation(location, seedInputs = savedInstanceState == null)
+        if (savedInstanceState != null) {
+            val restoredZone =
+                savedInstanceState.getString(STATE_MANUAL_ZONE)?.let {
+                    runCatching { ZoneId.of(it) }.getOrNull()
+                }
+            if (restoredZone != null) {
+                manualZone = restoredZone
+                isManualZoneExplicit = savedInstanceState.getBoolean(STATE_MANUAL_ZONE_EXPLICIT, false)
+                updateTimeZoneButtonText(restoredZone)
+            }
+        }
+        setupCoordinateTimezoneWatcher(
+            latitudeInput = latitudeInput,
+            longitudeInput = longitudeInput,
+            parseCoordinate = ::parseCoordinate,
+            onSuggestedZone = { suggested ->
+                if (!isManualZoneExplicit) {
+                    manualZone = suggested
+                    updateTimeZoneButtonText(suggested)
+                }
+            },
+        )
         bindDialLayers(hasLocation = location != null)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean(STATE_FORCE_FRESH_PENDING, isForceFreshPending)
+        manualZone?.let { outState.putString(STATE_MANUAL_ZONE, it.id) }
+        outState.putBoolean(STATE_MANUAL_ZONE_EXPLICIT, isManualZoneExplicit)
         super.onSaveInstanceState(outState)
     }
 
@@ -98,15 +133,13 @@ class SettingsActivity : Activity() {
     private fun fetchCurrentLocation(forceFresh: Boolean) {
         locationProvider.fetch(forceFresh = forceFresh) { fix ->
             if (fix != null) {
-                // A refresh updates the coordinates; an already-saved site keeps its geographic
-                // zone, which no current-location input can resolve. The phone zone is the fallback
-                // for a first acquisition, when there is no site to preserve.
+                val zoneId = TimeZoneLookup.lookup(latitude = fix.latitude, longitude = fix.longitude)
                 val location =
                     ObservingLocation(
                         latitude = fix.latitude,
                         longitude = fix.longitude,
                         source = ObservingLocation.Source.CURRENT_COARSE,
-                        zoneId = locationStore.load(repair = false)?.zoneId ?: ZoneId.systemDefault(),
+                        zoneId = zoneId,
                     )
                 locationStore.save(location)
                 displayLocation(location, seedInputs = true)
@@ -127,11 +160,13 @@ class SettingsActivity : Activity() {
             return
         }
         locationProvider.cancel()
+        val zoneId = manualZone ?: TimeZoneLookup.lookup(latitude, longitude)
         val stored = locationStore.load(repair = false)
         val isUnchanged =
             stored != null &&
                 latitude == stored.latitude &&
-                longitude == stored.longitude
+                longitude == stored.longitude &&
+                zoneId == stored.zoneId
         if (isUnchanged) {
             Toast.makeText(this, R.string.location_unchanged, Toast.LENGTH_SHORT).show()
             return
@@ -141,7 +176,7 @@ class SettingsActivity : Activity() {
                 latitude = latitude,
                 longitude = longitude,
                 source = ObservingLocation.Source.MANUAL,
-                zoneId = ZoneId.systemDefault(),
+                zoneId = zoneId,
             )
         locationStore.save(location)
         displayLocation(location)
@@ -177,6 +212,14 @@ class SettingsActivity : Activity() {
             latitudeInput.setText(formatSeedCoordinate(location.latitude))
             longitudeInput.setText(formatSeedCoordinate(location.longitude))
         }
+        if (location != null) {
+            manualZone = location.zoneId
+            isManualZoneExplicit = false
+            updateTimeZoneButtonText(location.zoneId)
+        } else {
+            val initial = manualZone ?: ZoneId.systemDefault()
+            updateTimeZoneButtonText(initial)
+        }
         updateDialLayersAvailability(hasLocation = location != null)
     }
 
@@ -198,6 +241,8 @@ class SettingsActivity : Activity() {
     private companion object {
         const val REQUEST_LOCATION_PERMISSION = 1
         const val STATE_FORCE_FRESH_PENDING = "force_fresh_pending"
+        const val STATE_MANUAL_ZONE = "manual_zone"
+        const val STATE_MANUAL_ZONE_EXPLICIT = "manual_zone_explicit"
         const val COORDINATE_SCALE = 10_000.0
 
         // Four decimals is about 11 m, and '.' is used in every locale because a coordinate is

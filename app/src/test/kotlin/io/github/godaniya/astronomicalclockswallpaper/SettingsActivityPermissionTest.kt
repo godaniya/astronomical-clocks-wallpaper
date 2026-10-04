@@ -20,7 +20,6 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowToast
-import java.time.ZoneId
 
 /** Checks permission-result edge cases and preserves the requested cache policy across recreation. */
 @RunWith(RobolectricTestRunner::class)
@@ -50,7 +49,7 @@ class SettingsActivityPermissionTest {
                     latitude = 37.42,
                     longitude = -122.08,
                     source = ObservingLocation.Source.CURRENT_COARSE,
-                    zoneId = ZoneId.systemDefault(),
+                    zoneId = TimeZoneLookup.lookup(latitude = 37.42, longitude = -122.08),
                 ),
                 LocationStore(application).load(),
             )
@@ -72,7 +71,7 @@ class SettingsActivityPermissionTest {
                     latitude = 1.0,
                     longitude = 2.0,
                     source = ObservingLocation.Source.CURRENT_COARSE,
-                    zoneId = ZoneId.systemDefault(),
+                    zoneId = TimeZoneLookup.lookup(latitude = 1.0, longitude = 2.0),
                 ),
                 LocationStore(application).load(),
             )

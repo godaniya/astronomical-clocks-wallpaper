@@ -68,7 +68,8 @@ class SettingsActivityTest {
             activity.findViewById<EditText>(R.id.latitude_input).setText("45.5")
             activity.findViewById<EditText>(R.id.longitude_input).setText("-120.25")
             activity.findViewById<Button>(R.id.save_location).performClick()
-            val expected = "45.5000, -120.2500 (manual)\nTimezone: ${ZoneId.systemDefault().id}"
+            val expectedZone = TimeZoneLookup.lookup(latitude = 45.5, longitude = -120.25)
+            val expected = "45.5000, -120.2500 (manual)\nTimezone: ${expectedZone.id}"
             assertEquals(expected, activity.findViewById<TextView>(R.id.location_current).text.toString())
             controller.recreate()
             assertEquals(
@@ -90,7 +91,8 @@ class SettingsActivityTest {
             activity.findViewById<EditText>(R.id.latitude_input).setText("10.0")
             activity.findViewById<EditText>(R.id.longitude_input).setText("20.0")
             activity.findViewById<Button>(R.id.save_location).performClick()
-            val expected = "10.0000, 20.0000 (manual)\nTimezone: ${ZoneId.systemDefault().id}"
+            val expectedZone = TimeZoneLookup.lookup(latitude = 10.0, longitude = 20.0)
+            val expected = "10.0000, 20.0000 (manual)\nTimezone: ${expectedZone.id}"
 
             shadowOf(activity.application).grantPermissions(Manifest.permission.ACCESS_COARSE_LOCATION)
             val locationManager = activity.getSystemService(Context.LOCATION_SERVICE) as LocationManager
@@ -103,7 +105,7 @@ class SettingsActivityTest {
                     latitude = 10.0,
                     longitude = 20.0,
                     source = ObservingLocation.Source.MANUAL,
-                    zoneId = ZoneId.systemDefault(),
+                    zoneId = expectedZone,
                 ),
                 LocationStore(activity).load(),
             )
@@ -123,8 +125,9 @@ class SettingsActivityTest {
                 location(latitude = 37.42, longitude = -122.08),
             )
             shadowOf(Looper.getMainLooper()).idle()
+            val expectedZone = TimeZoneLookup.lookup(latitude = 37.42, longitude = -122.08)
             assertEquals(
-                "37.4200, -122.0800 (current)\nTimezone: ${ZoneId.systemDefault().id}",
+                "37.4200, -122.0800 (current)\nTimezone: ${expectedZone.id}",
                 activity.findViewById<TextView>(R.id.location_current).text.toString(),
             )
             assertEquals(
@@ -132,7 +135,7 @@ class SettingsActivityTest {
                     latitude = 37.42,
                     longitude = -122.08,
                     source = ObservingLocation.Source.CURRENT_COARSE,
-                    zoneId = ZoneId.systemDefault(),
+                    zoneId = expectedZone,
                 ),
                 LocationStore(activity).load(),
             )

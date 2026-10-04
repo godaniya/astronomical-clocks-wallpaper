@@ -22,7 +22,6 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowToast
 import java.time.Duration
-import java.time.ZoneId
 
 /** Checks that a completed manual choice or destroyed activity cannot receive an old acquisition. */
 @RunWith(RobolectricTestRunner::class)
@@ -109,7 +108,7 @@ class SettingsActivityAcquisitionTest {
                     latitude = 37.42,
                     longitude = -122.08,
                     source = ObservingLocation.Source.CURRENT_COARSE,
-                    zoneId = ZoneId.systemDefault(),
+                    zoneId = TimeZoneLookup.lookup(latitude = 37.42, longitude = -122.08),
                 ),
                 LocationStore(activity).load(),
             )
@@ -142,17 +141,18 @@ class SettingsActivityAcquisitionTest {
     }
 
     private fun assertManualLocation(activity: SettingsActivity) {
+        val expectedZone = TimeZoneLookup.lookup(latitude = 45.5, longitude = -120.25)
         assertEquals(
             ObservingLocation(
                 latitude = 45.5,
                 longitude = -120.25,
                 source = ObservingLocation.Source.MANUAL,
-                zoneId = ZoneId.systemDefault(),
+                zoneId = expectedZone,
             ),
             LocationStore(activity).load(),
         )
         assertEquals(
-            "45.5000, -120.2500 (manual)\nTimezone: ${ZoneId.systemDefault().id}",
+            "45.5000, -120.2500 (manual)\nTimezone: ${expectedZone.id}",
             activity.findViewById<TextView>(R.id.location_current).text.toString(),
         )
     }

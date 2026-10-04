@@ -1,13 +1,15 @@
 # Dependency and artwork provenance
 
 All application source and the placeholder Canvas/vector dial are original project work under
-[Apache-2.0](../LICENSE). No city catalog, location library, or external artwork is bundled. The
-astronomy engine and the star catalogue arrived with #4 and are recorded below.
+[Apache-2.0](../LICENSE). No political city catalog, location library, or external artwork is bundled. The
+astronomy engine and the star catalogue arrived with #4, and the IANA tzdb anchor coordinates arrived with #21,
+as recorded below.
 
 | Input | Source | License / use |
 | --- | --- | --- |
 | Astronomy Engine (Kotlin/JVM) commit `61dc070` | [cosinekitty/astronomy](https://github.com/cosinekitty/astronomy/tree/61dc07020aaa6885d2c7f688a4d82beaf6edb9ef), tag `v2.1.19`, built on demand by [JitPack](https://jitpack.io/#cosinekitty/astronomy) | MIT; runtime, pinned to a full commit SHA |
 | Hipparcos bright-star catalogue (V < 1.65, 26 stars) | [ESA 1997, CDS I/239/hip_main](https://cdsarc.cds.unistra.fr/viz-bin/cat/I/239) via VizieR | Public astronomical data; transcribed into `StarCatalog.kt` |
+| IANA Time Zone Database (tzdb `zone.tab`) | [IANA Time Zone Database](https://data.iana.org/time-zones/tz-link.html) | Public domain; coordinate anchors transcribed into `TimeZoneLookup.kt` |
 | Kotlin standard library 2.4.10 | [JetBrains Kotlin](https://github.com/JetBrains/kotlin/tree/v2.4.10) | Apache-2.0; runtime |
 | JetBrains annotations 13.0 (transitive) | [java-annotations](https://github.com/JetBrains/java-annotations) | Apache-2.0; Kotlin's annotation dependency |
 | Android framework API | [Android Open Source Project](https://source.android.com/) | Device-provided framework; SDK governed by Android SDK terms |
