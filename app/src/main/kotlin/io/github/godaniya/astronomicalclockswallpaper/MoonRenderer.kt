@@ -8,8 +8,8 @@ import kotlin.math.abs
 import kotlin.math.cos
 
 /**
- * Paints the astronomical Moon marker on the ecliptic ring of the Orloj dial,
- * showing its apparent astronomical position and illuminated phase.
+ * Paints the Moon marker on the ecliptic ring of the Orloj dial at the geometry's geocentric
+ * ecliptic longitude, with its illuminated phase.
  */
 internal class MoonRenderer {
     private val shadowPaint =
@@ -29,28 +29,25 @@ internal class MoonRenderer {
             strokeWidth = RIM_STROKE_WIDTH
         }
 
-    fun draw(canvas: Canvas, projection: OrlojProjection) {
-        val point = projection.moonPoint ?: return
-        val phaseDeg = projection.geometry.moonPhaseLongitudeDeg ?: return
-
+    /**
+     * Draws the marker at an already projected [point]; the caller owns suppression, as it does
+     * for [SunRenderer]. The disc is drawn at a fixed screen-space orientation, so
+     * [southernHemisphere] mirrors it horizontally rather than turning the bright limb to face the
+     * Sun: the marker keeps one orientation around the whole ring.
+     */
+    fun draw(canvas: Canvas, point: DialPoint, phaseLongitudeDeg: Double, southernHemisphere: Boolean) {
         val checkpoint = canvas.save()
         try {
             canvas.translate(point.x.toFloat(), point.y.toFloat())
-            if (projection.geometry.latitudeDeg < 0) {
-                // In the Southern Hemisphere, the illuminated side of the Moon is horizontally mirrored.
+            if (southernHemisphere) {
                 canvas.scale(-1f, 1f)
             }
 
-            // 1. Draw dark background disc.
             canvas.drawCircle(0f, 0f, MOON_RADIUS, shadowPaint)
-
-            // 2. Draw illuminated phase portion if not New Moon.
-            val phasePath = buildPhasePath(phaseDeg)
+            val phasePath = buildPhasePath(phaseLongitudeDeg)
             if (phasePath != null) {
                 canvas.drawPath(phasePath, illuminatedPaint)
             }
-
-            // 3. Draw outer golden rim.
             canvas.drawCircle(0f, 0f, MOON_RADIUS, rimPaint)
         } finally {
             canvas.restoreToCount(checkpoint)

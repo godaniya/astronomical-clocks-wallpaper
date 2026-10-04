@@ -89,21 +89,17 @@ class AstronomyEngineCalculatorTest {
             }
 
             val geom = calculator.dialGeometry(fixture.instant, GREENWICH.location)
-            assertNotNull(geom.moonLongitudeDeg)
-            assertNotNull(geom.moonPhaseLongitudeDeg)
-            val moonLon = geom.moonLongitudeDeg
-            val moonPhase = geom.moonPhaseLongitudeDeg
-            if (moonLon != null && moonPhase != null) {
-                assertTrue(moonLon >= 0.0 && moonLon < FULL_TURN_DEGREES)
-                val geomPhaseFromNew =
-                    abs(angleDifferenceDeg(first = moonPhase, second = NEW_MOON_LONGITUDE_DEG))
-                val geomPhaseFromFull =
-                    abs(angleDifferenceDeg(first = moonPhase, second = FULL_MOON_LONGITUDE_DEG))
-                if (fixture.isFull) {
-                    assertTrue("$where dialGeometry phase longitude full", geomPhaseFromFull <= PHASE_TOLERANCE_DEG)
-                } else {
-                    assertTrue("$where dialGeometry phase longitude new", geomPhaseFromNew <= PHASE_TOLERANCE_DEG)
-                }
+            val moonLon = requireNotNull(geom.moonLongitudeDeg) { "$where dialGeometry Moon longitude" }
+            val moonPhase = requireNotNull(geom.moonPhaseLongitudeDeg) { "$where dialGeometry Moon phase" }
+            assertTrue(moonLon >= 0.0 && moonLon < FULL_TURN_DEGREES)
+            val geomPhaseFromNew =
+                abs(angleDifferenceDeg(first = moonPhase, second = NEW_MOON_LONGITUDE_DEG))
+            val geomPhaseFromFull =
+                abs(angleDifferenceDeg(first = moonPhase, second = FULL_MOON_LONGITUDE_DEG))
+            if (fixture.isFull) {
+                assertTrue("$where dialGeometry phase longitude full", geomPhaseFromFull <= PHASE_TOLERANCE_DEG)
+            } else {
+                assertTrue("$where dialGeometry phase longitude new", geomPhaseFromNew <= PHASE_TOLERANCE_DEG)
             }
         }
     }

@@ -41,7 +41,7 @@ class DialRendererTest {
         assertEquals(0xFF152433.toInt(), DialStyle.NIGHT)
         assertEquals(0xFFF4E5B8.toInt(), DialStyle.HAND)
         assertEquals(0xFFE8EEF5.toInt(), DialStyle.MOON_ILLUMINATED)
-        assertEquals(0xFF152433.toInt(), DialStyle.MOON_SHADOW)
+        assertEquals(0xFF2C3E50.toInt(), DialStyle.MOON_SHADOW)
     }
 
     @Test
@@ -72,23 +72,23 @@ class DialRendererTest {
     }
 
     @Test
-    fun moonPhasePicksTheIlluminatedLimb() {
+    fun moonPhasePicksLitLimb() {
         // The lit limb is a function of moonPhaseLongitudeDeg, not of moonLongitudeDeg: both
         // renders below put the marker in the same place and differ only in the phase.
-        val waxing = illuminatedOffsetFromMarker(prague.copy(moonLongitudeDeg = 60.0, moonPhaseLongitudeDeg = 90.0))
-        val waning = illuminatedOffsetFromMarker(prague.copy(moonLongitudeDeg = 60.0, moonPhaseLongitudeDeg = 270.0))
+        val waxing = illuminatedLimbOffsetX(prague.copy(moonLongitudeDeg = 60.0, moonPhaseLongitudeDeg = 90.0))
+        val waning = illuminatedLimbOffsetX(prague.copy(moonLongitudeDeg = 60.0, moonPhaseLongitudeDeg = 270.0))
         assertTrue("northern waxing phase must light the right limb, offset was $waxing", waxing > 0f)
         assertTrue("northern waning phase must light the left limb, offset was $waning", waning < 0f)
     }
 
     @Test
-    fun moonHemisphereMirrorFlipsTheIlluminatedLimb() {
+    fun moonMirrorFlipsLitLimb() {
         // The horizontal mirror in MoonRenderer is a claim about the bright limb's apparent side,
         // not a consequence of the plate inversion, so it needs a pixel assertion rather than a
         // smoke render: without the mirror both hemispheres light the same limb.
-        val north = illuminatedOffsetFromMarker(prague.copy(moonLongitudeDeg = 60.0, moonPhaseLongitudeDeg = 90.0))
+        val north = illuminatedLimbOffsetX(prague.copy(moonLongitudeDeg = 60.0, moonPhaseLongitudeDeg = 90.0))
         val south =
-            illuminatedOffsetFromMarker(
+            illuminatedLimbOffsetX(
                 prague.copy(latitudeDeg = -33.87, moonLongitudeDeg = 60.0, moonPhaseLongitudeDeg = 90.0),
             )
         assertTrue("northern first quarter must light the right limb, offset was $north", north > 0f)
@@ -98,7 +98,6 @@ class DialRendererTest {
         // exactly. The signs above carry the claim; this only rejects a gross scale error.
         assertEquals("southern marker must mirror the northern one", -north, south, MIRROR_TOLERANCE)
     }
-
 
     @Test
     fun southernZodiacRenders() {
@@ -643,11 +642,7 @@ class DialRendererTest {
         return if (columns.isEmpty()) 0 else columns.last() - columns.first() + 1
     }
 
-    /**
-     * Mean horizontal offset, in pixels, of the marker's illuminated pixels from its own centre.
-     * The sign names the limb: positive is the right limb, negative the left one.
-     */
-    private fun illuminatedOffsetFromMarker(geometry: DialGeometry): Float {
+    private fun illuminatedLimbOffsetX(geometry: DialGeometry): Float {
         val bitmap = render(geometry = geometry, layers = LAYERS_WITHOUT_SUN_AND_ZODIAC)
         val point = OrlojProjection(geometry).moonPoint ?: error("geometry carries no Moon longitude")
         val centreX = CENTER + point.x * SKY_RADIUS
@@ -664,6 +659,7 @@ class DialRendererTest {
             }
         }
         assertTrue("expected illuminated Moon pixels at $point", illuminated > 0)
+        // Positive offsets point at the right limb, negative at the left one.
         return offsetSum.toFloat() / illuminated
     }
 

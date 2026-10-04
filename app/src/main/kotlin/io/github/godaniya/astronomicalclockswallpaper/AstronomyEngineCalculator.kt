@@ -30,12 +30,18 @@ import kotlin.math.sin
 /**
  * The production [AstronomyCalculator], backed by Astronomy Engine.
  *
- * Every Solar System body is reduced the same way: the engine gives topocentric equatorial
+ * Every Solar System body in [sky] is reduced the same way: the engine gives topocentric equatorial
  * coordinates of date with aberration corrected, [horizon] turns those into azimuth and altitude,
  * and the altitude is adjusted for the standard atmosphere with [Refraction.Normal]. Fixed stars
  * cannot go through [equator], because they are not Solar System bodies, so [StarCatalog] supplies
  * their J2000 place and proper motion and [rotationEqjHor] carries it to the horizon. See
  * `docs/astronomy.md` for frames, units, and tolerances.
+ *
+ * [dialGeometry] is the exception. It asks the engine for a geometric, geocentric ecliptic
+ * longitude of date instead — no aberration, no refraction, and for the Moon no light-time
+ * retardation either — because the dial plots a body's place on the ecliptic ring rather than the
+ * direction it appears in the sky. The Sun and Moon are the two bodies that path carries, and
+ * [DialGeometry] records the frame each longitude is in.
  *
  * Three small conventions recur below.
  *
