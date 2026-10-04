@@ -1,7 +1,5 @@
 package io.github.godaniya.astronomicalclockswallpaper
 
-import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.graphics.RectF
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -81,38 +79,6 @@ class MoonRendererTest {
         gibbous?.computeBounds(gibbousBounds, true)
         assertTrue("gibbous left must be negative", gibbousBounds.left < 0f)
         assertTrue("gibbous right must reach outer limb", gibbousBounds.right <= maxRadius)
-    }
-
-    @Test
-    fun drawHandlesNullAndHemispheres() {
-        val bitmap = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-
-        // Null moon point
-        val nullGeometry = DialGeometry(localSiderealAngleDeg = 0.0, trueObliquityDeg = 23.44, latitudeDeg = 50.0)
-        renderer.draw(canvas, OrlojProjection(nullGeometry))
-
-        // Northern hemisphere
-        val northGeometry =
-            DialGeometry(
-                localSiderealAngleDeg = 0.0,
-                trueObliquityDeg = 23.44,
-                latitudeDeg = 50.0,
-                moonLongitudeDeg = 45.0,
-                moonPhaseLongitudeDeg = 90.0,
-            )
-        renderer.draw(canvas, OrlojProjection(northGeometry))
-
-        // Southern hemisphere
-        val southGeometry =
-            DialGeometry(
-                localSiderealAngleDeg = 0.0,
-                trueObliquityDeg = 23.44,
-                latitudeDeg = -33.87,
-                moonLongitudeDeg = 45.0,
-                moonPhaseLongitudeDeg = 90.0,
-            )
-        renderer.draw(canvas, OrlojProjection(southGeometry))
     }
 
     private companion object {

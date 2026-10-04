@@ -72,6 +72,35 @@ class DialRendererTest {
     }
 
     @Test
+    fun moonPhasePicksTheIlluminatedLimb() {
+        // The lit limb is a function of moonPhaseLongitudeDeg, not of moonLongitudeDeg: both
+        // renders below put the marker in the same place and differ only in the phase.
+        val waxing = illuminatedOffsetFromMarker(prague.copy(moonLongitudeDeg = 60.0, moonPhaseLongitudeDeg = 90.0))
+        val waning = illuminatedOffsetFromMarker(prague.copy(moonLongitudeDeg = 60.0, moonPhaseLongitudeDeg = 270.0))
+        assertTrue("northern waxing phase must light the right limb, offset was $waxing", waxing > 0f)
+        assertTrue("northern waning phase must light the left limb, offset was $waning", waning < 0f)
+    }
+
+    @Test
+    fun moonHemisphereMirrorFlipsTheIlluminatedLimb() {
+        // The horizontal mirror in MoonRenderer is a claim about the bright limb's apparent side,
+        // not a consequence of the plate inversion, so it needs a pixel assertion rather than a
+        // smoke render: without the mirror both hemispheres light the same limb.
+        val north = illuminatedOffsetFromMarker(prague.copy(moonLongitudeDeg = 60.0, moonPhaseLongitudeDeg = 90.0))
+        val south =
+            illuminatedOffsetFromMarker(
+                prague.copy(latitudeDeg = -33.87, moonLongitudeDeg = 60.0, moonPhaseLongitudeDeg = 90.0),
+            )
+        assertTrue("northern first quarter must light the right limb, offset was $north", north > 0f)
+        assertTrue("southern first quarter must light the left limb, offset was $south", south < 0f)
+        // The two markers land on different sub-pixel offsets, so the mirrored offsets agree only
+        // to about a pixel of rasterisation (measured: +2.25 px north, -3.30 px south) rather than
+        // exactly. The signs above carry the claim; this only rejects a gross scale error.
+        assertEquals("southern marker must mirror the northern one", -north, south, MIRROR_TOLERANCE)
+    }
+
+
+    @Test
     fun southernZodiacRenders() {
         val sydney = DialGeometry(localSiderealAngleDeg = 0.0, trueObliquityDeg = 23.44, latitudeDeg = -33.87)
         val sydneyProjection = OrlojProjection(sydney)
@@ -614,6 +643,30 @@ class DialRendererTest {
         return if (columns.isEmpty()) 0 else columns.last() - columns.first() + 1
     }
 
+    /**
+     * Mean horizontal offset, in pixels, of the marker's illuminated pixels from its own centre.
+     * The sign names the limb: positive is the right limb, negative the left one.
+     */
+    private fun illuminatedOffsetFromMarker(geometry: DialGeometry): Float {
+        val bitmap = render(geometry = geometry, layers = LAYERS_WITHOUT_SUN_AND_ZODIAC)
+        val point = OrlojProjection(geometry).moonPoint ?: error("geometry carries no Moon longitude")
+        val centreX = CENTER + point.x * SKY_RADIUS
+        val centreY = CENTER + point.y * SKY_RADIUS
+        var offsetSum = 0
+        var illuminated = 0
+        for (dx in -MOON_PROBE_RADIUS..MOON_PROBE_RADIUS) {
+            for (dy in -MOON_PROBE_RADIUS..MOON_PROBE_RADIUS) {
+                val pixel = bitmap.getPixel((centreX + dx).roundToInt(), (centreY + dy).roundToInt())
+                if (pixel == DialStyle.MOON_ILLUMINATED) {
+                    offsetSum += dx
+                    illuminated++
+                }
+            }
+        }
+        assertTrue("expected illuminated Moon pixels at $point", illuminated > 0)
+        return offsetSum.toFloat() / illuminated
+    }
+
     private fun changedPixelsNear(first: Bitmap, second: Bitmap, point: DialPoint): Int {
         val x = (CENTER + point.x * SKY_RADIUS).roundToInt()
         val y = (CENTER + point.y * SKY_RADIUS).roundToInt()
@@ -633,6 +686,9 @@ class DialRendererTest {
         const val CENTER = 400.0
         const val SKY_RADIUS = SIZE * 0.43 / 1.37
         const val PROBE_RADIUS = 12
+        const val MOON_PROBE_RADIUS = 10
+        const val MIRROR_TOLERANCE = 2.0f
+        val LAYERS_WITHOUT_SUN_AND_ZODIAC = DialLayers(isZodiacRingEnabled = false, isSunEnabled = false)
         val DIVIDER_SAMPLE_OFFSETS = listOf(-7.0, -4.0, 0.0, 4.0, 7.0)
         const val DIVIDER_SAMPLE_RADIUS = 1
         const val DIVIDER_GOLD_SAMPLES = 4
