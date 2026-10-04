@@ -1,12 +1,25 @@
 package io.github.godaniya.astronomicalclockswallpaper
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.time.ZoneId
+import java.time.zone.ZoneRulesException
 
-/** Tests offline coordinate-to-timezone nearest-anchor lookup and canonical zone lists. */
+/**
+ * Tests offline coordinate-to-timezone nearest-anchor lookup, alias fallback, and zone lists.
+ *
+ * Robolectric supplies `android.util.Log`, which `resolveZone` writes to when the device tzdb
+ * rejects an identifier. The legacy-tzdb cases inject a `ZoneId` factory that rejects the six
+ * identifiers newer than tzdata 2017a, the oldest tzdb an API 26 device can carry, instead of
+ * asking the much newer host JDK, which cannot see that gap.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [26, 36])
 class TimeZoneLookupTest {
     @Test
     fun referenceLocationsResolveZones() {
@@ -53,14 +66,70 @@ class TimeZoneLookupTest {
         assertTrue("Zone list must contain standard IANA anchors", zones.size > 300)
         assertEquals("Zone list must be sorted alphabetically", zones.sorted(), zones)
         assertEquals("Zone list must contain no duplicates", zones.distinct(), zones)
-        for (zone in zones) {
-            val parsed = ZoneId.of(zone)
-            assertNotNull(parsed)
+    }
+
+    // A device whose tzdb predates 2022b knows a Kyiv coordinate only as Europe/Kiev, and the
+    // lookup must degrade to those rules rather than throw.
+    @Test
+    fun legacyTzdbFallsBackToAlias() {
+        assertEquals(
+            ZoneId.of("Europe/Kiev"),
+            TimeZoneLookup.lookup(latitude = 50.4333, longitude = 30.5167, zoneOf = ::legacyZoneOf),
+        )
+    }
+
+    // When neither the identifier nor its alias resolves, the nearest resolvable anchor must win
+    // rather than the lookup failing outright.
+    @Test
+    fun legacyTzdbSkipsToNextAnchor() {
+        val withoutKyiv = { id: String ->
+            if (id == "Europe/Kyiv" || id == "Europe/Kiev") {
+                throw ZoneRulesException("unknown time zone id: $id")
+            }
+            ZoneId.of(id)
         }
+        assertEquals(
+            ZoneId.of("Europe/Chisinau"),
+            TimeZoneLookup.lookup(latitude = 50.4333, longitude = 30.5167, zoneOf = withoutKyiv),
+        )
+    }
+
+    @Test
+    fun unresolvableZoneIdReturnsNull() {
+        assertNull(TimeZoneLookup.resolveZone(id = "Not/AZone"))
+    }
+
+    // A device must not lose any anchor from the picker: an identifier its tzdb rejects still has
+    // the alias map behind it, so the offered list is unchanged.
+    @Test
+    fun bundledIdsResolveOnLegacyTzdb() {
+        assertEquals(
+            TimeZoneLookup.AVAILABLE_ZONE_IDS,
+            TimeZoneLookup.resolvableZoneIds(zoneOf = ::legacyZoneOf),
+        )
     }
 
     private fun assertZone(latitude: Double, longitude: Double, expectedZone: String) {
         val resolved = TimeZoneLookup.lookup(latitude = latitude, longitude = longitude)
         assertEquals(ZoneId.of(expectedZone), resolved)
+    }
+
+    // Stands in for a device tzdb as old as tzdata 2017a. Each identifier below was checked to be
+    // absent from 2017a's zone definitions; every alias target is present there.
+    private fun legacyZoneOf(id: String): ZoneId {
+        if (id in LEGACY_TZDB_MISSING_IDS) throw ZoneRulesException("unknown time zone id: $id")
+        return ZoneId.of(id)
+    }
+
+    private companion object {
+        val LEGACY_TZDB_MISSING_IDS =
+            setOf(
+                "America/Ciudad_Juarez",
+                "America/Coyhaique",
+                "America/Nuuk",
+                "Asia/Qostanay",
+                "Europe/Kyiv",
+                "Pacific/Kanton",
+            )
     }
 }

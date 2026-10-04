@@ -1,5 +1,7 @@
 package io.github.godaniya.astronomicalclockswallpaper
 
+import android.util.Log
+import java.time.DateTimeException
 import java.time.ZoneId
 import kotlin.math.cos
 
@@ -22,6 +24,8 @@ internal data class TimeZoneAnchor(val zoneId: String, val latitude: Double, val
 internal object TimeZoneLookup {
     private const val FULL_TURN_DEGREES = 360.0
     private const val HALF_TURN_DEGREES = 180.0
+    private const val UTC_ZONE_ID = "UTC"
+    private const val TAG = "TimeZoneLookup"
 
     val CANONICAL_ANCHORS: List<TimeZoneAnchor> =
         listOf(
@@ -447,16 +451,85 @@ internal object TimeZoneLookup {
 
     val AVAILABLE_ZONE_IDS: List<String> = CANONICAL_ANCHORS.map { it.zoneId }.sorted()
 
-    fun lookup(latitude: Double, longitude: Double): ZoneId {
-        val latRad = Math.toRadians(latitude)
-        val cosLat = cos(latRad)
-        val nearest =
-            CANONICAL_ANCHORS.minByOrNull { anchor ->
-                val dLat = latitude - anchor.latitude
-                val dLon = normalizeLongitudeDiff(longitude - anchor.longitude) * cosLat
-                dLat * dLat + dLon * dLon
+    // Bundled identifiers an older supported device tzdb does not define, mapped to the identifier
+    // that held the same region before the split or rename. See resolveZone for why this exists.
+    private val ZONE_ALIASES: Map<String, String> =
+        mapOf(
+            // Renamed from Europe/Kiev in tzdata 2022b.
+            "Europe/Kyiv" to "Europe/Kiev",
+            // Renamed from America/Godthab in tzdata 2020a.
+            "America/Nuuk" to "America/Godthab",
+            // Renamed from Pacific/Enderbury in tzdata 2021b.
+            "Pacific/Kanton" to "Pacific/Enderbury",
+            // Split out of America/Ojinaga in tzdata 2022g.
+            "America/Ciudad_Juarez" to "America/Ojinaga",
+            // Split out of America/Santiago in tzdata 2025b.
+            "America/Coyhaique" to "America/Santiago",
+            // Split out of Asia/Qyzylorda in tzdata 2018h. The target is Asia/Almaty rather than
+            // the parent zone because the wallpaper renders the present instant: a tzdb old enough
+            // to need this entry reports both Almaty and Qyzylorda at UTC+06.
+            "Asia/Qostanay" to "Asia/Almaty",
+        )
+
+    /**
+     * Resolves [id] against the device tzdb, falling back to the identifier that held the same
+     * region before the zone's split or rename. Returns null, after logging, instead of throwing
+     * `ZoneRulesException` on a device that knows neither identifier.
+     *
+     * The anchor list follows current tzdb releases, while the API 26 floor can carry a tzdb as
+     * old as 2017a, whose `ZoneRulesProvider` rejects six of the bundled identifiers; every alias
+     * target is defined in tzdata 2017a. An alias therefore differs from the current zone only
+     * where tzdb itself has moved the region since 2017a. Maintain `ZONE_ALIASES` whenever an
+     * anchor is added from a release newer than the oldest tzdb the minimum SDK can carry.
+     *
+     * [zoneOf] is the injection seam for the device's `ZoneRulesProvider`, mirroring
+     * `LocationStore`'s `deviceZone`.
+     */
+    fun resolveZone(id: String, zoneOf: (String) -> ZoneId = ZoneId::of): ZoneId? =
+        attemptZone(id = id, zoneOf = zoneOf) ?: resolveAlias(id = id, zoneOf = zoneOf)
+
+    private fun resolveAlias(id: String, zoneOf: (String) -> ZoneId): ZoneId? {
+        val alias = ZONE_ALIASES[id] ?: return null
+        Log.w(TAG, "device tzdb has no $id; substituting its predecessor $alias")
+        return attemptZone(id = alias, zoneOf = zoneOf)
+    }
+
+    private fun attemptZone(id: String, zoneOf: (String) -> ZoneId): ZoneId? {
+        // A block body rather than `= try`: the formatter's function-expression-body rule would
+        // rewrite the latter back to a single-line form that detekt's MultilineExpressionWrapping
+        // rejects, and neither rule is disabled for this project.
+        val resolved =
+            try {
+                zoneOf(id)
+            } catch (_: DateTimeException) {
+                Log.w(TAG, "device tzdb does not provide timezone $id")
+                null
             }
-        return nearest?.let { ZoneId.of(it.zoneId) } ?: ZoneId.of("UTC")
+        return resolved
+    }
+
+    /** The bundled identifiers this device can resolve, so no dead entry reaches the picker. */
+    fun resolvableZoneIds(zoneOf: (String) -> ZoneId = ZoneId::of): List<String> =
+        AVAILABLE_ZONE_IDS.filter { resolveZone(id = it, zoneOf = zoneOf) != null }
+
+    /**
+     * The nearest bundled anchor this device can resolve, or UTC when it can resolve none.
+     *
+     * Anchors are visited in increasing distance so that a device missing the nearest anchor
+     * falls through to the next-nearest one it does know, rather than failing the whole lookup.
+     */
+    fun lookup(latitude: Double, longitude: Double, zoneOf: (String) -> ZoneId = ZoneId::of): ZoneId {
+        val cosLat = cos(Math.toRadians(latitude))
+        val squareDegreesTo = { anchor: TimeZoneAnchor ->
+            val dLat = latitude - anchor.latitude
+            val dLon = normalizeLongitudeDiff(longitude - anchor.longitude) * cosLat
+            dLat * dLat + dLon * dLon
+        }
+        val resolvable =
+            CANONICAL_ANCHORS
+                .sortedBy(squareDegreesTo)
+                .firstNotNullOfOrNull { anchor -> resolveZone(id = anchor.zoneId, zoneOf = zoneOf) }
+        return resolvable ?: ZoneId.of(UTC_ZONE_ID)
     }
 
     private fun normalizeLongitudeDiff(diff: Double): Double {
