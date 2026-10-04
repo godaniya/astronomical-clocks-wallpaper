@@ -180,6 +180,26 @@ class AstronomicalClocksWallpaperServiceTest {
         assertEquals(Instant.parse(fixedInstant), service.debugClock.currentFixedInstant)
     }
 
+    // The instant extra is external input. A malformed string must leave the clock untouched, and an
+    // instant that parses but exceeds the epoch-millis range must be rejected here rather than
+    // throwing ArithmeticException out of the tick loop's scheduleNextTick.
+    @Test
+    fun debugBroadcastRejectsInstant() {
+        val service = controller.get()
+        val rejected = listOf("not-an-instant", "+1000000000-12-31T23:59:59Z")
+
+        for (bad in rejected) {
+            service.handleDebugSetTime(
+                Intent(AstronomicalClocksWallpaperService.ACTION_DEBUG_SET_TIME).apply {
+                    putExtra(AstronomicalClocksWallpaperService.EXTRA_INSTANT, bad)
+                },
+            )
+        }
+
+        assertEquals(Duration.ZERO, service.debugClock.currentOffset)
+        assertNull(service.debugClock.currentFixedInstant)
+    }
+
     @Test
     fun debugBroadcastResetsTime() {
         val service = controller.get()

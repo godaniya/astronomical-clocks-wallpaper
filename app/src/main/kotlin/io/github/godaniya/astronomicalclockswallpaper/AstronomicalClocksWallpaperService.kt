@@ -116,6 +116,13 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
             if (!instantStr.isNullOrBlank()) {
                 try {
                     val instant = Instant.parse(instantStr)
+                    // Instants past the long-millis range parse but overflow the epoch-millis
+                    // conversion the tick loop performs, which would throw from scheduleNextTick
+                    // outside runTick's catch. Reject them here, where the input arrives.
+                    if (instant.isBefore(minSupportedInstant) || instant.isAfter(maxSupportedInstant)) {
+                        Log.e(TAG, "Instant extra out of supported range: $instantStr")
+                        return
+                    }
                     mutableDebugClock.setInstant(instant)
                     Log.i(TAG, "Debug clock fixed to instant: $instant")
                 } catch (e: DateTimeParseException) {
@@ -348,6 +355,8 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
         private const val MILLIS_PER_SECOND = 1000L
         private const val SECONDS_PER_MINUTE = 60L
         private const val SECONDS_PER_HOUR = 3600L
+        private val minSupportedInstant: Instant = Instant.ofEpochMilli(Long.MIN_VALUE)
+        private val maxSupportedInstant: Instant = Instant.ofEpochMilli(Long.MAX_VALUE)
         private const val TAG = "AstronomicalClocksWallpaperService"
     }
 }
