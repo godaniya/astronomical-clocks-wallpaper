@@ -21,6 +21,9 @@ import time
 # hand to a fraction of a degree; a larger residual means the clock did not advance as commanded.
 ANGLE_TOLERANCE_DEG = 0.5
 
+# Action the debug build listens on to move or reset the wallpaper's virtual clock.
+DEBUG_ACTION = "io.github.godaniya.astronomicalclockswallpaper.DEBUG_SET_TIME"
+
 
 def run_adb(args, serial=None):
     cmd = ["adb"]
@@ -29,6 +32,28 @@ def run_adb(args, serial=None):
     cmd.extend(args)
     res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
     return res.stdout
+
+
+def restore_device(serial):
+    """
+    Best-effort reset of every setting the run changes, never raising.
+
+    Called from a `finally`, so a failed step cannot leave the shared device resized or on virtual
+    time. A failing restore is reported without masking the original exception, which still
+    propagates and keeps the run's non-zero exit code. Returns False if any restore command failed,
+    so a pass that leaked device state is not reported as clean.
+    """
+    restored = True
+    for command in (
+        ["shell", "wm", "size", "reset"],
+        ["shell", "am", "broadcast", "-a", DEBUG_ACTION, "--ez", "reset", "true"],
+    ):
+        try:
+            run_adb(command, serial=serial)
+        except (subprocess.SubprocessError, OSError) as error:
+            restored = False
+            print(f"WARNING: restore command failed: {error}", file=sys.stderr)
+    return restored
 
 
 def capture_frame(serial=None):
@@ -115,15 +140,20 @@ def main():
     target_serial = serial or device_lines[0].split()[0]
     print(f"Targeting ADB device: {target_serial}")
 
-    # 1. Reset debug clock to baseline
+    # Device-time marker for the logcat filter below. Reading only entries newer than the run start
+    # isolates this run's warnings without wiping the shared buffer, which `logcat -c` would do to
+    # another session's evidence. The whole format string is one argv element because the device's
+    # toybox `date` rejects splitting `+%m-%d` and `%H:%M:%S.000` into two arguments.
+    log_start = run_adb(["shell", "date +'%m-%d %H:%M:%S.000'"], serial=target_serial).decode().strip()
+    print(f"Logcat start marker: {log_start}")
+
+    # 1. Reset debug clock to baseline and show the home screen
     print("Waking the screen and showing the home screen...")
     run_adb(["shell", "input", "keyevent", "KEYCODE_WAKEUP"], serial=target_serial)
     run_adb(["shell", "input", "keyevent", "KEYCODE_HOME"], serial=target_serial)
     time.sleep(1.0)
     print("Resetting virtual clock...")
-    run_adb(["shell", "am", "broadcast", "-a",
-             "io.github.godaniya.astronomicalclockswallpaper.DEBUG_SET_TIME",
-             "--ez", "reset", "true"], serial=target_serial)
+    run_adb(["shell", "am", "broadcast", "-a", DEBUG_ACTION, "--ez", "reset", "true"], serial=target_serial)
     time.sleep(0.5)
 
     # 2. Capture baseline frame t0
@@ -135,47 +165,52 @@ def main():
     else:
         print("Warning: Could not isolate hand pixels at t0 (wallpaper might be obstructed)")
 
-    # 3. Advance virtual time by +30 minutes
-    print("Advancing virtual time +30 minutes via debug broadcast...")
-    start_t = time.time()
-    run_adb(["shell", "am", "broadcast", "-a",
-             "io.github.godaniya.astronomicalclockswallpaper.DEBUG_SET_TIME",
-             "--el", "offset_minutes", "30"], serial=target_serial)
-    elapsed = time.time() - start_t
-    print(f"Time travel completed in {elapsed * 1000.0:.1f}ms")
-    time.sleep(0.3)
-
-    # 4. Capture frame t1 at +30 minutes
-    print("Capturing frame t1 at +30m...")
-    w1, h1, px1 = capture_frame(serial=target_serial)
-    angle1 = detect_hand_angle(w1, h1, px1)
-    if angle1 is not None:
-        print(f"Hand angle at t1 (+30m): {angle1:.3f}°")
     delta = residual = None
-    if angle0 is not None and angle1 is not None:
-        delta = (angle1 - angle0) % 360.0
-        expected = 7.500  # 30 min on a 24h dial = 0.5 * 15 deg = 7.5 deg
-        residual = delta - expected
-        print(f"Observed angular advance: {delta:.3f}° (expected: {expected:.3f}°, residual: {residual:+.3f}°)")
+    angle2 = None
+    restored = True
+    try:
+        # 3. Advance virtual time by +30 minutes
+        print("Advancing virtual time +30 minutes via debug broadcast...")
+        start_t = time.time()
+        run_adb(["shell", "am", "broadcast", "-a", DEBUG_ACTION,
+                 "--el", "offset_minutes", "30"], serial=target_serial)
+        elapsed = time.time() - start_t
+        print(f"Time travel completed in {elapsed * 1000.0:.1f}ms")
+        time.sleep(0.3)
 
-    # 5. Test surface recreation
-    print("Testing surface recreation...")
-    run_adb(["shell", "wm", "size", "1080x2000"], serial=target_serial)
-    time.sleep(0.5)
-    run_adb(["shell", "wm", "size", "reset"], serial=target_serial)
-    time.sleep(0.5)
-    w2, h2, px2 = capture_frame(serial=target_serial)
-    angle2 = detect_hand_angle(w2, h2, px2)
+        # 4. Capture frame t1 at +30 minutes
+        print("Capturing frame t1 at +30m...")
+        w1, h1, px1 = capture_frame(serial=target_serial)
+        angle1 = detect_hand_angle(w1, h1, px1)
+        if angle1 is not None:
+            print(f"Hand angle at t1 (+30m): {angle1:.3f}°")
+        if angle0 is not None and angle1 is not None:
+            delta = (angle1 - angle0) % 360.0
+            expected = 7.500  # 30 min on a 24h dial = 0.5 * 15 deg = 7.5 deg
+            residual = delta - expected
+            print(f"Observed angular advance: {delta:.3f}° (expected: {expected:.3f}°, residual: {residual:+.3f}°)")
 
-    # 6. Reset clock back to real time
-    print("Restoring virtual clock to system UTC...")
-    run_adb(["shell", "am", "broadcast", "-a",
-             "io.github.godaniya.astronomicalclockswallpaper.DEBUG_SET_TIME",
-             "--ez", "reset", "true"], serial=target_serial)
+        # 5. Test surface recreation
+        print("Testing surface recreation...")
+        run_adb(["shell", "wm", "size", "1080x2000"], serial=target_serial)
+        time.sleep(0.5)
+        run_adb(["shell", "wm", "size", "reset"], serial=target_serial)
+        time.sleep(0.5)
+        w2, h2, px2 = capture_frame(serial=target_serial)
+        angle2 = detect_hand_angle(w2, h2, px2)
+    finally:
+        # Restore on both the pass and the failure path, before any exception propagates, so a
+        # failed run cannot strand the shared device resized or on virtual time. This also covers
+        # the collect-results path, so a pass leaves the device as it was found.
+        print("Restoring virtual clock and display size...")
+        restored = restore_device(target_serial)
 
-    # 7. Check renderer logs for warnings
-    logs = run_adb(["logcat", "-d", "-s", "AstronomicalClocksWallpaperService:W"], serial=target_serial).decode("utf-8")
-    warnings = [l for l in logs.splitlines() if "skipping" in l.lower() or "exception" in l.lower()]
+    # 6. Check renderer logs, isolated to the entries this run produced. Both renderer tags are
+    # watched: the dial draw logs render failures under DialRenderer, so a filter on the service tag
+    # alone can miss them and pass a run whose dial threw.
+    logs = run_adb(["logcat", "-d", "-T", log_start, "-s",
+                    "AstronomicalClocksWallpaperService:W", "DialRenderer:W"], serial=target_serial).decode("utf-8")
+    warnings = [l for l in logs.splitlines() if l.strip() and not l.startswith("---------")]
     print(f"Renderer warnings check: {len(warnings)} unexpected warning(s)")
 
     failures = []
@@ -187,6 +222,8 @@ def main():
         failures.append("hand not drawn after surface recreation")
     if warnings:
         failures.append(f"{len(warnings)} renderer warning(s) in logcat")
+    if not restored:
+        failures.append("device state was not fully restored; see the restore warnings above")
 
     print("\n--- Measured results (paste into docs/device-testing.md only if all pass) ---")
     today = time.strftime("%Y-%m-%d")
@@ -197,7 +234,7 @@ def main():
               f"residual {residual:+.3f}°; broadcast took {elapsed * 1000.0:.0f}ms |")
     recreated = "drawn" if angle2 is not None else "NOT found"
     print(f"| {today} | surface recreation | `wm size 1080x2000` then reset; hand {recreated} afterwards |")
-    print(f"| {today} | renderer log | {len(warnings)} skipping/exception warning(s) in logcat |")
+    print(f"| {today} | renderer log | {len(warnings)} warning(s) or error(s) from either renderer tag in logcat |")
     print("---------------------------------------------------------------------------\n")
     if failures:
         for failure in failures:
