@@ -15,7 +15,9 @@ internal class SunRenderer {
     fun draw(canvas: Canvas, point: DialPoint, palette: DialPalette = DialStyle.DARK_PALETTE) {
         val checkpoint = canvas.save()
         canvas.translate(point.x.toFloat(), point.y.toFloat())
-        paint.color = palette.gold
+        // The marker rides the ecliptic ring, which is filled with `night`, so it takes the ink chosen
+        // for that dark surface rather than the plate's bronze.
+        paint.color = palette.nightGold
         paint.style = Paint.Style.FILL
         canvas.drawPath(sunPath, paint)
         canvas.restoreToCount(checkpoint)

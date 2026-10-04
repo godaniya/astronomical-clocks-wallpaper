@@ -11,6 +11,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.time.LocalTime
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 @RunWith(RobolectricTestRunner::class)
@@ -107,6 +108,78 @@ class DialRendererAppearanceTest {
         )
     }
 
+    // The sign names sit on the navy zodiac band, so a light render must paint them in the band's own
+    // text tone. The earlier palette reused `hand` (#4E341B) there, which measured 1.04:1 against the
+    // band; this asserts the marker ink actually reaches the glyphs, and DialPaletteTest holds the
+    // tone's contrast.
+    // The sign names sit on the navy zodiac band, so a light render must paint them in the band's own
+    // text tone. The earlier palette reused `hand` (#4E341B) there, which measured 1.04:1 against the
+    // band; this asserts the band ink reaches the glyphs, and DialPaletteTest holds the tone's contrast.
+    @Test
+    fun lightZodiacLabelsUseBandInk() {
+        val bitmap = render(palette = DialStyle.LIGHT_PALETTE, geometry = prague)
+        val signCentre = OrlojProjection(prague).eclipticPoint(15.0)
+        val labelPixels = countPixelsNear(bitmap = bitmap, point = signCentre, color = DialStyle.LIGHT_NIGHT_TEXT)
+        // The 11 px glyphs are mostly antialiased, so only a few pixels land on the exact tone; the
+        // tolerance also counts the blends, which no other element in this window produces.
+        val blendedPixels = countPixelsNearInk(bitmap = bitmap, point = signCentre, ink = DialStyle.LIGHT_NIGHT_TEXT)
+        assertTrue(
+            "the light sign names must be painted in the band text tone at $signCentre; " +
+                "exact=$labelPixels blended=$blendedPixels",
+            labelPixels >= 5 && blendedPixels > 15,
+        )
+    }
+
+    // The Sun marker rides the ecliptic ring too, so in light mode it must take the band gold as well:
+    // the plate's bronze #6E4D25 measured 1.44:1 on the navy band, which hid the marker entirely.
+    @Test
+    fun lightSunMarkerUsesBandInk() {
+        val geometry = prague.copy(sunLongitudeDeg = 200.0)
+        val bitmap = render(palette = DialStyle.LIGHT_PALETTE, geometry = geometry)
+        val sunPoint = OrlojProjection(geometry).sunPoint!!
+        val bandInk = countPixelsNearInk(bitmap = bitmap, point = sunPoint, ink = DialStyle.LIGHT_NIGHT_GOLD)
+        assertTrue(
+            "the light Sun marker must be painted in the band gold, found $bandInk pixels",
+            bandInk > 10,
+        )
+    }
+
+    private fun countPixelsNearInk(bitmap: Bitmap, point: DialPoint, ink: Int): Int {
+        val x = (CENTER + point.x * SKY_RADIUS).roundToInt()
+        val y = (CENTER + point.y * SKY_RADIUS).roundToInt()
+        val red = ink shr 16 and 0xFF
+        val green = ink shr 8 and 0xFF
+        val blue = ink and 0xFF
+        var count = 0
+        for (dx in -PROBE_RADIUS..PROBE_RADIUS) {
+            for (dy in -PROBE_RADIUS..PROBE_RADIUS) {
+                val pixel = bitmap.getPixel(x + dx, y + dy)
+                val isClose =
+                    abs((pixel shr 16 and 0xFF) - red) <= HALF_INK_TOLERANCE &&
+                        abs((pixel shr 8 and 0xFF) - green) <= HALF_INK_TOLERANCE &&
+                        abs((pixel and 0xFF) - blue) <= HALF_INK_TOLERANCE
+                if (isClose) {
+                    count++
+                }
+            }
+        }
+        return count
+    }
+
+    private fun countPixelsNear(bitmap: Bitmap, point: DialPoint, color: Int): Int {
+        val x = (CENTER + point.x * SKY_RADIUS).roundToInt()
+        val y = (CENTER + point.y * SKY_RADIUS).roundToInt()
+        var count = 0
+        for (dx in -PROBE_RADIUS..PROBE_RADIUS) {
+            for (dy in -PROBE_RADIUS..PROBE_RADIUS) {
+                if (bitmap.getPixel(x + dx, y + dy) == color) {
+                    count++
+                }
+            }
+        }
+        return count
+    }
+
     private fun render(
         palette: DialPalette,
         geometry: DialGeometry? = null,
@@ -155,6 +228,7 @@ class DialRendererAppearanceTest {
         const val SKY_RADIUS = SIZE * 0.43 / 1.37
         const val PROBE_RADIUS = 10
         const val MIN_SHADOW_PIXELS = 20
+        const val HALF_INK_TOLERANCE = 24
         const val MIN_DISC_PIXELS = 60
     }
 }

@@ -12,6 +12,8 @@ internal data class DialPalette(
     val hand: Int,
     val moonIlluminated: Int,
     val moonShadow: Int,
+    val nightGold: Int,
+    val nightText: Int,
 )
 
 /** Original Orloj-inspired palette; dimensions in the renderers are fractions of the sky radius. */
@@ -49,6 +51,8 @@ internal object DialStyle {
             hand = HAND,
             moonIlluminated = MOON_ILLUMINATED,
             moonShadow = MOON_SHADOW,
+            nightGold = GOLD,
+            nightText = HAND,
         )
 
     // Light appearance palette: ivory, bronze, and pale blue with recognizable twilight/night regions
@@ -69,6 +73,15 @@ internal object DialStyle {
     const val LIGHT_MOON_ILLUMINATED: Int = 0xFFF7F4EB.toInt()
     const val LIGHT_MOON_SHADOW: Int = 0xFF7A8CA0.toInt()
 
+    // The zodiac ring is filled with `night`, which is dark in both palettes, so the light palette
+    // cannot reuse its plate inks there: bronze #6E4D25 on #2C3E50 measured 1.44:1 and the `hand`
+    // label tone 1.04:1, leaving the sign names unreadable. These two tones are chosen for that dark
+    // surface instead - nightGold 5.80:1 against the band for the ring outline, dividers, sign star,
+    // and the Sun and Moon markers that ride the ring, and nightText 8.92:1 for the sign names. Both
+    // clear the WCAG 2.1 minimums (4.5:1 text, 3:1 graphics); DialPaletteTest pins them.
+    const val LIGHT_NIGHT_GOLD: Int = 0xFFD9B87A.toInt()
+    const val LIGHT_NIGHT_TEXT: Int = 0xFFF1E7CE.toInt()
+
     val LIGHT_PALETTE =
         DialPalette(
             background = LIGHT_BACKGROUND,
@@ -81,6 +94,8 @@ internal object DialStyle {
             hand = LIGHT_HAND,
             moonIlluminated = LIGHT_MOON_ILLUMINATED,
             moonShadow = LIGHT_MOON_SHADOW,
+            nightGold = LIGHT_NIGHT_GOLD,
+            nightText = LIGHT_NIGHT_TEXT,
         )
 
     fun paletteFor(appearance: DialAppearance, isSystemInNightMode: Boolean): DialPalette {

@@ -43,7 +43,8 @@ internal class MoonRenderer {
         try {
             shadowPaint.color = palette.moonShadow
             illuminatedPaint.color = palette.moonIlluminated
-            rimPaint.color = palette.gold
+            // The disc rides the ecliptic ring, so the rim takes the ink chosen for that dark surface.
+            rimPaint.color = palette.nightGold
             canvas.translate(point.x.toFloat(), point.y.toFloat())
             if (southernHemisphere) {
                 canvas.scale(-1f, 1f)

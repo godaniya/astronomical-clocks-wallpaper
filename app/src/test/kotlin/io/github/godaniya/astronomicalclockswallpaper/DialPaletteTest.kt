@@ -2,6 +2,7 @@ package io.github.godaniya.astronomicalclockswallpaper
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DialPaletteTest {
@@ -17,6 +18,8 @@ class DialPaletteTest {
         assertEquals(0xFFF4E5B8.toInt(), DialStyle.DARK_PALETTE.hand)
         assertEquals(0xFFE8EEF5.toInt(), DialStyle.DARK_PALETTE.moonIlluminated)
         assertEquals(0xFF2C3E50.toInt(), DialStyle.DARK_PALETTE.moonShadow)
+        assertEquals(0xFFD8B66A.toInt(), DialStyle.DARK_PALETTE.nightGold)
+        assertEquals(0xFFF4E5B8.toInt(), DialStyle.DARK_PALETTE.nightText)
     }
 
     @Test
@@ -31,6 +34,36 @@ class DialPaletteTest {
         assertEquals(0xFF4E341B.toInt(), DialStyle.LIGHT_PALETTE.hand)
         assertEquals(0xFFF7F4EB.toInt(), DialStyle.LIGHT_PALETTE.moonIlluminated)
         assertEquals(0xFF7A8CA0.toInt(), DialStyle.LIGHT_PALETTE.moonShadow)
+        assertEquals(0xFFD9B87A.toInt(), DialStyle.LIGHT_PALETTE.nightGold)
+        assertEquals(0xFFF1E7CE.toInt(), DialStyle.LIGHT_PALETTE.nightText)
+    }
+
+    // Both palettes fill the zodiac ring with `night`, so the tones drawn on it must clear WCAG 2.1
+    // against that dark surface, not against the plate. The light palette previously reused its plate
+    // inks there: bronze measured 1.44:1 and the sign-name tone 1.04:1, which is the unreadable
+    // zodiac names this guards.
+    @Test
+    fun nightBandInkStaysLegible() {
+        for (palette in listOf(DialStyle.DARK_PALETTE, DialStyle.LIGHT_PALETTE)) {
+            val text = contrastRatio(first = palette.nightText, second = palette.night)
+            assertTrue("sign names need the 4.5:1 text minimum on the band, was $text", text >= 4.5)
+            val graphics = contrastRatio(first = palette.nightGold, second = palette.night)
+            assertTrue("ring ink needs the 3:1 graphics minimum on the band, was $graphics", graphics >= 3.0)
+        }
+    }
+
+    private fun contrastRatio(first: Int, second: Int): Double {
+        val a = relativeLuminance(first)
+        val b = relativeLuminance(second)
+        return (maxOf(a, b) + 0.05) / (minOf(a, b) + 0.05)
+    }
+
+    private fun relativeLuminance(color: Int): Double {
+        fun channel(shift: Int): Double {
+            val value = (color shr shift and 0xFF) / 255.0
+            return if (value <= 0.04045) value / 12.92 else Math.pow((value + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
     }
 
     // LIGHT_NIGHT equals the dark palette's MOON_SHADOW, so a light palette that copied the dark
