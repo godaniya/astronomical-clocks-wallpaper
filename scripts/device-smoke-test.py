@@ -35,7 +35,13 @@ ADB_RESTORE_TIMEOUT_SECONDS = 60
 
 # `wm size` prints the physical size first and the active override, if any, after it. Anchoring and
 # taking the last match avoids matching a line whose text merely contains the words.
+PHYSICAL_SIZE_PATTERN = re.compile(r"^Physical size:\s*(\d+x\d+)$")
 OVERRIDE_SIZE_PATTERN = re.compile(r"^Override size:\s*(\d+x\d+)$")
+
+# `dumpsys power` reports wakefulness directly; `dumpsys display` is the fallback for a build that
+# does not expose it. Both forms were read on the target device (SM-G736B, API 36).
+WAKE_READ_PATTERN = re.compile(r"mWakefulness=(\w+)")
+DISPLAY_STATE_PATTERN = re.compile(r"Display State=(ON|OFF)")
 
 
 def run_adb(args, serial=None, timeout=ADB_TIMEOUT_SECONDS):
@@ -102,18 +108,35 @@ def select_target_serial(requested):
 
 def read_display_size(serial):
     """
-    Returns the active `wm size` override as "WxH", or None when the physical size is in effect.
+    Returns (physical, override) sizes from one `wm size` call, each "WxH" or None.
 
-    Only an override needs restoring verbatim; with none, `wm size reset` is the correct restore,
-    and a bare `Physical size:` line is not an override to put back.
+    Both are kept because the recreate target must differ from the size actually in effect, which is
+    the override when one is active and the physical size otherwise; and only an override needs
+    restoring verbatim, as a bare `Physical size:` line is not a state to put back.
     """
     output = run_adb(["shell", "wm", "size"], serial=serial).decode("utf-8")
-    override = None
+    physical = override = None
     for line in output.splitlines():
+        match = PHYSICAL_SIZE_PATTERN.match(line.strip())
+        if match:
+            physical = match.group(1)
         match = OVERRIDE_SIZE_PATTERN.match(line.strip())
         if match:
             override = match.group(1)
-    return override
+    return physical, override
+
+
+def choose_recreate_size(physical, override):
+    """
+    A `wm size` target that differs from the size in effect, so the resize cannot be a no-op.
+
+    The effective size is the override when active, else the physical size; the two candidate
+    targets are opposite, so whichever is effective, the other is used. Checking only the override
+    would pick a no-op on a device whose physical size is already the default target. If neither
+    size could be parsed, fall back to keying off the override alone rather than crashing.
+    """
+    effective = override or physical
+    return "1080x1800" if effective == "1080x2000" else "1080x2000"
 
 
 def size_restore_command(override):
@@ -123,21 +146,52 @@ def size_restore_command(override):
     return ["shell", "wm", "size", "reset"]
 
 
-def restore_device(serial, size_override):
+def read_screen_on(serial):
+    """
+    Returns True when the screen is on, False when it is off, and None when it cannot be read.
+
+    The run wakes the screen, so the state it found must be captured first to put it back. Wakefulness
+    is the primary source; the display state is the fallback for a build that does not expose it. An
+    unreadable state is reported as None and no restore is attempted, rather than guessing a state
+    that would change a device the run may not have altered.
+    """
+    power = run_adb(["shell", "dumpsys", "power"], serial=serial).decode("utf-8")
+    for line in power.splitlines():
+        match = WAKE_READ_PATTERN.search(line)
+        if match:
+            state = match.group(1)
+            if state == "Awake":
+                return True
+            if state in ("Asleep", "Dozing"):
+                return False
+    display = run_adb(["shell", "dumpsys", "display"], serial=serial).decode("utf-8")
+    match = DISPLAY_STATE_PATTERN.search(display)
+    if match:
+        return match.group(1) == "ON"
+    return None
+
+
+def restore_device(serial, size_override, screen_was_on):
     """
     Best-effort reset of every setting the run changes, never raising.
 
-    Called from a `finally`, so a failed step cannot leave the shared device resized or on virtual
-    time. The display is restored to the override the run found, not unconditionally reset, so a
-    pre-existing override is not discarded. A failing restore is reported without masking the
-    original exception, which still propagates and keeps the run's non-zero exit code. Returns False
-    if any restore command failed, so a pass that leaked device state is not reported as clean.
+    Called from a `finally`, so a failed step cannot leave the shared device resized, on virtual time,
+    or awake when it was found asleep. The display is restored to the override the run found, not
+    unconditionally reset, so a pre-existing override is not discarded. The screen is put back to
+    sleep only when it was found off (False); a True or undetermined state issues nothing, leaving the
+    device as found or untouched rather than guessing. A failing restore is reported without masking
+    the original exception, which still propagates and keeps the run's non-zero exit code. Returns
+    False if any restore command failed, so a pass that leaked device state is not reported as clean.
     """
     restored = True
-    for command in (
+    commands = [
         size_restore_command(size_override),
         ["shell", "am", "broadcast", "-a", DEBUG_ACTION, "--ez", "reset", "true"],
-    ):
+    ]
+    # Last, after the clock reset, so a failure among the earlier commands still attempts it.
+    if screen_was_on is False:
+        commands.append(["shell", "input", "keyevent", "KEYCODE_SLEEP"])
+    for command in commands:
         try:
             run_adb(command, serial=serial, timeout=ADB_RESTORE_TIMEOUT_SECONDS)
         except (subprocess.SubprocessError, OSError) as error:
@@ -234,7 +288,7 @@ def main():
     # A pre-existing override is put back verbatim rather than reset, so the run leaves the display
     # as it found it. Report it: an override leaked by another session would otherwise be silently
     # reproduced and read as this run's own state.
-    size_override = read_display_size(target_serial)
+    physical_size, size_override = read_display_size(target_serial)
     if size_override is not None:
         print(
             f"WARNING: display-size override {size_override} is already active; "
@@ -242,10 +296,19 @@ def main():
             file=sys.stderr,
         )
 
+    # Read the screen state before step 1 wakes it, so the run can put back what it found. A device
+    # that started asleep must not be left awake after an unattended run.
+    screen_was_on = read_screen_on(target_serial)
+    if screen_was_on is None:
+        print(
+            "WARNING: could not read the initial screen state; it will not be restored",
+            file=sys.stderr,
+        )
+
     # Recreate the surface with a size that differs from the one in effect, so the resize is never a
-    # no-op that passes without a recreation. An active 1080x2000 override is the one case where the
-    # default target would coincide, so fall back to 1080x1800 there.
-    recreate_size = "1080x1800" if size_override == "1080x2000" else "1080x2000"
+    # no-op that passes without a recreation. Both sizes are consulted: the override when one is
+    # active, else the physical size, so a device already at the default target is exercised too.
+    recreate_size = choose_recreate_size(physical_size, size_override)
 
     delta = residual = None
     angle2 = None
@@ -305,8 +368,8 @@ def main():
         # Restore on both the pass and the failure path, before any exception propagates, so a
         # failed run cannot strand the shared device resized or on virtual time. This also covers
         # the collect-results path, so a pass leaves the device as it was found.
-        print("Restoring virtual clock and display size...")
-        restored = restore_device(target_serial, size_override)
+        print("Restoring virtual clock, display size, and screen state...")
+        restored = restore_device(target_serial, size_override, screen_was_on)
 
     # 6. Check renderer logs, isolated to the entries this run produced. Both renderer tags are
     # watched: the dial draw logs render failures under DialRenderer, so a filter on the service tag
@@ -337,7 +400,9 @@ def main():
               f"residual {residual:+.3f}°; broadcast took {elapsed * 1000.0:.0f}ms |")
     recreated = "drawn" if angle2 is not None else "NOT found"
     restore_desc = f"`wm size {size_override}`" if size_override else "`wm size reset`"
-    print(f"| {today} | surface recreation | `wm size {recreate_size}` then {restore_desc}; hand {recreated} afterwards |")
+    effective_size = size_override or physical_size or "unknown"
+    print(f"| {today} | surface recreation | effective {effective_size}, `wm size {recreate_size}` "
+          f"then {restore_desc}; hand {recreated} afterwards |")
     print(f"| {today} | renderer log | {len(warnings)} warning(s) or error(s) from either renderer tag in logcat |")
     print("---------------------------------------------------------------------------\n")
     if failures:
