@@ -10,7 +10,6 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
 import java.time.Instant
-import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZoneOffset
 
@@ -44,7 +43,7 @@ class OrlojRepresentativeExport {
             val bitmap = Bitmap.createBitmap(IMAGE_WIDTH, IMAGE_HEIGHT, Bitmap.Config.ARGB_8888)
             DialRenderer().renderDial(
                 canvas = Canvas(bitmap),
-                state = clockState(LocalTime.of(15, 15, 36)),
+                state = clockState(exportInstant.atZone(site.zoneId).toLocalTime()),
                 geometry = calculator.dialGeometry(exportInstant, site),
             )
             File(directory, "$name-api${Build.VERSION.SDK_INT}.png").outputStream().use { output ->
