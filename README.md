@@ -38,7 +38,8 @@ The project is built on strict offline autonomy and respect for device resources
 
 ## Compatibility and release status
 
-- **Platform compatibility**: Android 8.0+ (API 26+) on home and lit lock screens.
+- **Initial minimum platform**: Android 8.0 (API 26). Device compatibility for
+  home and lit lock screens remains subject to physical-device qualification;
   Always On Display and interactive sky exploration are outside the current release scope.
 - **Current status**: Active development towards milestone releases. Public
   catalog distribution (such as F-Droid) will follow milestone qualification on
