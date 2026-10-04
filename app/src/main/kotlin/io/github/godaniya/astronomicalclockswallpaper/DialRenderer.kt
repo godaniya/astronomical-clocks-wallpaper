@@ -27,6 +27,21 @@ internal class DialRenderer {
             close()
         }
 
+    // A degenerate or undersized surface lasts until the framework recreates it, which can span
+    // many ticks, so both skips below are bounded like the other per-frame failure sites.
+    private val emptyCanvasLog =
+        RepeatedFailureLog(
+            tag = TAG,
+            message = "skipping render: empty canvas",
+            level = Log.WARN,
+        )
+    private val undersizedDialLog =
+        RepeatedFailureLog(
+            tag = TAG,
+            message = "skipping dial: radius below minimum",
+            level = Log.WARN,
+        )
+
     /** Each frame uses civil time and geometric values from the caller's single instant. */
     fun renderDial(
         canvas: Canvas,
@@ -35,13 +50,13 @@ internal class DialRenderer {
         layers: DialLayers = DialLayers(),
     ) {
         if (canvas.width <= 0 || canvas.height <= 0) {
-            Log.w(TAG, "skipping render: empty canvas ${canvas.width}x${canvas.height}")
+            emptyCanvasLog.recordFailure(detail = "${canvas.width}x${canvas.height}")
             return
         }
         canvas.drawColor(DialStyle.BACKGROUND)
         val radius = minOf(a = canvas.width, b = canvas.height) * RADIUS_FRACTION
         if (radius < MIN_DIAL_RADIUS) {
-            Log.w(TAG, "skipping dial: radius $radius < minimum $MIN_DIAL_RADIUS")
+            undersizedDialLog.recordFailure(detail = "$radius < $MIN_DIAL_RADIUS")
             return
         }
         val checkpoint = canvas.save()
@@ -76,6 +91,9 @@ internal class DialRenderer {
         } finally {
             canvas.restoreToCount(checkpoint)
         }
+        // Only a frame that ran to completion ends the episode, so a throw leaves both counters alone.
+        emptyCanvasLog.recordSuccess()
+        undersizedDialLog.recordSuccess()
     }
 
     private fun drawCivilScale(canvas: Canvas) {

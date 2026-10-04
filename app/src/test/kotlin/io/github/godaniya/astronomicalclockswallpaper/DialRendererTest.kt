@@ -476,13 +476,28 @@ class DialRendererTest {
     }
 
     @Test
-    fun degenerateCanvasIsLogged() {
-        ShadowLog.clear()
-        renderer.renderDial(Canvas(), clockState(LocalTime.NOON))
+    fun degenerateFramesAreBounded() {
+        // A degenerate surface keeps producing the same canvas until the framework recreates it, so
+        // each skip must log once per episode rather than warn on every tick.
+        val throttled = DialRenderer()
+        val empty = Canvas()
         val tiny = Bitmap.createBitmap(20, 20, Bitmap.Config.ARGB_8888)
-        renderer.renderDial(Canvas(tiny), clockState(LocalTime.NOON))
+        val tinyCanvas = Canvas(tiny)
+        ShadowLog.clear()
+        repeat(3) { throttled.renderDial(empty, clockState(LocalTime.NOON)) }
+        repeat(3) { throttled.renderDial(tinyCanvas, clockState(LocalTime.NOON)) }
         assertEquals(DialStyle.BACKGROUND, tiny.getPixel(10, 10))
-        assertEquals(2, ShadowLog.getLogsForTag("DialRenderer").count { it.type == Log.WARN })
+        val warnings = ShadowLog.getLogsForTag("DialRenderer").filter { it.type == Log.WARN }
+        assertEquals(2, warnings.size)
+        assertTrue(warnings[0].msg.contains("empty canvas"))
+        assertTrue(warnings[1].msg.contains("radius below minimum"))
+
+        // One completed frame ends both episodes, so the next degenerate frame logs again.
+        assertEquals(DialStyle.BACKGROUND, drawInto(throttled, prague).getPixel(1, 1))
+        throttled.renderDial(empty, clockState(LocalTime.NOON))
+        val entries = ShadowLog.getLogsForTag("DialRenderer")
+        assertEquals(2, entries.count { it.type == Log.INFO })
+        assertEquals(3, entries.count { it.type == Log.WARN })
     }
 
     @Test
