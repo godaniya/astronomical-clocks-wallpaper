@@ -30,7 +30,7 @@ The project is built on strict offline autonomy and respect for device resources
 - **Offline operation**: Astronomy calculations and civil timezone mappings run
   entirely on-device without internet requests.
 - **Privacy-respecting location**: Initial setup accepts coarse location through
-  Android's built-in location provider or an offline city selector; no continuous
+  Android's built-in location provider or an offline timezone selector; no continuous
   background GPS tracking is performed.
 - **Strict battery budget**: The wallpaper renders exclusively while visible on
   the home or lit lock screen, halting updates when obscured or asleep to preserve

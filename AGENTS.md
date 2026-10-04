@@ -31,8 +31,9 @@ Agents must observe the project's quality, stability, and release boundaries:
   visible; never trigger continuous background polling, GPS location requests,
   or wake locks while the surface is hidden or destroyed.
 - **Dependency hygiene**: Do not introduce new external libraries or bundled assets
-  without explicit necessity, owner approval, and complete license and checksum
-  verification recorded in [docs/dependencies.md](docs/dependencies.md).
+  without explicit necessity, owner approval, and complete license and provenance
+  verification, pinned to cryptographic checksums or commit SHAs, recorded in
+  [docs/dependencies.md](docs/dependencies.md).
 - **Honest verification**: Never claim physical-device verification or firmware
   qualification without actual execution on hardware. Transparently record unrun
   checks and emulator limitations in pull requests.
