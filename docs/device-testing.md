@@ -890,7 +890,9 @@ would write the device's own coordinates.
 
 Debug builds (the `debuggable` flag, so never release builds) accept a broadcast that moves the
 wallpaper's clock without touching the phone's real time, so a drift check no longer needs a
-30-minute wait. Every engine redraws immediately.
+30-minute wait. Every engine that is visible with a live surface redraws immediately; a destroyed
+engine, a hidden engine, or one whose surface has been destroyed is skipped and catches up on its
+next visibility or surface change (the debug trigger logs which guard failed at debug level).
 
 ```sh
 ACTION=io.github.godaniya.astronomicalclockswallpaper.DEBUG_SET_TIME
@@ -900,9 +902,10 @@ adb shell am broadcast -a $ACTION --ez reset true               # back to system
 ```
 
 Offsets are added to the real clock, so they keep running; an `instant` freezes it. Always reset
-afterwards. `scripts/device-smoke-test.py` wakes the screen, advances 30 minutes, measures the civil
-hand's advance (7.5° expected on the 24-hour dial), recreates the surface, checks logcat, resets the
-clock, and exits non-zero on failure. It needs the wallpaper applied and visible on the home screen.
+afterwards. `scripts/device-smoke-test.py` reads the screen's power state, wakes the screen, advances
+30 minutes, measures the civil hand's advance (7.5° expected on the 24-hour dial), recreates the
+surface, checks logcat, resets the clock, sleeps the screen again when it did not start awake, and
+exits non-zero on failure. It needs the wallpaper applied and visible on the home screen.
 
 This clock moves the civil hand and the astronomy together from one instant, so it shows that the
 marker follows the ephemeris but does not replace the independent ERFA comparison in the Sun and Moon
@@ -910,17 +913,18 @@ passes. A smoke run only measures the hand; it does not exercise lifecycle, rebo
 
 ### Smoke run (2026-10-04)
 
-Test build: local debug `app-debug.apk` from `feat/6-test-acceleration` at 1f084cb (APK SHA-256
-8790dc4db3c057e02642fef2809e2d08fcce35321ab821a4fd40dd5598e27d65), built from a clean tree at that
-revision and installed in place with `adb install -r` over the previous debug build.
+Test build: local debug `app-debug.apk` from `feat/6-test-acceleration` at ac4e812 (APK SHA-256
+8790dc4db3c057e02642fef2809e2d08fcce35321ab821a4fd40dd5598e27d65, reproducing the hash first recorded
+at 1f084cb because no Kotlin changed), built from a clean tree at that revision and installed in
+place with `adb install -r` over the previous debug build.
 
 Android version: 16 (API 36)
 Firmware build: withheld (embeds the model identifier)
 
 | Date | Check | Observed |
 | --- | --- | --- |
-| 2026-10-04 | virtual time travel (+30m) | The civil hand advanced 7.547° against 7.500° expected (residual +0.047°); the broadcast took 120 ms |
-| 2026-10-04 | surface recreation | `wm size 1080x2000` then reset; the hand was drawn afterwards |
+| 2026-10-04 | virtual time travel (+30m) | The civil hand advanced 7.526° against 7.500° expected (residual +0.026°); the broadcast took 109 ms |
+| 2026-10-04 | surface recreation | From an effective 1080x2408 (no override), `wm size 1080x2000` then reset; the hand was drawn afterwards |
 | 2026-10-04 | renderer log | 0 warnings or errors from `AstronomicalClocksWallpaperService` or `DialRenderer` |
 
 The residual sits well inside the harness's ±0.5° tolerance. Five captures one second apart moved
@@ -935,19 +939,23 @@ The restore and log-isolation behavior was exercised on the device, not only in 
 throwaway copy of the script with an injected mid-run failure left `wm size` at its physical
 1080x2408 and reset the clock, and a stale `Invalid instant extra` error planted before a run was
 excluded from that run's warning count while remaining in the buffer, so the filter isolates entries
-without clearing any other session's evidence. The adb-bound, device-selection, and display-restore
-defenses added since were proven in a stubbed-adb harness: a mid-run failure still issues both
-restores after the failure, a restore that itself times out is reported without masking the original
-error, a two-device list exits non-zero having issued only the listing, an unknown `--serial` and an
-`unauthorized` entry are refused, and a pre-existing `1080x1200` `wm size` override is restored
-verbatim with no reset issued.
+without clearing any other session's evidence. The adb-bound, device-selection, display-restore,
+resize-target, and screen-restore defenses were proven in a stubbed-adb harness: a mid-run failure
+still issues both restores after the failure, a restore that itself times out is reported without
+masking the original error, a two-device list exits non-zero having issued only the listing, an
+unknown `--serial` and an `unauthorized` entry are refused, a pre-existing `1080x1200` `wm size`
+override is restored verbatim with no reset issued, a device whose effective size is the default
+1080x2000 is resized to 1080x1800 rather than issuing a no-op, and an initial screen that is off
+issues `KEYCODE_SLEEP` after the clock reset while one that is on issues none.
 
-Two settings the harness still cannot restore. It has no read path for a pre-existing virtual-clock
+One setting the harness still cannot restore. It has no read path for a pre-existing virtual-clock
 offset — the debug broadcast only sets an offset or fixes an instant, it never reports the current
-one — so the run resets the clock to system time rather than to whatever it found. It also wakes the
-screen for the capture and leaves it awake: this run ended with the screen turned off by hand to
-match the state it was found in, and `svc power stayon usb` and `screen_off_pocket 0`, set before the
-run to avoid the accidental-touch overlay, were put back afterwards. Everything else was restored:
-`wm size` returned to the physical 1080x2408 with no override, the `…AstronomicalClocksWallpaperService`
+one — so the run resets the clock to system time rather than to whatever it found. The screen is now
+restored: the harness reads `mWakefulness` before it wakes the screen and sleeps it again when it did
+not start `Awake`, so this run began and ended with the screen Dozing. `KEYCODE_SLEEP` is a no-op
+when the device is set to stay awake while plugged in, so that remains a best-effort limit;
+`screen_off_pocket 0`, set before the run to avoid the accidental-touch overlay, was put back to 1
+afterwards, and `stay_on_while_plugged_in` was left at 0. Everything else was restored: `wm size`
+returned to the physical 1080x2408 with no override, the `…AstronomicalClocksWallpaperService`
 binding survived, and the debug clock was reset. Reboot, lock screen, and marker-position checks were
 not run.
