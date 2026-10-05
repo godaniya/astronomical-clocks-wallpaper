@@ -60,34 +60,57 @@ be checked against the expected handler.
 | Surface recreation (no visibility change) | `onSurfaceDestroyed` cancels the pending tick; `onSurfaceChanged` redraws and reschedules while visible |
 | Reboot | Process and engine recreated; clock resumes from the device wall time |
 
-## Permission recovery procedure (#3)
+## Permission recovery verification (#3)
 
-This is a prospective check, not a completed device report. Device checks for this
-permission-recovery change have not been run because no physical device is
-available. Record Android/API version and tested source revision/APK SHA-256 when
-executing it; keep device identifiers, firmware strings, and personal coordinates
-out of public evidence.
+Test build: local debug `app-debug.apk` from `fix/3-location-permission-recovery`
+at 7aafc6d — the rebase of the recovery change onto `main` at 303f797 plus the
+follow-up that reports interrupted permission results distinctly (APK SHA-256
+fd0c466e3dbb8c191ca0d0e390bf964221d9a1b3afb46fc6577c20231d9ca66b), installed in
+place with `adb install -r` over the existing binding.
 
-| Action | Expected result |
-| --- | --- |
-| Start without permission; tap Use current location | Android can present the first coarse-location prompt; no rationale-history shortcut blocks it |
-| Deny once, then retry when Android allows another request | Cancellable explanation; Continue requests permission, Cancel leaves manual entry available |
-| Deny until Android stops offering a prompt (or use Don't ask again on older versions) | Explanation of the unavailable current-location feature; saved site unchanged, manual coordinates available |
-| Explicitly retry after that denial | Recovery options appear without another automatic system permission request |
-| Cancel recovery and save non-personal coordinates | Manual save/timezone confirmation still works; no permission required |
-| Choose Open app settings, return without granting permission | No automatic acquisition; manual entry remains usable |
-| Grant approximate location in app settings and return | No automatic acquisition; a new Use current location or Refresh action uses the grant |
-| Recreate Settings during a real permission request | The requested cache/fresh policy survives; no duplicate acquisition |
-| Reopen Settings after a blocked denial | Recovery remains available on explicit retry, without a launch-time prompt |
-| Reset permission flags, then choose Try permission again | A new system request is possible; previous recovery history is not a permanent blacklist |
+Android version: 16 (API 36). Firmware build: withheld (embeds the model
+identifier). The saved site started and ended as the neutral manual
+`50.08, 14.42`, `Europe/Prague`; the temporary Tokyo site below is a published
+coordinate pair, not the device's own position, and no device location was read
+or recorded.
+
+| Date | Check | Observed |
+| --- | --- | --- |
+| 2026-10-05 | first prompt | With coarse location revoked and its user-set flags cleared, **Use current location** opened Android's approximate-location prompt directly: no rationale-history shortcut, and no fine-location row because only coarse is requested |
+| 2026-10-05 | deny once, retry | Denying recorded `non_promptable_denial=false` and showed the denial toast; the next tap showed the cancellable rationale (**Current location permission** / "Approximate location is used…") |
+| 2026-10-05 | rationale Cancel | **Cancel** dismissed the rationale, started no activity, left **Save coordinates** and the coordinate fields enabled, and cleared the observation, as the rationale branch does |
+| 2026-10-05 | rationale Continue | **Continue** issued a fresh system prompt |
+| 2026-10-05 | deny to non-promptable | A second denial set the `USER_FIXED` flag and recorded `non_promptable_denial=true` |
+| 2026-10-05 | explicit retry | The next **Use current location** showed the recovery dialog (**Open app settings** / **Try permission again** / **Cancel**) with no automatic system request |
+| 2026-10-05 | cancel recovery, manual save | **Cancel** left the saved site unchanged; entering the published Tokyo `35.6762, 139.6503` suggested **Timezone: Asia/Tokyo**, and **Save coordinates** → **Estimated timezone** → **Save** stored it as `MANUAL`/`Asia/Tokyo` without any permission |
+| 2026-10-05 | open app settings, return | **Open app settings** reached the app's details page; returning with the permission still denied started no acquisition, kept manual entry usable, and left the observation intact |
+| 2026-10-05 | grant, return, use | Granting coarse location (applied with `pm grant`, the state the settings toggle sets) and returning started no acquisition; the next **Use current location** acquired a fix and offered its estimated timezone, so the grant was used on demand |
+| 2026-10-05 | reset flags, Try permission again | Clearing the user-set/user-fixed flags and choosing **Try permission again** cleared the observation and issued a fresh system prompt, so a reset is not a permanent blacklist |
+| 2026-10-05 | recreate during a request | Rotating while the system prompt was up recreated Settings; granting then delivered the result to the recreated activity, which acquired a fix with no crash and no duplicate request |
+| 2026-10-05 | reopen Settings | Reopening Settings after a blocked denial showed no launch-time prompt; the recovery dialog appeared only on an explicit location action |
+
+Backing out of the system prompt with the back gesture produced a **denied**
+result on this device, not an empty/interrupted callback: the app recorded a
+non-promptable denial and stored no interrupted observation. The interrupted
+branch therefore stays host-verified by `SettingsActivityPermissionTest`
+(`emptyResultIsInterrupted`, `unrelatedGrantIsIgnored`); no device action
+produced an empty result.
 
 Android 11+ treats repeated Deny as non-promptable; older versions expose an
-explicit Don't ask again choice. For controlled testing, inspect the permission
-flags with `adb shell dumpsys package <package>` and follow Android's documented
-[permission-flag reset procedure](https://developer.android.com/about/versions/11/privacy/permissions#dialog-visibility).
-Permission resets are optional test setup, not an app recovery action. Ask before
-changing a shared device's permissions and restore any permission state changed.
-These checks do not replace lifecycle/battery qualification under #6.
+explicit Don't ask again choice. The pass inspected the permission flags with
+`adb shell dumpsys package <package>` and used Android's documented
+[permission-flag reset procedure](https://developer.android.com/about/versions/11/privacy/permissions#dialog-visibility)
+as optional test setup, not as an app recovery action. Every setting changed for
+the pass was restored afterwards: the coarse-location permission to its granted
+state with its user-set flag, the `location_permission` preference file removed,
+the saved site back to manual Prague `50.08, 14.42`, `screen_off_pocket` and
+`proximity_sensor` back to 1, `stay_on_while_plugged_in` back to 0, and rotation
+back to portrait. `dumpsys wallpaper` still reported the app's
+`AstronomicalClocksWallpaperService` as the home binding. An
+accidental-touch-protection overlay (`UnintentionalLcdOn`) armed once mid-pass
+and was dismissed with the recorded swipe; disabling the proximity sensor stopped
+it recurring. These checks do not replace lifecycle/battery qualification under
+#6.
 
 ## Observed results
 
