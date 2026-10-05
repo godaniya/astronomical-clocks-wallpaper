@@ -109,6 +109,17 @@ class DialPaletteTest {
                         casing = palette.casing,
                     ),
                 )
+            for (surface in listOf(palette.sky, palette.twilight, palette.night)) {
+                assertAtLeast(
+                    ContrastCase(
+                        label = "ring-disabled marker outline on plate",
+                        ink = palette.hand,
+                        surface = surface,
+                        minimum = GRAPHICS_MINIMUM,
+                        casing = palette.casing,
+                    ),
+                )
+            }
             for (check in checks) {
                 assertAtLeast(check)
             }

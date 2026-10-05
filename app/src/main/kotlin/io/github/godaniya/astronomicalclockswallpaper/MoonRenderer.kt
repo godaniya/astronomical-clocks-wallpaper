@@ -29,28 +29,37 @@ internal class MoonRenderer {
     /**
      * Draws the marker at an already projected [point]; the caller owns suppression, as it does
      * for [SunRenderer]. The disc is drawn at a fixed screen-space orientation, so
-     * [southernHemisphere] mirrors it horizontally rather than turning the bright limb to face the
+     * [MoonDiscPhase.isSouthern] mirrors it horizontally rather than turning the bright limb to face the
      * Sun: the marker keeps one orientation around the whole ring.
      */
     fun draw(
         canvas: Canvas,
         point: DialPoint,
-        phaseLongitudeDeg: Double,
-        southernHemisphere: Boolean,
+        phase: MoonDiscPhase,
         palette: DialPalette = DialStyle.DARK_PALETTE,
+        isZodiacBandVisible: Boolean = true,
     ) {
         val checkpoint = canvas.save()
         try {
             shadowPaint.color = palette.moonShadow
             illuminatedPaint.color = palette.moonIlluminated
-            rimPaint.color = palette.gold
             canvas.translate(point.x.toFloat(), point.y.toFloat())
-            if (southernHemisphere) {
+            if (phase.isSouthern) {
                 canvas.scale(-1f, 1f)
             }
 
+            if (!isZodiacBandVisible) {
+                rimPaint.color = palette.casing
+                rimPaint.strokeWidth = MarkerOutline.CASING_WIDTH
+                canvas.drawCircle(0f, 0f, MOON_RADIUS, rimPaint)
+                rimPaint.color = palette.hand
+                rimPaint.strokeWidth = MarkerOutline.INK_WIDTH
+                canvas.drawCircle(0f, 0f, MOON_RADIUS, rimPaint)
+            }
+            rimPaint.color = palette.gold
+            rimPaint.strokeWidth = RIM_STROKE_WIDTH
             canvas.drawCircle(0f, 0f, MOON_RADIUS, shadowPaint)
-            val phasePath = buildPhasePath(phaseLongitudeDeg)
+            val phasePath = buildPhasePath(phase.longitudeDeg)
             if (phasePath != null) {
                 canvas.drawPath(phasePath, illuminatedPaint)
             }
@@ -100,3 +109,6 @@ internal class MoonRenderer {
         private const val HALF_TURN_DEGREES = 180.0
     }
 }
+
+/** Illuminated phase and its screen-space hemisphere convention. */
+internal data class MoonDiscPhase(val longitudeDeg: Double, val isSouthern: Boolean)

@@ -120,3 +120,9 @@ internal object DialStyle {
         return palette
     }
 }
+
+/** Two-tone boundary for markers crossing plate regions when the zodiac band is hidden. */
+internal object MarkerOutline {
+    const val CASING_WIDTH = 0.014f
+    const val INK_WIDTH = 0.008f
+}

@@ -164,8 +164,9 @@ Two consequences shape the palettes.
 - The **dark** palette is dark on every surface, so its bright cream and gold inks clear whatever they
   meet without help.
 - The **light** palette deliberately keeps one dark surface, the night sky region, because there the
-  dark tone *is* the meaning. Two elements cross it while also crossing the pale plate: the civil hand
-  and the two reference circles. No single ink clears 3:1 against both, so each carries a **casing** -
+  dark tone *is* the meaning. The civil hand, the two reference circles, and the Sun and Moon markers
+  with the zodiac ring disabled cross it while also crossing the pale plate. No single ink clears
+  3:1 against both, so each carries a **casing** -
   an underlay stroke in the palette's page tone, drawn wider than the ink. The casing stands out over
   the dark region and disappears over the pale one, the way a map line is cased where it crosses
   varied ground.
@@ -182,6 +183,26 @@ surface.
 | Moon lit limb (`moonIlluminated`) against the moon shadow | 9.40 | 4.98 | 3.0 |
 | Moon shadow against the band | 1.44 (see below) | 4.24 | 3.0 |
 | Hand over the night region, by ink or casing | 12.57 | 9.99 | 3.0 |
+| Ring-disabled marker outline on daylight, by ink or casing | 5.52 | 5.08 | 3.0 |
+| Ring-disabled marker outline on twilight, by ink or casing | 3.90 | 3.98 | 3.0 |
+| Ring-disabled marker outline on night, by ink or casing | 12.57 | 9.99 | 3.0 |
+
+With the zodiac ring disabled, both markers receive a `casing` outer stroke (0.014 sky-radius
+units) and a `hand` inner stroke (0.008), before their existing fill and rim. The two-tone boundary
+clears 3:1 against every plate region by at least one of those strokes; `DialPaletteTest` checks all
+three regions in both palettes. `MarkerContrastTest` uses differential native Canvas probes on
+API 26 and 36 to show that the strokes actually reach the night and twilight backgrounds for the
+Sun and new Moon. This changes only the marker boundary when the ring is hidden, preserving positions,
+phase, hemisphere conventions, and band-visible drawing.
+
+At full Moon the light illuminated disc is close in tone to the light zodiac band. Its gold rim
+still clears 5.90:1 against that band, so its boundary remains distinguishable even without shadow
+in the disc. A differential native Canvas test checks this full-Moon boundary in both palettes.
+The fill itself is not required to contrast with the band when its contrasting rim defines the marker.
+
+These host checks do not establish physical-device visibility for the new ring-disabled outlines.
+The earlier appearance device evidence applies only to its recorded revision; a new device pass is
+pending (see [device-testing.md](device-testing.md#appearance-review-fixes-device-pass-pending)).
 
 Two accepted exceptions, both recorded here rather than worked around:
 

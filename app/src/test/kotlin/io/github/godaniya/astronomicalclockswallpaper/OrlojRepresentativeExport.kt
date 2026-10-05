@@ -58,18 +58,22 @@ class OrlojRepresentativeExport {
         appearanceName: String,
         palette: DialPalette,
     ) {
-        val bitmap = Bitmap.createBitmap(IMAGE_WIDTH, IMAGE_HEIGHT, Bitmap.Config.ARGB_8888)
-        DialRenderer().renderDial(
-            canvas = Canvas(bitmap),
-            state = clockState(EXPORT_INSTANT.atZone(site.zoneId).toLocalTime()),
-            geometry = calculator.dialGeometry(EXPORT_INSTANT, site),
-            palette = palette,
-        )
-        savePng(bitmap, "$name-$appearanceName-api${Build.VERSION.SDK_INT}.png")
-        if (appearanceName == "dark") {
-            // The pre-appearance export named the dark render without a theme suffix; keep that
-            // name too so any existing reference still resolves.
-            savePng(bitmap, "$name-api${Build.VERSION.SDK_INT}.png")
+        val geometry = calculator.dialGeometry(EXPORT_INSTANT, site)
+        for (isRingEnabled in listOf(true, false)) {
+            val bitmap = Bitmap.createBitmap(IMAGE_WIDTH, IMAGE_HEIGHT, Bitmap.Config.ARGB_8888)
+            DialRenderer().renderDial(
+                canvas = Canvas(bitmap),
+                state = clockState(EXPORT_INSTANT.atZone(site.zoneId).toLocalTime()),
+                geometry = geometry,
+                layers = DialLayers(isZodiacRingEnabled = isRingEnabled),
+                palette = palette,
+            )
+            val ringSuffix = if (isRingEnabled) "" else "-no-ring"
+            savePng(bitmap, "$name-$appearanceName$ringSuffix-api${Build.VERSION.SDK_INT}.png")
+            if (appearanceName == "dark" && isRingEnabled) {
+                // Preserve the names of the pre-appearance dark exports.
+                savePng(bitmap, "$name-api${Build.VERSION.SDK_INT}.png")
+            }
         }
     }
 

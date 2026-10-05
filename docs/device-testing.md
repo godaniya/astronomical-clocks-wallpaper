@@ -1025,3 +1025,15 @@ passes stand for those. Always On Display remains out of scope per #2. The scree
 pipeline returned the palette unchanged on these captures, so the probes match the palette literals
 exactly, but a capture still cannot adjudicate glyph antialiasing: the contrast contract in
 [orloj.md](orloj.md#palette-contrast) rests on the palette values, not on these frames.
+
+### Appearance review fixes: device pass pending
+
+The PR #84 review fixes add ring-disabled marker outlines and extend host coverage of appearance
+control reachability and palette restoration after a surface gap. No physical-device checks were
+performed for these changes. The historical appearance evidence above applies only to its recorded
+source revision and APK; it does not qualify these new visual changes.
+
+The owner must perform a later physical-device pass covering light/dark Sun and Moon markers with
+the zodiac ring disabled, lunar phase visibility (including new, quarter, and full Moon in both
+hemispheres), and all three appearance controls on a short screen with 2× enlarged text. Record
+Android version/API, tested revision, and APK SHA-256 when completed, following the privacy rules above.

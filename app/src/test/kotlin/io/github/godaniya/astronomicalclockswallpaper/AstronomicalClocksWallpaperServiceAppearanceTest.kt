@@ -138,6 +138,13 @@ class AstronomicalClocksWallpaperServiceAppearanceTest {
 
         tick()
         assertEquals(0, renderedPalettes.size)
+
+        engine.onSurfaceChanged(holder, SURFACE_FORMAT, SURFACE_WIDTH, SURFACE_HEIGHT)
+        assertEquals(1, renderedPalettes.size)
+        assertEquals(DialStyle.DARK_PALETTE, renderedPalettes.last())
+        tick()
+        assertEquals(2, renderedPalettes.size)
+        assertEquals(DialStyle.DARK_PALETTE, renderedPalettes.last())
     }
 
     private fun nightConfiguration(): Configuration {

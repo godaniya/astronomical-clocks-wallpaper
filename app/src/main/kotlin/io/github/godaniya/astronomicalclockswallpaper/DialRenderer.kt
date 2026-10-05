@@ -77,7 +77,12 @@ internal class DialRenderer {
             }
             val sunPoint = projection?.sunPoint
             if (sunPoint != null && layers.isSunEnabled) {
-                sun.draw(canvas, sunPoint, palette)
+                sun.draw(
+                    canvas = canvas,
+                    point = sunPoint,
+                    palette = palette,
+                    isZodiacBandVisible = layers.isZodiacRingEnabled,
+                )
             }
             // The marker needs both a projected position and a phase, so like the Sun it is drawn
             // only when the geometry carries them; the caller owns that suppression.
@@ -88,9 +93,9 @@ internal class DialRenderer {
                     moon.draw(
                         canvas = canvas,
                         point = moonPoint,
-                        phaseLongitudeDeg = moonPhase,
-                        southernHemisphere = projection.isSouthern,
+                        phase = MoonDiscPhase(longitudeDeg = moonPhase, isSouthern = projection.isSouthern),
                         palette = palette,
+                        isZodiacBandVisible = layers.isZodiacRingEnabled,
                     )
                 }
             }
