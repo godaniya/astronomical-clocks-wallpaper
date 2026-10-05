@@ -1,0 +1,94 @@
+package io.github.godaniya.astronomicalclockswallpaper
+
+import java.time.Instant
+import java.time.LocalTime
+import java.time.ZoneId
+
+/**
+ * Independent reference fixtures for Local Apparent Noon (solar meridian transit) generated
+ * from JPL Horizons (DE441 ephemeris, target Sun, geocentric/topocentric observer) and
+ * independent celestial transit calculations.
+ *
+ * At Local Apparent Noon:
+ * - The Sun transits the local celestial meridian; its local hour angle is `H = 0.0°`.
+ * - Local Apparent Solar Time is exactly 12:00:00.
+ * - On the dial's 24-hour Roman scale (noon XII at top, midnight XXIV at bottom), the Sun marker's
+ *   bearing from the dial center is `0.0°` (pointing directly at XII).
+ * - The civil hand reflects the observing location's geographic timezone (including DST) at that instant.
+ * - The difference between the civil hand angle and the Sun marker bearing satisfies the exact offset formula:
+ *   `civil - apparent = zone offset (incl. DST) - longitude / 15° - equation of time`
+ *
+ * Primary sources:
+ * - JPL Horizons (DE441 ephemeris): `CENTER='coord@399'`, `COMMAND='10'`, `QUANTITIES='4'` (azimuth and elevation).
+ *   For northern sites transit occurs at azimuth 180.0° (due South); for southern sites transit occurs at
+ *   azimuth 0.0°/360.0° (due North).
+ * - Queries:
+ *   1. Prague (50.0875° N, 14.4214° E, `Europe/Prague`):
+ *      - 2026-06-21T11:04:07Z (Summer / DST, CEST = UTC+2):
+ *        JPL Horizons 11:04:00 az=179.937°, 11:05:00 az=180.449°, transit at 11:04:07 UTC.
+ *        Civil time: 13:04:07 CEST.
+ *      - 2026-01-15T11:11:42Z (Winter / non-DST, CET = UTC+1):
+ *        JPL Horizons 11:11:00 az=179.829°, 11:12:00 az=180.075°, transit at 11:11:42 UTC.
+ *        Civil time: 12:11:42 CET.
+ *   2. Sydney (-33.8688° S, 151.2093° E, `Australia/Sydney`):
+ *      - 2026-01-15T02:04:24Z (Summer / DST, AEDT = UTC+11):
+ *        JPL Horizons 02:04:00 az=0.432°, 02:05:00 az=359.374° (-0.626°), transit at 02:04:24 UTC.
+ *        Civil time: 13:04:24 AEDT.
+ *      - 2026-06-21T01:56:53Z (Winter / non-DST, AEST = UTC+10):
+ *        JPL Horizons 01:56:00 az=0.242°, 01:57:00 az=359.970° (-0.030°), transit at 01:56:53 UTC.
+ *        Civil time: 11:56:53 AEST.
+ */
+internal data class ApparentSolarTimeFixture(
+    val siteName: String,
+    val latitudeDeg: Double,
+    val longitudeDeg: Double,
+    val zoneId: ZoneId,
+    val isDst: Boolean,
+    val instant: Instant,
+    val expectedCivilTime: LocalTime,
+    val expectedHandAngleDeg: Double,
+)
+
+internal val apparentSolarTimeFixtures: List<ApparentSolarTimeFixture> =
+    listOf(
+        ApparentSolarTimeFixture(
+            siteName = "Prague Summer (DST)",
+            latitudeDeg = 50.0875,
+            longitudeDeg = 14.4214,
+            zoneId = ZoneId.of("Europe/Prague"),
+            isDst = true,
+            instant = Instant.parse("2026-06-21T11:04:07Z"),
+            expectedCivilTime = LocalTime.of(13, 4, 7),
+            expectedHandAngleDeg = 16.02916666666667,
+        ),
+        ApparentSolarTimeFixture(
+            siteName = "Prague Winter (non-DST)",
+            latitudeDeg = 50.0875,
+            longitudeDeg = 14.4214,
+            zoneId = ZoneId.of("Europe/Prague"),
+            isDst = false,
+            instant = Instant.parse("2026-01-15T11:11:42Z"),
+            expectedCivilTime = LocalTime.of(12, 11, 42),
+            expectedHandAngleDeg = 2.925,
+        ),
+        ApparentSolarTimeFixture(
+            siteName = "Sydney Summer (DST)",
+            latitudeDeg = -33.8688,
+            longitudeDeg = 151.2093,
+            zoneId = ZoneId.of("Australia/Sydney"),
+            isDst = true,
+            instant = Instant.parse("2026-01-15T02:04:24Z"),
+            expectedCivilTime = LocalTime.of(13, 4, 24),
+            expectedHandAngleDeg = 16.10,
+        ),
+        ApparentSolarTimeFixture(
+            siteName = "Sydney Winter (non-DST)",
+            latitudeDeg = -33.8688,
+            longitudeDeg = 151.2093,
+            zoneId = ZoneId.of("Australia/Sydney"),
+            isDst = false,
+            instant = Instant.parse("2026-06-21T01:56:53Z"),
+            expectedCivilTime = LocalTime.of(11, 56, 53),
+            expectedHandAngleDeg = 359.22083333333336,
+        ),
+    )

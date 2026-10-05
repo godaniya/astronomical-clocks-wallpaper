@@ -140,10 +140,50 @@ Moon's disc — dark at new moon — covers the Sun's core while its rays remain
 intended order, not a rendering failure: the dial draws the nearer body in front.
 
 The projection places a body at `x = r sin H`, `y = −r cos H` for hour angle `H`, so the marker's
-bearing from the dial centre is the Sun's hour angle, with noon at the top of the Roman scale. Whether
-that reading is local apparent solar time, and how it is offset from the civil hand, is
-[#57](https://github.com/godaniya/astronomical-clocks-wallpaper/issues/57); this layer guarantees the
-geometric bearing only.
+bearing from the dial centre is the Sun's hour angle, with noon at the top of the Roman scale.
+
+### Sun marker, local apparent solar time, and civil offset
+
+Measuring angles clockwise from the top vertical axis (the negative y-axis pointing to XII on the 24-hour
+Roman scale), any projected ecliptic point's bearing is `atan2(x, −y) ≡ H`. For the Sun marker, whose
+hour angle defines local apparent solar time (`H = 0` at local apparent noon), that bearing is
+precisely the **Local Apparent Solar Time**:
+
+- At local apparent noon, `H = 0°`: `x = 0`, `y = −r < 0`, and the Sun marker points directly at XII.
+- As the Sun moves through the afternoon (`H > 0`), the marker advances clockwise past I, II, III...
+- At midnight (`H = 180°`), the marker reaches XXIV at the bottom of the dial.
+
+The civil hand and the Sun marker indicate two distinct, intentional physical quantities:
+the civil hand tracks the saved observing site's civil timezone (including daylight saving time), while
+the Sun marker tracks local apparent solar time. The angular offset between the civil hand and the Sun
+marker is:
+
+```text
+civil − apparent = zone offset (incl. DST) − longitude/15° − equation of time
+```
+
+The equation of time oscillates by approximately ±16 minutes over the course of the year due to Earth's
+orbital eccentricity and axial tilt.
+
+On the historical Prague Orloj, the Roman scale reads local Prague civil time (CET), the zodiac turns at
+the sidereal rate over fixed day/twilight/night regions, and the Sun sits on a single arm with the civil
+hand. Because Prague (14.42°E) lies within 0.58° (about 2.3 minutes of Earth rotation) of the 15°E
+Central European Time meridian, the civil hand and apparent Sun diverge by only a few minutes during
+standard winter time (CET, UTC+1). At arbitrary global sites, or under daylight saving time (such as CEST,
+UTC+2), the civil hand and Sun marker legitimately diverge by an hour or more. That divergence is the
+astronomical reading of the instrument, not a synchronization defect.
+
+The day, twilight, and night altitude regions depend solely on latitude magnitude `|φ|`, and the
+zodiac's sidereal rotation depends solely on UTC instant and site longitude. Neither depends on the
+civil timezone or DST. Changing the saved site's civil timezone rotates the civil hand alone, keeping the
+shading and astronomical markers strictly invariant.
+
+#### Legibility aid decision
+
+Whether to introduce a secondary solar arm, second hand, or dial tick at the Sun's bearing was
+considered. In accordance with historical Orloj fidelity and visual minimalism, **no extra hand or arm is
+added by default**. The radiant golden Sun marker riding the ecliptic ring already provides an unambiguous
+bearing against the outer Roman numeral scale, and an extra arm would clutter the dial face.
 
 Each engine listens for location and layer changes, maintains one immutable settings snapshot,
 and draws each frame from one instant. Updates take effect on the next visible tick. Hidden
@@ -258,7 +298,11 @@ those fixtures, not physical UT1 accuracy. Omitting measured DUT1 can shift side
 up to 13.5 arcseconds. The Sun column's frame, generator, and the reason for its 0.001° bound are
 recorded there too; its largest residual against the engine is 0.000434° (1.56″), and JPL Horizons
 independently gives the same instant's geocentric Sun to within 0.374″, which is what fixes the
-value as geometric and aberration-free. Analytic projection
+value as geometric and aberration-free. Independent solar-noon fixtures from JPL Horizons validate
+the Sun marker's bearing against the Roman scale at local apparent noon across northern and southern
+sites under both DST and non-DST conditions, documented in
+[`ApparentSolarTimeFixture.kt`](../app/src/test/kotlin/io/github/godaniya/astronomicalclockswallpaper/ApparentSolarTimeFixture.kt).
+Analytic projection
 tests cover equinoxes/solstices, circle tangencies, rotation direction, northern/southern sites,
 the equator, poles, day/night classification, the southern mirror of the altitude field, and the
 point-reflected southern zodiac. Robolectric tests cover layer persistence,
