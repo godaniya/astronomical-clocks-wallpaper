@@ -225,10 +225,12 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
         }
     }
 
-    // Engine is a non-static Java inner class and requires the enclosing service instance. The
-    // appearance feature adds a fifth framework lifecycle override (onConfigurationChanged) to a
-    // class already at detekt's per-class function budget from #85's stopTicking helper, so the
-    // budget is suppressed narrowly here rather than by splitting the engine's lifecycle surface.
+    // Engine is a non-static Java inner class and requires the enclosing service instance. The class
+    // carries the four platform lifecycle overrides plus the tick-loop and drawing helpers, including
+    // #85's stopTicking, so it already sat at detekt's per-class function budget. The appearance
+    // feature adds one more callback, onConfigurationChanged, which the enclosing service invokes
+    // rather than the platform; that addition is what takes the class past the budget, so the budget
+    // is suppressed narrowly here rather than by splitting the engine's lifecycle surface.
     @Suppress("UnnecessaryInnerClass", "TooManyFunctions")
     private inner class ClockEngine(
         private val draw: (Canvas, ClockState, DialGeometry?, DialLayers, DialPalette) -> Unit,
