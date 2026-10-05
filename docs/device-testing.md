@@ -60,6 +60,35 @@ be checked against the expected handler.
 | Surface recreation (no visibility change) | `onSurfaceDestroyed` cancels the pending tick; `onSurfaceChanged` redraws and reschedules while visible |
 | Reboot | Process and engine recreated; clock resumes from the device wall time |
 
+## Permission recovery procedure (#3)
+
+This is a prospective check, not a completed device report. Device checks for this
+permission-recovery change have not been run because no physical device is
+available. Record Android/API version and tested source revision/APK SHA-256 when
+executing it; keep device identifiers, firmware strings, and personal coordinates
+out of public evidence.
+
+| Action | Expected result |
+| --- | --- |
+| Start without permission; tap Use current location | Android can present the first coarse-location prompt; no rationale-history shortcut blocks it |
+| Deny once, then retry when Android allows another request | Cancellable explanation; Continue requests permission, Cancel leaves manual entry available |
+| Deny until Android stops offering a prompt (or use Don't ask again on older versions) | Explanation of the unavailable current-location feature; saved site unchanged, manual coordinates available |
+| Explicitly retry after that denial | Recovery options appear without another automatic system permission request |
+| Cancel recovery and save non-personal coordinates | Manual save/timezone confirmation still works; no permission required |
+| Choose Open app settings, return without granting permission | No automatic acquisition; manual entry remains usable |
+| Grant approximate location in app settings and return | No automatic acquisition; a new Use current location or Refresh action uses the grant |
+| Recreate Settings during a real permission request | The requested cache/fresh policy survives; no duplicate acquisition |
+| Reopen Settings after a blocked denial | Recovery remains available on explicit retry, without a launch-time prompt |
+| Reset permission flags, then choose Try permission again | A new system request is possible; previous recovery history is not a permanent blacklist |
+
+Android 11+ treats repeated Deny as non-promptable; older versions expose an
+explicit Don't ask again choice. For controlled testing, inspect the permission
+flags with `adb shell dumpsys package <package>` and follow Android's documented
+[permission-flag reset procedure](https://developer.android.com/about/versions/11/privacy/permissions#dialog-visibility).
+Permission resets are optional test setup, not an app recovery action. Ask before
+changing a shared device's permissions and restore any permission state changed.
+These checks do not replace lifecycle/battery qualification under #6.
+
 ## Observed results
 
 Test build: local debug `app-debug.apk` from `feat/2-device-feasibility` (SHA-256

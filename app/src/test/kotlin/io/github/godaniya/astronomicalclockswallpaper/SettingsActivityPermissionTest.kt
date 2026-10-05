@@ -11,6 +11,7 @@ import android.os.SystemClock
 import android.widget.Button
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -113,6 +114,27 @@ class SettingsActivityPermissionTest {
             assertNull(LocationStore(application).load())
             assertTrue(locationShadow.networkListeners().isEmpty())
             assertEquals(activity.getString(R.string.location_permission_denied), ShadowToast.getTextOfLatestToast())
+            val originalRequest = shadowOf(activity).lastRequestedPermission
+            activity.findViewById<Button>(R.id.use_current_location).performClick()
+            assertNotSame(originalRequest, shadowOf(activity).lastRequestedPermission)
+        }
+    }
+
+    @Test
+    fun unrelatedGrantIsIgnored() {
+        Robolectric.buildActivity(SettingsActivity::class.java).use { controller ->
+            val activity = controller.setup().get()
+            requestPermission(activity, R.id.use_current_location)
+            activity.onRequestPermissionsResult(
+                REQUEST_LOCATION_PERMISSION,
+                arrayOf(Manifest.permission.CAMERA),
+                intArrayOf(PackageManager.PERMISSION_GRANTED),
+            )
+            assertNull(LocationStore(application).load())
+            assertTrue(locationShadow.networkListeners().isEmpty())
+            val originalRequest = shadowOf(activity).lastRequestedPermission
+            activity.findViewById<Button>(R.id.use_current_location).performClick()
+            assertNotSame(originalRequest, shadowOf(activity).lastRequestedPermission)
         }
     }
 
