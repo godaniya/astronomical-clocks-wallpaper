@@ -178,6 +178,54 @@ class SettingsActivityPermissionRecoveryTest {
         }
     }
 
+    @Test
+    fun malformedObservationRepaired() {
+        Robolectric.buildActivity(SettingsActivity::class.java).use { controller ->
+            val activity = controller.setup().get()
+            val preferences = permissionPreferences()
+            preferences.edit().putString(KEY_NON_PROMPTABLE_DENIAL, "malformed").apply()
+
+            val locationAction = activity.findViewById<Button>(R.id.use_current_location)
+            locationAction.performClick()
+            assertFalse(preferences.contains(KEY_NON_PROMPTABLE_DENIAL))
+            locationAction.performClick()
+
+            // The malformed value is repaired on the first tap, so the warning is emitted once
+            // rather than on every subsequent tap.
+            assertEquals(
+                1,
+                ShadowLog.getLogsForTag("LocationPermissionControls").count {
+                    it.msg == "ignoring malformed permission denial observation"
+                },
+            )
+            assertFalse(preferences.contains(KEY_NON_PROMPTABLE_DENIAL))
+        }
+    }
+
+    @Test
+    fun promptableDenialLeavesNoKey() {
+        Robolectric.buildActivity(SettingsActivity::class.java).use { controller ->
+            val activity = controller.setup().get()
+            shadowOf(application).denyPermissions(Manifest.permission.ACCESS_COARSE_LOCATION)
+            activity.findViewById<Button>(R.id.use_current_location).performClick()
+            shadowOf(activity.packageManager).setShouldShowRequestPermissionRationale(
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+                true,
+            )
+
+            activity.onRequestPermissionsResult(
+                REQUEST_LOCATION_PERMISSION,
+                arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION),
+                intArrayOf(PackageManager.PERMISSION_DENIED),
+            )
+
+            assertEquals(activity.getString(R.string.location_permission_denied), ShadowToast.getTextOfLatestToast())
+            assertFalse(permissionPreferences().contains(KEY_NON_PROMPTABLE_DENIAL))
+        }
+    }
+
+    private fun permissionPreferences() = application.getSharedPreferences("location_permission", Context.MODE_PRIVATE)
+
     private fun denyLocation(activity: SettingsActivity) {
         shadowOf(application).denyPermissions(Manifest.permission.ACCESS_COARSE_LOCATION)
         activity.findViewById<Button>(R.id.use_current_location).performClick()
@@ -206,5 +254,6 @@ class SettingsActivityPermissionRecoveryTest {
 
     private companion object {
         const val REQUEST_LOCATION_PERMISSION = 1
+        const val KEY_NON_PROMPTABLE_DENIAL = "non_promptable_denial"
     }
 }

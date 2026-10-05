@@ -131,13 +131,14 @@ Current-location permission is requested only from **Use current location** or
 **Refresh location**. A requestable denial gets a cancellable explanation on retry;
 a non-empty coarse-permission denial with no Android rationale records a private
 recovery observation in `location_permission` preferences, separate from the saved
-site. An empty/interrupted callback reports the interruption rather than a denial
-and records nothing, and a callback carrying only unrelated permissions is ignored
-without consuming the pending cache-or-fresh policy. A later explicit retry offers
-**Open app settings**, **Try permission again**, or Cancel. The observation is not
-an authoritative OS flag: grants and requestable rationale clear it, and the
-explicit permission retry handles otherwise ambiguous permission resets. A first
-request is never blocked just because Android reports no rationale.
+site, while a still-promptable denial stores nothing. An empty/interrupted callback
+reports the interruption rather than a denial and records nothing, and a callback
+carrying only unrelated permissions is ignored without consuming the pending
+cache-or-fresh policy. A later explicit retry offers **Open app settings**, **Try
+permission again**, or Cancel. The observation is not an authoritative OS flag:
+grants and requestable rationale clear it, a malformed value is repaired on the
+first tap, and the explicit permission retry handles otherwise ambiguous permission
+resets. A first request is never blocked just because Android reports no rationale.
 
 Permission denial and settings navigation never replace the saved site, block
 manual coordinates, or acquire location automatically on return. After changing

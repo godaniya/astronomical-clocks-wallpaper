@@ -16,9 +16,12 @@ internal class LocationPermissionControls(private val activity: Activity) {
     private val preferences = activity.getSharedPreferences("location_permission", Context.MODE_PRIVATE)
 
     fun request(onRequest: () -> Unit) {
-        val observation = preferences.all[KEY_NON_PROMPTABLE_DENIAL]
+        var observation = preferences.all[KEY_NON_PROMPTABLE_DENIAL]
         if (observation != null && observation !is Boolean) {
+            // Repair the malformed key once instead of warning about it on every tap.
             Log.w(TAG, "ignoring malformed permission denial observation")
+            clearDenial()
+            observation = null
         }
         when {
             activity.shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_COARSE_LOCATION) -> {
@@ -50,7 +53,13 @@ internal class LocationPermissionControls(private val activity: Activity) {
     fun recordDenial() {
         val isNonPromptable =
             !activity.shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_COARSE_LOCATION)
-        preferences.edit().putBoolean(KEY_NON_PROMPTABLE_DENIAL, isNonPromptable).apply()
+        if (isNonPromptable) {
+            preferences.edit().putBoolean(KEY_NON_PROMPTABLE_DENIAL, true).apply()
+        } else {
+            // A still-promptable denial must not leave an inert `false` behind, so a later read
+            // cannot mistake the key for an observation.
+            clearDenial()
+        }
         val message =
             if (isNonPromptable) R.string.location_permission_blocked else R.string.location_permission_denied
         Toast.makeText(activity, message, Toast.LENGTH_LONG).show()
