@@ -116,8 +116,18 @@ class LocationStoreMigrationTest {
 
     @Test
     fun invalidZonesRepairedOnce() {
-        val invalidZones = listOf(null, "", "No/Such_Zone", JSONObject.NULL, 42, false)
-        for (invalidZone in invalidZones) {
+        // Exact diagnostics: an absent key is told apart from a present but unusable value, which is echoed back.
+        val invalidZones =
+            listOf<Pair<Any?, String>>(
+                null to "repaired absent observing location timezone",
+                "" to "repaired invalid observing location timezone ''",
+                "No/Such_Zone" to "repaired invalid observing location timezone 'No/Such_Zone'",
+                JSONObject.NULL to "repaired invalid observing location timezone 'null'",
+                42 to "repaired invalid observing location timezone '42'",
+                false to "repaired invalid observing location timezone 'false'",
+            )
+        for ((invalidZone, expectedDiagnosis) in invalidZones) {
+            val expectedRepair = "$expectedDiagnosis; using Australia/Sydney"
             ShadowLog.clear()
             val record = JSONObject(VALID_RECORD).put("zoneId", invalidZone).put("retainedField", "keep")
             preferences().edit().putString("location", record.toString()).apply()
@@ -140,19 +150,15 @@ class LocationStoreMigrationTest {
             assertEquals(beforeRead, preferences().all)
             assertEquals(1, zoneReads)
             assertTrue(ShadowLog.getLogsForTag("LocationStore").isEmpty())
-            val rawBeforeRepair = preferences().getString("location", null)
-            val jsonBeforeRepair = JSONObject(requireNotNull(rawBeforeRepair))
-            assertEquals(invalidZone?.toString().orEmpty(), jsonBeforeRepair.optString("zoneId"))
 
-            // Explicit repair: migrateAndRepair() updates SharedPreferences once and logs the repair.
+            // Explicit repair: migrateAndRepair() updates SharedPreferences once and logs the specific diagnosis.
             store.migrateAndRepair()
             assertEquals(expected, store.load())
             assertEquals(2, zoneReads)
             val repaired = JSONObject(requireNotNull(preferences().getString("location", null)))
             assertEquals("Australia/Sydney", repaired.getString("zoneId"))
             assertEquals("keep", repaired.getString("retainedField"))
-            assertEquals(1, ShadowLog.getLogsForTag("LocationStore").size)
-            assertTrue(ShadowLog.getLogsForTag("LocationStore").all { it.msg.contains("repaired") })
+            assertEquals(listOf(expectedRepair), ShadowLog.getLogsForTag("LocationStore").map { it.msg })
 
             // Repeated maintenance must not write again or consult the device zone.
             val afterRepair = preferences().all
@@ -167,7 +173,7 @@ class LocationStoreMigrationTest {
             assertEquals(afterRepair, preferences().all)
             shadowOf(Looper.getMainLooper()).idle()
             assertEquals(0, changes)
-            assertEquals(1, ShadowLog.getLogsForTag("LocationStore").size)
+            assertEquals(listOf(expectedRepair), ShadowLog.getLogsForTag("LocationStore").map { it.msg })
             preferences().unregisterOnSharedPreferenceChangeListener(listener)
         }
     }

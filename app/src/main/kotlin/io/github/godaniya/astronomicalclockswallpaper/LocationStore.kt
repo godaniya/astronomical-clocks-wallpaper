@@ -43,15 +43,7 @@ internal class LocationStore(context: Context, private val deviceZone: () -> Zon
         }
     }
 
-    private fun resolveZone(record: JSONObject): ZoneId {
-        val storedZone =
-            try {
-                (record.opt(KEY_ZONE_ID) as? String)?.let(ZoneId::of)
-            } catch (_: DateTimeException) {
-                null
-            }
-        return storedZone ?: deviceZone()
-    }
+    private fun resolveZone(record: JSONObject): ZoneId = storedZoneOrNull(record) ?: deviceZone()
 
     private fun loadLegacy(stored: Map<String, *>): ObservingLocation? {
         if (LEGACY_KEYS.none(stored::containsKey)) return null
@@ -87,12 +79,9 @@ internal class LocationStore(context: Context, private val deviceZone: () -> Zon
             }
 
             else -> {
-                val storedZone =
-                    try {
-                        (record.opt(KEY_ZONE_ID) as? String)?.let(ZoneId::of)
-                    } catch (_: DateTimeException) {
-                        null
-                    }
+                val storedZone = storedZoneOrNull(record)
+                // opt() returns null exactly when the key is absent; a stored JSON null is JSONObject.NULL.
+                val rejectedZone = record.opt(KEY_ZONE_ID)
                 val location =
                     readLocation(
                         rawLatitude = (record.opt(KEY_LATITUDE) as? Number)?.toDouble(),
@@ -102,7 +91,13 @@ internal class LocationStore(context: Context, private val deviceZone: () -> Zon
                 if (location != null && storedZone == null) {
                     record.put(KEY_ZONE_ID, location.zoneId.id)
                     persistRecord(record)
-                    Log.w(TAG, "repaired missing or invalid observing location timezone")
+                    val diagnosis =
+                        if (rejectedZone == null) {
+                            "absent observing location timezone"
+                        } else {
+                            "invalid observing location timezone '$rejectedZone'"
+                        }
+                    Log.w(TAG, "repaired $diagnosis; using ${location.zoneId.id}")
                 }
             }
         }
@@ -170,6 +165,16 @@ internal class LocationStore(context: Context, private val deviceZone: () -> Zon
             } catch (_: JSONException) {
                 null
             }
+        }
+
+        fun storedZoneOrNull(record: JSONObject): ZoneId? {
+            val zone =
+                try {
+                    (record.opt(KEY_ZONE_ID) as? String)?.let(ZoneId::of)
+                } catch (_: DateTimeException) {
+                    null
+                }
+            return zone
         }
     }
 }
