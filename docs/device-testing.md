@@ -1193,3 +1193,69 @@ firmware, or serial identifiers are recorded.
 No device settings were changed for this pass: no `svc power stayon`, `screen_off_pocket`, `font_scale`,
 `wm size`, or night-mode change was needed, and the screen was woken only to capture the dial. The
 wallpaper binding survived every step; the app was never force-stopped or cleared.
+
+## Force-stop vs process-recreation lifecycle verification (#36)
+
+Investigation of wallpaper provider rebind behavior after process termination, addressing #36 and
+providing foundational evidence for physical-device lifecycle qualification (#6).
+
+Test build: local debug `app-debug.apk` from `docs/36-force-stop-lifecycle` at
+`ab8839352e46f6ee037e5bf424d9c79188eb22c7` (APK SHA-256
+`a6379b408df1a834d2b1135a9aeaafeaa9bc280a64ef8b8b654044526d3097c4`), installed in place with
+`adb install -r` over the previous debug build.
+
+Same physical device. Android version: 16 (API 36). Device locale `de-DE`, device timezone
+`Europe/Prague`. Firmware build: withheld (embeds the model identifier).
+
+### Framework mechanism and architectural resolution
+
+Android differentiates process termination into two distinct paths governed by package state:
+
+1. **Non-stopping process termination (Low-Memory Kill / OOM / `SIGKILL` without force-stop):**
+   When the Linux kernel OOM killer or Android's low-memory killer daemon (`lmkd`) terminates the app
+   process under memory pressure, or when a non-stopping signal is sent (e.g. `run-as <pkg> kill -9 <pid>`),
+   the package state retains `stopped=false`. The framework's `WallpaperManagerService` detects the binder
+   death (`onServiceDisconnected`) and, because the wallpaper remains the active system component and the
+   package is not stopped, automatically re-spawns the app process and rebinds
+   `AstronomicalClocksWallpaperService`. The service receives `onBind`, attaches its engine, reconstructs
+   surface state from persisted preferences, and resumes 1 Hz frame ticking.
+
+2. **Force-stop (`am force-stop` or Settings -> Apps -> Force stop):**
+   `ActivityManagerService.forceStopPackage()` explicitly marks the package with `FLAG_STOPPED` (`stopped=true`).
+   Android's platform security and lifecycle contract strictly forbids implicit broadcasts, background service
+   starts, or automatic service rebinding for any stopped package until the user explicitly initiates an action
+   by launching one of the application's activities. In response to a force-stop, `WallpaperManagerService`
+   unbinds the live wallpaper and falls back to the system's default static wallpaper (`ImageWallpaper`).
+   The live wallpaper provider is intentionally not rebound on returning to the home screen.
+
+3. **Resolution:**
+   This is an **accepted platform limitation** inherent to Android's stopped-package security model. Live
+   wallpaper re-application without user interaction requires `android.permission.SET_WALLPAPER_COMPONENT`, a
+   `signature|privileged` system permission inaccessible to normal third-party applications. Fighting or
+   attempting to bypass `FLAG_STOPPED` would violate Android CDD requirements and platform design principles.
+   The application already satisfies the safety requirements: the saved observing site and all dial layer
+   settings survive force-stop intact in private storage, launching `SettingsActivity` immediately clears the
+   stopped state (`stopped=false`), and tapping **Open wallpaper preview** allows the user to re-apply the
+   wallpaper in a single guided flow.
+
+### Physical-device observations
+
+The baseline started with the neutral Prague site `50.08, 14.42` (`Europe/Prague`, `MANUAL`), dial layers
+enabled (Moon, Zodiac ring, Sun), and the live wallpaper active on home and lock screens (`mWakefulness=Dozing`).
+
+| Date | Check | Observed |
+| --- | --- | --- |
+| 2026-10-06 | low-memory kill (LMK simulation) | Process `21302` was killed via `run-as ... kill -9 21302` without stopping the package (`stopped=false`). `dumpsys wallpaper` maintained `AstronomicalClocksWallpaperService`; `WallpaperManagerService` immediately respawned the process with PID `21794` (~200 ms latency). Logcat recorded `onBind`, engine attach, surface creation, and `Wallpaper has updated the surface`, resuming frame rendering. `observing_location.xml` and `dial_settings.xml` were intact |
+| 2026-10-06 | force-stop | `am force-stop` killed PID `21794` and set `stopped=true`. `dumpsys wallpaper` immediately dropped the provider and bound `ComponentInfo{com.android.systemui/com.android.systemui.wallpapers.ImageWallpaper}` across all display contexts. Returning to the home screen spawned no process (`pidof` empty); the framework stayed on `ImageWallpaper` |
+| 2026-10-06 | relaunch and state resilience | Launching `SettingsActivity` cleared `stopped=true` to `stopped=false`. `shared_prefs/observing_location.xml` was byte-identical to baseline (`50.08, 14.42`, `MANUAL`, `Europe/Prague`), and dial layers remained intact |
+| 2026-10-06 | preview re-application | Tapping **Open wallpaper preview** (`open_preview`) opened `LiveWallpaperChange`; selecting **Start- und Sperrbildschirm** (Home and lock screens) rebound `AstronomicalClocksWallpaperService` with PID `21987`. Returning home resumed the active dial from wall time |
+
+**Limitations.** Physical memory exhaustion was simulated by sending `SIGKILL` to the process via `run-as`
+rather than exhausting system RAM with an allocation stressor; the kernel OOM killer and `run-as kill -9`
+deliver the identical signal (`SIGKILL`) to the target PID while leaving package flags unaltered, so the
+framework's rebinding behavior is equivalent. Reboot and battery drain are not re-evidenced here.
+
+Device settings changed and restored: `screen_off_pocket` was temporarily set to 0 to bypass the Samsung
+accidental-touch overlay (`UnintentionalLcdOn`) during preview UI navigation, and restored to 1. The device
+was left with `screen_off_pocket=1`, `AstronomicalClocksWallpaperService` bound to the home and lock screens
+(PID `21987`), saved site Prague `50.08, 14.42` intact, and the screen dozing.
