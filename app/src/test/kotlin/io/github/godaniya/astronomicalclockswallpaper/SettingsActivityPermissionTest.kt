@@ -22,6 +22,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowAlertDialog
+import org.robolectric.shadows.ShadowLog
 import org.robolectric.shadows.ShadowToast
 
 /** Checks permission-result edge cases and preserves the requested cache policy across recreation. */
@@ -117,6 +118,11 @@ class SettingsActivityPermissionTest {
                 activity.getString(R.string.location_permission_interrupted),
                 ShadowToast.getTextOfLatestToast(),
             )
+            assertTrue(
+                ShadowLog.getLogsForTag("SettingsActivity").any {
+                    it.msg == "location permission request interrupted; no acquisition started"
+                },
+            )
             // No denial observation is recorded, so the next tap issues a fresh request instead of
             // showing the recovery dialog.
             val originalRequest = shadowOf(activity).lastRequestedPermission
@@ -137,9 +143,36 @@ class SettingsActivityPermissionTest {
             )
             assertNull(LocationStore(application).load())
             assertTrue(locationShadow.networkListeners().isEmpty())
+            assertEquals(0, ShadowToast.shownToastCount())
+            assertTrue(
+                ShadowLog.getLogsForTag("SettingsActivity").any {
+                    it.msg == "ignoring location permission result for unrelated permissions"
+                },
+            )
             val originalRequest = shadowOf(activity).lastRequestedPermission
             activity.findViewById<Button>(R.id.use_current_location).performClick()
             assertNotSame(originalRequest, shadowOf(activity).lastRequestedPermission)
+        }
+    }
+
+    @Test
+    fun unrelatedKeepsFreshPending() {
+        Robolectric.buildActivity(SettingsActivity::class.java).use { controller ->
+            val activity = controller.setup().get()
+            seedRecentCache()
+            requestPermission(activity, R.id.refresh_location)
+            activity.onRequestPermissionsResult(
+                REQUEST_LOCATION_PERMISSION,
+                arrayOf(Manifest.permission.CAMERA),
+                intArrayOf(PackageManager.PERMISSION_GRANTED),
+            )
+            assertEquals(0, ShadowToast.shownToastCount())
+
+            grantPermission(activity)
+
+            // Only a still-fresh pending request asks for a new fix; the cached path registers no
+            // listener, so a preserved pending freshness is what the listener count witnesses.
+            assertEquals(1, locationShadow.networkListeners().size)
         }
     }
 

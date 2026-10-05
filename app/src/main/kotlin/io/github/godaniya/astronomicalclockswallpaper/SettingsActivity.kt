@@ -137,6 +137,14 @@ class SettingsActivity : Activity() {
             return
         }
         val permissionIndex = permissions.indexOf(Manifest.permission.ACCESS_COARSE_LOCATION)
+        // A non-empty callback for another permission can arrive under this request code. Reading
+        // the -1 index as a null result would misreport it as an interruption and consume the
+        // freshness of a still-live request. Ignore it and leave the pending state alone; an empty
+        // result is different and falls through to the interrupted report below.
+        if (permissionIndex == -1 && permissions.isNotEmpty()) {
+            Log.i(TAG, "ignoring location permission result for unrelated permissions")
+            return
+        }
         val result = grantResults.getOrNull(permissionIndex)
         if (result == PackageManager.PERMISSION_GRANTED) {
             locationPermissionControls.clearDenial()
