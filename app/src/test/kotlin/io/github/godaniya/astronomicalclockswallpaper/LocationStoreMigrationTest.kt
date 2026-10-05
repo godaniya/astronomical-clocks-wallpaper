@@ -2,6 +2,7 @@ package io.github.godaniya.astronomicalclockswallpaper
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.Looper
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -11,6 +12,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowLog
 import java.time.ZoneId
@@ -37,16 +39,20 @@ class LocationStoreMigrationTest {
                 zoneId = deviceZone,
             )
         // Purity check: load() reads legacy coordinates without mutating SharedPreferences.
+        val beforeRead = preferences().all
         assertEquals(expected, store.load())
-        assertEquals(setOf("latitude", "longitude", "source"), preferences().all.keys)
+        assertEquals(beforeRead, preferences().all)
 
         // Explicit migration: migrateAndRepair() persists the versioned record once.
         store.migrateAndRepair()
         assertEquals(expected, store.load())
         assertEquals(setOf("location"), preferences().all.keys)
         deviceZone = ZoneId.of("Asia/Tokyo")
+        val migrated = preferences().all
+        store.migrateAndRepair()
         assertEquals(expected, store.load())
         assertEquals(expected, LocationStore(RuntimeEnvironment.getApplication()) { deviceZone }.load())
+        assertEquals(migrated, preferences().all)
         assertEquals(2, zoneReads)
     }
 
@@ -67,8 +73,9 @@ class LocationStoreMigrationTest {
                 source = ObservingLocation.Source.CURRENT_COARSE,
                 zoneId = zone,
             )
+        val beforeRead = preferences().all
         assertEquals(expected, store.load())
-        assertEquals(setOf("latitude", "longitude", "source"), preferences().all.keys)
+        assertEquals(beforeRead, preferences().all)
         store.migrateAndRepair()
         assertEquals(expected, store.load())
         assertEquals(setOf("location"), preferences().all.keys)
@@ -127,8 +134,10 @@ class LocationStoreMigrationTest {
                     source = ObservingLocation.Source.MANUAL,
                     zoneId = ZoneId.of("Australia/Sydney"),
                 )
-            // Purity check: load() uses fallback in-memory without persisting or logging repair.
+            // Pure reads use the fallback without persisting it or logging a repair.
+            val beforeRead = preferences().all
             assertEquals(expected, store.load())
+            assertEquals(beforeRead, preferences().all)
             assertEquals(1, zoneReads)
             assertTrue(ShadowLog.getLogsForTag("LocationStore").isEmpty())
             val rawBeforeRepair = preferences().getString("location", null)
@@ -145,11 +154,21 @@ class LocationStoreMigrationTest {
             assertEquals(1, ShadowLog.getLogsForTag("LocationStore").size)
             assertTrue(ShadowLog.getLogsForTag("LocationStore").all { it.msg.contains("repaired") })
 
-            // Subsequent load() and migrateAndRepair() do not re-read device zone or re-repair.
+            // Repeated maintenance must not write again or consult the device zone.
+            val afterRepair = preferences().all
+            shadowOf(Looper.getMainLooper()).idle()
+            var changes = 0
+            val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> changes++ }
+            preferences().registerOnSharedPreferenceChangeListener(listener)
             assertEquals(expected, store.load())
             store.migrateAndRepair()
             assertEquals(expected, store.load())
             assertEquals(2, zoneReads)
+            assertEquals(afterRepair, preferences().all)
+            shadowOf(Looper.getMainLooper()).idle()
+            assertEquals(0, changes)
+            assertEquals(1, ShadowLog.getLogsForTag("LocationStore").size)
+            preferences().unregisterOnSharedPreferenceChangeListener(listener)
         }
     }
 
@@ -160,6 +179,9 @@ class LocationStoreMigrationTest {
         preferences().edit().putString("location", record.toString()).apply()
         val before = preferences().all
         val store = LocationStore(RuntimeEnvironment.getApplication()) { error("must not read device zone") }
+        store.migrateAndRepair()
+        store.migrateAndRepair()
+        assertTrue(ShadowLog.getLogsForTag("LocationStore").isEmpty())
         assertNotNull(store.load())
         assertEquals(-30.0, requireNotNull(store.load()).latitude, 0.0)
         assertEquals(ZoneId.of("Pacific/Auckland"), requireNotNull(store.load()).zoneId)

@@ -93,19 +93,16 @@ internal class LocationStore(context: Context, private val deviceZone: () -> Zon
                     } catch (_: DateTimeException) {
                         null
                     }
-                if (storedZone == null) {
-                    val fallback = deviceZone()
-                    val location =
-                        readLocation(
-                            rawLatitude = (record.opt(KEY_LATITUDE) as? Number)?.toDouble(),
-                            rawLongitude = (record.opt(KEY_LONGITUDE) as? Number)?.toDouble(),
-                            sourceText = record.opt(KEY_SOURCE) as? String,
-                        ) { fallback }
-                    if (location != null) {
-                        record.put(KEY_ZONE_ID, fallback.id)
-                        persistRecord(record)
-                        Log.w(TAG, "repaired missing or invalid observing location timezone")
-                    }
+                val location =
+                    readLocation(
+                        rawLatitude = (record.opt(KEY_LATITUDE) as? Number)?.toDouble(),
+                        rawLongitude = (record.opt(KEY_LONGITUDE) as? Number)?.toDouble(),
+                        sourceText = record.opt(KEY_SOURCE) as? String,
+                    ) { storedZone ?: deviceZone() }
+                if (location != null && storedZone == null) {
+                    record.put(KEY_ZONE_ID, location.zoneId.id)
+                    persistRecord(record)
+                    Log.w(TAG, "repaired missing or invalid observing location timezone")
                 }
             }
         }

@@ -24,7 +24,7 @@ class LocationStoreCorruptionTest {
             preferences().edit().putString("location", record).apply()
             assertUntouched()
         }
-        assertEquals(records.size, ShadowLog.getLogsForTag("LocationStore").size)
+        assertEquals(records.size * 2, ShadowLog.getLogsForTag("LocationStore").size)
         assertTrue(ShadowLog.getLogsForTag("LocationStore").all { it.msg.contains("malformed") })
     }
 
@@ -75,11 +75,13 @@ class LocationStoreCorruptionTest {
                 "source" to null,
             )
         for ((key, value) in invalidFields) {
-            val record = JSONObject(VALID_RECORD).put(key, value)
-            preferences().edit().putString("location", record.toString()).apply()
-            assertUntouched()
+            for (zone in listOf(null, "Europe/Prague")) {
+                val record = JSONObject(VALID_RECORD).put(key, value).put("zoneId", zone)
+                preferences().edit().putString("location", record.toString()).apply()
+                assertUntouched()
+            }
         }
-        assertEquals(invalidFields.size, ShadowLog.getLogsForTag("LocationStore").size)
+        assertEquals(invalidFields.size * 4, ShadowLog.getLogsForTag("LocationStore").size)
         assertTrue(ShadowLog.getLogsForTag("LocationStore").all { it.msg.contains("malformed") })
     }
 
@@ -97,6 +99,14 @@ class LocationStoreCorruptionTest {
         val store = LocationStore(RuntimeEnvironment.getApplication()) { error("must not read device zone") }
         assertNull(store.load())
         assertEquals(before, preferences().all)
+        val readLog = ShadowLog.getLogsForTag("LocationStore").last()
+        val logCount = ShadowLog.getLogsForTag("LocationStore").size
+        store.migrateAndRepair()
+        assertEquals(before, preferences().all)
+        val logs = ShadowLog.getLogsForTag("LocationStore")
+        assertEquals(logCount + 1, logs.size)
+        assertEquals(readLog.msg, logs.last().msg)
+        assertEquals(readLog.type, logs.last().type)
     }
 
     private fun preferences(): SharedPreferences =

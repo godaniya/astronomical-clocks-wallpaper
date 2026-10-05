@@ -8,6 +8,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import java.time.ZoneId
 
 /** Verifies that AstronomicalClocksApplication migrates and repairs LocationStore on startup. */
 @RunWith(RobolectricTestRunner::class)
@@ -24,6 +25,7 @@ class AstronomicalClocksApplicationTest {
             .putString("source", "MANUAL")
             .apply()
 
+        val expectedZone = ZoneId.systemDefault()
         app.onCreate()
 
         assertEquals(setOf("location"), prefs.all.keys)
@@ -31,6 +33,9 @@ class AstronomicalClocksApplicationTest {
         assertEquals(50.0, loaded?.latitude ?: 0.0, 0.0)
         assertEquals(14.0, loaded?.longitude ?: 0.0, 0.0)
         assertEquals(ObservingLocation.Source.MANUAL, loaded?.source)
+        assertEquals(expectedZone, loaded?.zoneId)
+        val migrated = JSONObject(requireNotNull(prefs.getString("location", null)))
+        assertEquals(expectedZone.id, migrated.getString("zoneId"))
     }
 
     @Test
@@ -51,13 +56,17 @@ class AstronomicalClocksApplicationTest {
             .putString("location", record)
             .apply()
 
+        val expectedZone = ZoneId.systemDefault()
         app.onCreate()
 
         val repairedJson = JSONObject(requireNotNull(prefs.getString("location", null)))
         assertEquals(1, repairedJson.getInt("version"))
         assertEquals(42, repairedJson.getInt("extraField"))
+        assertEquals(expectedZone.id, repairedJson.getString("zoneId"))
         val loaded = LocationStore(app).load()
         assertEquals(50.0, loaded?.latitude ?: 0.0, 0.0)
+        assertEquals(14.0, loaded?.longitude ?: 0.0, 0.0)
         assertEquals(ObservingLocation.Source.CURRENT_COARSE, loaded?.source)
+        assertEquals(expectedZone, loaded?.zoneId)
     }
 }
