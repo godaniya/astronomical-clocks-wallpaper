@@ -183,11 +183,11 @@ class SettingsActivityPermissionRecoveryTest {
         Robolectric.buildActivity(SettingsActivity::class.java).use { controller ->
             val activity = controller.setup().get()
             val preferences = permissionPreferences()
-            preferences.edit().putString(KEY_NON_PROMPTABLE_DENIAL, "malformed").apply()
+            preferences.edit().putString(LocationPermissionControls.KEY_NON_PROMPTABLE_DENIAL, "malformed").apply()
 
             val locationAction = activity.findViewById<Button>(R.id.use_current_location)
             locationAction.performClick()
-            assertFalse(preferences.contains(KEY_NON_PROMPTABLE_DENIAL))
+            assertFalse(preferences.contains(LocationPermissionControls.KEY_NON_PROMPTABLE_DENIAL))
             locationAction.performClick()
 
             // The malformed value is repaired on the first tap, so the warning is emitted once
@@ -198,7 +198,7 @@ class SettingsActivityPermissionRecoveryTest {
                     it.msg == "ignoring malformed permission denial observation"
                 },
             )
-            assertFalse(preferences.contains(KEY_NON_PROMPTABLE_DENIAL))
+            assertFalse(preferences.contains(LocationPermissionControls.KEY_NON_PROMPTABLE_DENIAL))
         }
     }
 
@@ -220,7 +220,7 @@ class SettingsActivityPermissionRecoveryTest {
             )
 
             assertEquals(activity.getString(R.string.location_permission_denied), ShadowToast.getTextOfLatestToast())
-            assertFalse(permissionPreferences().contains(KEY_NON_PROMPTABLE_DENIAL))
+            assertFalse(permissionPreferences().contains(LocationPermissionControls.KEY_NON_PROMPTABLE_DENIAL))
         }
     }
 
@@ -269,6 +269,5 @@ class SettingsActivityPermissionRecoveryTest {
 
     private companion object {
         const val REQUEST_LOCATION_PERMISSION = 1
-        const val KEY_NON_PROMPTABLE_DENIAL = "non_promptable_denial"
     }
 }

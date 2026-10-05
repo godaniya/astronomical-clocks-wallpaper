@@ -27,14 +27,15 @@ internal class LocationPermissionControls(private val activity: Activity) {
         when {
             activity.shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_COARSE_LOCATION) -> {
                 clearDenial()
-                visibleDialog =
+                showTracked(
                     AlertDialog
                         .Builder(activity)
                         .setTitle(R.string.location_permission_title)
                         .setMessage(R.string.location_permission_rationale)
                         .setPositiveButton(R.string.location_permission_continue) { _, _ -> onRequest() }
                         .setNegativeButton(android.R.string.cancel, null)
-                        .show()
+                        .show(),
+                )
             }
 
             observation == true -> {
@@ -73,6 +74,14 @@ internal class LocationPermissionControls(private val activity: Activity) {
         visibleDialog = null
     }
 
+    private fun showTracked(dialog: AlertDialog) {
+        // A dialog dismisses itself on a button tap or Back; clearing the reference as it goes keeps
+        // dismissDialog() off a stale instance and never leaves a shown dialog untracked.
+        visibleDialog?.dismiss()
+        visibleDialog = dialog
+        dialog.setOnDismissListener { visibleDialog = null }
+    }
+
     private fun showRecovery(onRequest: () -> Unit) {
         val builder = AlertDialog.Builder(activity)
         builder.setTitle(R.string.location_permission_title)
@@ -84,7 +93,7 @@ internal class LocationPermissionControls(private val activity: Activity) {
             onRequest()
         }
         builder.setNegativeButton(android.R.string.cancel, null)
-        visibleDialog = builder.show()
+        showTracked(builder.show())
     }
 
     private fun openAppSettings() {
@@ -101,8 +110,10 @@ internal class LocationPermissionControls(private val activity: Activity) {
         }
     }
 
-    private companion object {
-        const val TAG = "LocationPermissionControls"
+    internal companion object {
+        private const val TAG = "LocationPermissionControls"
+
+        // Shared with tests so the observation assertions cannot drift from the production key.
         const val KEY_NON_PROMPTABLE_DENIAL = "non_promptable_denial"
     }
 }
