@@ -224,6 +224,21 @@ class SettingsActivityPermissionRecoveryTest {
         }
     }
 
+    @Test
+    fun destroyDismissesOpenDialog() {
+        Robolectric.buildActivity(SettingsActivity::class.java).use { controller ->
+            val activity = controller.setup().get()
+            denyLocation(activity)
+            activity.findViewById<Button>(R.id.use_current_location).performClick()
+            val recovery = dialog()
+            assertTrue(recovery.isShowing)
+
+            controller.pause().stop().destroy()
+
+            assertFalse(recovery.isShowing)
+        }
+    }
+
     private fun permissionPreferences() = application.getSharedPreferences("location_permission", Context.MODE_PRIVATE)
 
     private fun denyLocation(activity: SettingsActivity) {

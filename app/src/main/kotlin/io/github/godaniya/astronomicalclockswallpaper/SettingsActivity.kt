@@ -99,6 +99,7 @@ class SettingsActivity : Activity() {
     }
 
     override fun onDestroy() {
+        locationPermissionControls.dismissDialog()
         locationProvider.cancel()
         super.onDestroy()
     }

@@ -139,6 +139,7 @@ permission again**, or Cancel. The observation is not an authoritative OS flag:
 grants and requestable rationale clear it, a malformed value is repaired on the
 first tap, and the explicit permission retry handles otherwise ambiguous permission
 resets. A first request is never blocked just because Android reports no rationale.
+An open rationale or recovery dialog is dismissed when the activity is destroyed.
 
 Permission denial and settings navigation never replace the saved site, block
 manual coordinates, or acquire location automatically on return. After changing

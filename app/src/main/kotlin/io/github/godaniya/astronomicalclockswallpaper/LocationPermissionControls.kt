@@ -14,6 +14,7 @@ import android.widget.Toast
 /** Offers contextual permission recovery without changing the saved site or acquiring location. */
 internal class LocationPermissionControls(private val activity: Activity) {
     private val preferences = activity.getSharedPreferences("location_permission", Context.MODE_PRIVATE)
+    private var visibleDialog: AlertDialog? = null
 
     fun request(onRequest: () -> Unit) {
         var observation = preferences.all[KEY_NON_PROMPTABLE_DENIAL]
@@ -26,13 +27,14 @@ internal class LocationPermissionControls(private val activity: Activity) {
         when {
             activity.shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_COARSE_LOCATION) -> {
                 clearDenial()
-                AlertDialog
-                    .Builder(activity)
-                    .setTitle(R.string.location_permission_title)
-                    .setMessage(R.string.location_permission_rationale)
-                    .setPositiveButton(R.string.location_permission_continue) { _, _ -> onRequest() }
-                    .setNegativeButton(android.R.string.cancel, null)
-                    .show()
+                visibleDialog =
+                    AlertDialog
+                        .Builder(activity)
+                        .setTitle(R.string.location_permission_title)
+                        .setMessage(R.string.location_permission_rationale)
+                        .setPositiveButton(R.string.location_permission_continue) { _, _ -> onRequest() }
+                        .setNegativeButton(android.R.string.cancel, null)
+                        .show()
             }
 
             observation == true -> {
@@ -65,6 +67,12 @@ internal class LocationPermissionControls(private val activity: Activity) {
         Toast.makeText(activity, message, Toast.LENGTH_LONG).show()
     }
 
+    /** Dismisses an open rationale or recovery dialog; call from the owning activity's destroy. */
+    fun dismissDialog() {
+        visibleDialog?.dismiss()
+        visibleDialog = null
+    }
+
     private fun showRecovery(onRequest: () -> Unit) {
         val builder = AlertDialog.Builder(activity)
         builder.setTitle(R.string.location_permission_title)
@@ -76,7 +84,7 @@ internal class LocationPermissionControls(private val activity: Activity) {
             onRequest()
         }
         builder.setNegativeButton(android.R.string.cancel, null)
-        builder.show()
+        visibleDialog = builder.show()
     }
 
     private fun openAppSettings() {
