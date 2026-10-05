@@ -1027,14 +1027,62 @@ pipeline returned the palette unchanged on these captures, so the probes match t
 exactly, but a capture still cannot adjudicate glyph antialiasing: the contrast contract in
 [orloj.md](orloj.md#palette-contrast) rests on the palette values, not on these frames.
 
-### Appearance review fixes: device pass pending
+### Appearance review fixes: device pass
 
-The PR #84 review fixes add ring-disabled marker outlines and extend host coverage of appearance
-control reachability and palette restoration after a surface gap. No physical-device checks were
-performed for these changes. The historical appearance evidence above applies only to its recorded
-source revision and APK; it does not qualify these new visual changes.
+Test build: local debug `app-debug.apk` from `feat/31-appearance` at 33807f3 (APK SHA-256
+`91cfdf52a4b9b921ca8fb684dbfdcb016c941373670e51e24ca5c7e9757bfbb2`), the branch tip when the artifact
+was assembled, installed with `adb install -r` over the existing binding. The suppression-rationale
+fix in that revision edits a comment in `app/src/`, which shifts the debug line tables, so the hash
+differs from the earlier `38b7135b…` build even though the feature behaviour is unchanged.
+`./gradlew qualityGate :app:assembleDebug` passed with 530 unit tests per build variant and no detekt,
+ktlint, or Android Lint findings, and `scripts/verify-apk.sh` verified the application ID, SDK levels,
+debug flag, permissions, wallpaper declaration, Astronomy Engine notice, and APK Signature Scheme v2.
 
-The owner must perform a later physical-device pass covering light/dark Sun and Moon markers with
-the zodiac ring disabled, lunar phase visibility (including new, quarter, and full Moon in both
-hemispheres), and all three appearance controls on a short screen with 2× enlarged text. Record
-Android version/API, tested revision, and APK SHA-256 when completed, following the privacy rules above.
+Same physical device as the earlier passes. Android version: 16 (API 36). Firmware build: withheld
+(embeds the model identifier). The device's found site was its coarse current location
+(`CURRENT_COARSE`, ≈ 50.126, 14.472, `Europe/Prague`); the southern spot-check below moved it to
+manual Sydney and it was restored to manual Prague `50.08, 14.42`, matching the earlier appearance
+pass's site.
+
+**Method.** Ring-disabled markers are read from `adb exec-out screencap` frames by exact palette match,
+the same unmodified screenshot pipeline the earlier passes recorded. The Moon phase is driven with the
+debug virtual clock (`DEBUG_SET_TIME --es instant`) to instants computed offline from mean-lunation
+arithmetic (new 2026-10-11T09:13:52Z, first quarter 2026-10-18T18:24:52Z, full 2026-10-26T03:35:53Z),
+and the lit fraction is the count of `MOON_ILLUMINATED` pixels over the lit plus `MOON_SHADOW` count in
+the dark palette, where both are unique. Reachability is checked at `font_scale 2.0` and
+`wm size 1080x1200`.
+
+| Date | Check | Observed |
+| --- | --- | --- |
+| 2026-10-05 | build + install | `qualityGate` 530 tests per variant, 0 failures, no static-analysis findings; `verify-apk.sh` passed; APK SHA-256 `91cfdf52…7bfbb2` installed in place |
+| 2026-10-05 | Settings theme, System/Light/Dark | Window background read `#F7F4EB` under Light and `#111923` under Dark; under System, `cmd uimode night yes` read `#111923` and `no` read `#F7F4EB` |
+| 2026-10-05 | light wallpaper palette | One frame held 1844309 px of `#F7F4EB` plate, 311974 px of `#E8E2D2` (civil scale and zodiac band), 2644 px of `#4E341B` names, and 108458 px of `#2C3E50` night region |
+| 2026-10-05 | dark wallpaper palette | One frame held 1846003 px of `#101923`, 141494 px of `#152433` (night and band), 20015 px of `#D8B66A`, and 2631 px of `#F4E5B8` names |
+| 2026-10-05 | night-mode change while visible | `cmd uimode night yes` then `no` repainted the visible wallpaper dark then light, and the wallpaper-process logcat held no warning or error line |
+| 2026-10-05 | ring-disabled markers, light | The Sun marker's `#6E4D25` disc carried its `hand` outline `#4E341B` over the twilight and sky region; the Moon (a thin near-new crescent, `#5A6B7D` shadow and `#F7F4EB` lit limb) carried its `hand` ink at the twilight-facing edge, and the `#F7F4EB` casing matched the plate tone, confirmed by crop |
+| 2026-10-05 | ring-disabled markers, dark | The Sun marker's `#D8B66A` disc carried its `hand` outline `#F4E5B8` (small clusters at the disc edge); the thin-crescent Moon (`#2C3E50` shadow and `#E8EEF5` lit limb) showed its two-tone boundary antialiased into the night and twilight regions, legible by crop |
+| 2026-10-05 | lunar phase, new / quarter / full | Virtual clock to the three instants measured lit fractions 0.000 (lit 0, shadow 161), 0.462 (lit 67, shadow 78), and 1.000 (lit 163, shadow 0), confirming each phase reached |
+| 2026-10-05 | lunar phase, southern mirror | At the first-quarter instant with the site on Sydney `-33.87, 151.21`, the lit limb offset flipped sign (+3.6 px, right limb, Prague → −3.0 px, left limb, Sydney); lit fraction 0.551, the same ~half phase |
+| 2026-10-05 | reachability, 2× font on a short screen | At `font_scale 2.0` and `wm size 1080x1200`, all three appearance radios sat within the viewport (y ≈ 514/649/784) and each tap applied System, Light, and Dark in turn |
+| 2026-10-05 | tick cadence, hand, surface recreation | `scripts/device-smoke-test.py`: hand advanced 7.513° against 7.500° (residual +0.013°), broadcast took 114 ms, `wm size 1080x2000` then reset redrew the dial, 0 renderer warnings |
+
+The lit-fraction rows under-count both Moon regions by their antialiased boundary, as the earlier Moon
+pass records, so the phase claim rests on the three distinct fractions (0, ≈½, 1) and the southern
+limb mirror rather than on exact values. The southern check is a single first-quarter spot-check, not
+the full two-hemisphere pass the Moon record documents.
+
+Device settings changed for this pass and restored: the screen was held awake (`svc power stayon usb`,
+`stay_on_while_plugged_in` back to 0) and pocket screen-off disabled (`screen_off_pocket 0`, back to 1)
+to keep the accidental-touch overlay away; `font_scale` moved to 2.0 for the reachability row and
+restored to its found 1.1; `wm size` returned to the physical 1080x2408 with no override; night mode
+moved through `yes`/`no` and back to `auto`; the appearance choice moved through Light, Dark, and
+System and was left on System; the saved site moved to manual Sydney for the mirror row and was
+restored to manual Prague `50.08, 14.42`. The wallpaper binding survived throughout, and the device was
+left with the screen dozing.
+
+**What this pass did not run.** Reboot and the lit lock screen are not re-evidenced here; the earlier
+passes stand for those. Always On Display remains out of scope per #2. The southern check is one
+first-quarter capture, not the full two-hemisphere phase pass. The screenshot pipeline returned the
+palette unchanged, so the probes match the palette literals exactly, but a capture still cannot
+adjudicate glyph antialiasing; the marker-outline contrast contract in
+[orloj.md](orloj.md#palette-contrast) rests on the palette values, not on these frames.

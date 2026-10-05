@@ -200,9 +200,9 @@ still clears 5.90:1 against that band, so its boundary remains distinguishable e
 in the disc. A differential native Canvas test checks this full-Moon boundary in both palettes.
 The fill itself is not required to contrast with the band when its contrasting rim defines the marker.
 
-These host checks do not establish physical-device visibility for the new ring-disabled outlines.
-The earlier appearance device evidence applies only to its recorded revision; a new device pass is
-pending (see [device-testing.md](device-testing.md#appearance-review-fixes-device-pass-pending)).
+These host checks do not establish physical-device visibility for the new ring-disabled outlines;
+the physical-device pass records that visibility (see
+[device-testing.md](device-testing.md#appearance-review-fixes-device-pass)).
 
 Two accepted exceptions, both recorded here rather than worked around:
 
