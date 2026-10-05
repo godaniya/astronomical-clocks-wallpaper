@@ -104,7 +104,7 @@ class SettingsActivityPermissionTest {
     }
 
     @Test
-    fun emptyPermissionResultIsDenied() {
+    fun emptyResultIsInterrupted() {
         Robolectric.buildActivity(SettingsActivity::class.java).use { controller ->
             val activity = controller.setup().get()
             requestPermission(activity, R.id.use_current_location)
@@ -113,7 +113,12 @@ class SettingsActivityPermissionTest {
 
             assertNull(LocationStore(application).load())
             assertTrue(locationShadow.networkListeners().isEmpty())
-            assertEquals(activity.getString(R.string.location_permission_denied), ShadowToast.getTextOfLatestToast())
+            assertEquals(
+                activity.getString(R.string.location_permission_interrupted),
+                ShadowToast.getTextOfLatestToast(),
+            )
+            // No denial observation is recorded, so the next tap issues a fresh request instead of
+            // showing the recovery dialog.
             val originalRequest = shadowOf(activity).lastRequestedPermission
             activity.findViewById<Button>(R.id.use_current_location).performClick()
             assertNotSame(originalRequest, shadowOf(activity).lastRequestedPermission)

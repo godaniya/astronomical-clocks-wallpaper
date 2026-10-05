@@ -145,7 +145,7 @@ class SettingsActivity : Activity() {
             locationPermissionControls.recordDenial()
         } else {
             Log.i(TAG, "location permission request interrupted; no acquisition started")
-            Toast.makeText(this, R.string.location_permission_denied, Toast.LENGTH_LONG).show()
+            Toast.makeText(this, R.string.location_permission_interrupted, Toast.LENGTH_LONG).show()
         }
         isForceFreshPending = false
     }

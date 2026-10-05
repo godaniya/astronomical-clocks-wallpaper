@@ -185,6 +185,10 @@ class SettingsActivityPermissionRecoveryTest {
             listOf(Manifest.permission.ACCESS_COARSE_LOCATION),
             shadowOf(activity).lastRequestedPermission.requestedPermissions.toList(),
         )
+        // requestPermissions() reaches the framework through startActivityForResult(), and Robolectric
+        // keeps started activities on instrumentation shared across the whole test. Consume that
+        // request intent here so a caller's nextStartedActivity() assertion sees only the activity it
+        // intentionally starts.
         assertNotNull(shadowOf(activity).nextStartedActivity)
         activity.onRequestPermissionsResult(
             REQUEST_LOCATION_PERMISSION,
