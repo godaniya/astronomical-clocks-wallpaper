@@ -966,9 +966,10 @@ not run.
 ## Appearance themes (#31)
 
 Test build: local debug `app-debug.apk` from `feat/31-appearance` at 82817a7 (APK SHA-256
-`38b7135b8c854350130175c686e4250a2eeb7a01e5d8dc45f27ed63f7c837144`), the branch tip when the artifact
-was assembled, installed with `adb install -r` over the existing binding. The only later commit on
-this branch is this report, which leaves `app/src/` untouched and produces the identical APK.
+`38b7135b8c854350130175c686e4250a2eeb7a01e5d8dc45f27ed63f7c837144`), installed with `adb install -r`
+over the existing binding. The revision and hash describe the branch state when this artifact was
+assembled; this report itself left `app/src/` untouched, but later commits on this branch do change it,
+so those later commits are not covered by the results below.
 `./gradlew qualityGate :app:assembleDebug` passed with 526 unit tests per build variant and no detekt,
 ktlint, or Android Lint findings, and `scripts/verify-apk.sh` verified the application ID, SDK levels,
 debug flag, permissions, wallpaper declaration, Astronomy Engine notice, and APK Signature Scheme v2.
