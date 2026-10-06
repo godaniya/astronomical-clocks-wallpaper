@@ -1199,10 +1199,11 @@ wallpaper binding survived every step; the app was never force-stopped or cleare
 Investigation of wallpaper provider rebind behavior after process termination, addressing #36 and
 providing foundational evidence for physical-device lifecycle qualification (#6).
 
-Test build: local debug `app-debug.apk` from `docs/36-force-stop-lifecycle` at
-`ab8839352e46f6ee037e5bf424d9c79188eb22c7` (APK SHA-256
-`a6379b408df1a834d2b1135a9aeaafeaa9bc280a64ef8b8b654044526d3097c4`), installed in place with
-`adb install -r` over the previous debug build.
+Test build: local debug `app-debug.apk` from `docs/36-force-stop-lifecycle`, whose commits change
+only this document, so the application sources under test are those of `main` at
+`ab883937c5b8a201e2ab5697a34ce641692af0a7` (the branch's base; APK SHA-256
+`a6379b408df1a834d2b1135a9aeaafeaa9bc280a64ef8b8b654044526d3097c4`, reproduced by rebuilding that
+revision from a clean tree), installed in place with `adb install -r` over the previous debug build.
 
 Same physical device. Android version: 16 (API 36). Device locale `de-DE`, device timezone
 `Europe/Prague`. Firmware build: withheld (embeds the model identifier).
