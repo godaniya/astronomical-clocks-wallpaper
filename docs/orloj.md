@@ -146,24 +146,28 @@ bearing from the dial centre is the Sun's hour angle, with noon at the top of th
 
 Measuring angles clockwise from the top vertical axis (the negative y-axis pointing to XII on the 24-hour
 Roman scale), any projected ecliptic point's bearing is `atan2(x, −y) ≡ H`. For the Sun marker, whose
-hour angle defines local apparent solar time (`H = 0` at local apparent noon), that bearing is
-precisely the **Local Apparent Solar Time**:
+geometric hour angle approximates the apparent solar hour angle, the bearing is an approximation to
+**Local Apparent Solar Time**. The engine uses a geocentric geometric Sun position without annual
+aberration or topocentric solar parallax, so it is not an exact apparent-Sun position:
 
-- At local apparent noon, `H = 0°`: `x = 0`, `y = −r < 0`, and the Sun marker points directly at XII.
+- At local apparent noon the apparent hour angle is `0°`, so the ideal marker points at XII; the
+  geometric marker can differ slightly because of the omitted effects above. Independent solar-transit
+  fixtures check that difference against a `0.02°` tolerance.
 - As the Sun moves through the afternoon (`H > 0`), the marker advances clockwise past I, II, III...
 - At midnight (`H = 180°`), the marker reaches XXIV at the bottom of the dial.
 
 The civil hand and the Sun marker indicate two distinct, intentional physical quantities:
 the civil hand tracks the saved observing site's civil timezone (including daylight saving time), while
-the Sun marker tracks local apparent solar time. The angular offset between the civil hand and the Sun
-marker is:
+the Sun marker approximates local apparent solar time. In hours, the predicted civil-to-apparent offset is:
 
 ```text
-civil − apparent = zone offset (incl. DST) − longitude/15° − equation of time
+civil − apparent = UTC offset (incl. DST) − east longitude/15° − equation of time
 ```
 
-The equation of time oscillates by approximately ±16 minutes over the course of the year due to Earth's
-orbital eccentricity and axial tilt.
+Here, the equation of time is apparent solar time minus local mean solar time; it oscillates by
+approximately ±16 minutes over the year due to Earth's orbital eccentricity and axial tilt. The Sun
+marker uses the engine's geometric position, so the measured angular offset has a small additional
+ephemeris/frame residual.
 
 On the historical Prague Orloj, the Roman scale reads local Prague civil time (CET), the zodiac turns at
 the sidereal rate over fixed day/twilight/night regions, and the Sun sits on a single arm with the civil

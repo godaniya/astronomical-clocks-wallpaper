@@ -5,25 +5,30 @@ import java.time.LocalTime
 import java.time.ZoneId
 
 /**
- * Independent reference fixtures for Local Apparent Noon (solar meridian transit) generated
- * from JPL Horizons (DE441 ephemeris, target Sun, geocentric/topocentric observer) and
- * independent celestial transit calculations.
+ * Independent reference fixtures for local apparent noon (solar meridian transit) generated
+ * from JPL Horizons (DE441 ephemeris, target Sun, topocentric observer) and independent
+ * celestial transit calculations.
  *
  * At Local Apparent Noon:
- * - The Sun transits the local celestial meridian; its local hour angle is `H = 0.0°`.
+ * - The Sun transits the local celestial meridian; its apparent local hour angle is `H = 0.0°`.
  * - Local Apparent Solar Time is exactly 12:00:00.
- * - On the dial's 24-hour Roman scale (noon XII at top, midnight XXIV at bottom), the Sun marker's
- *   bearing from the dial center is `0.0°` (pointing directly at XII).
+ * - The dial uses the engine's geocentric geometric Sun position, which omits annual aberration;
+ *   its marker therefore approximates, rather than exactly represents, the apparent hour angle.
+ *   The test checks its bearing against XII within the documented tolerance.
  * - The civil hand reflects the observing location's geographic timezone (including DST) at that instant.
- * - The difference between the civil hand angle and the Sun marker bearing satisfies the exact offset formula:
+ * - The civil/apparent offset is predicted by:
  *   `civil - apparent = zone offset (incl. DST) - longitude / 15° - equation of time`
+ *   with a small residual from the geometric Sun position used by the engine.
  *
  * Primary sources:
- * - JPL Horizons (DE441 ephemeris): `CENTER='coord@399'`, `COMMAND='10'`, `QUANTITIES='4'` (azimuth and elevation).
+ * - JPL Horizons (DE441 ephemeris), topocentric observer at each site's coordinates, target Sun,
+ *   `CENTER='coord@399'`, `COMMAND='10'`, `QUANTITIES='4'` (azimuth/elevation). Transit instants
+ *   are linearly interpolated between the listed one-minute azimuth samples.
  *   For northern sites transit occurs at azimuth 180.0° (due South); for southern sites transit occurs at
  *   azimuth 0.0°/360.0° (due North).
- * - Queries:
+ * - Queries (east longitude, north latitude, elevation in km):
  *   1. Prague (50.0875° N, 14.4214° E, `Europe/Prague`):
+ *      `SITE_COORD='14.4214,50.0875,0'`
  *      - 2026-06-21T11:04:07Z (Summer / DST, CEST = UTC+2):
  *        JPL Horizons 11:04:00 az=179.937°, 11:05:00 az=180.449°, transit at 11:04:07 UTC.
  *        Civil time: 13:04:07 CEST.
@@ -31,12 +36,16 @@ import java.time.ZoneId
  *        JPL Horizons 11:11:00 az=179.829°, 11:12:00 az=180.075°, transit at 11:11:42 UTC.
  *        Civil time: 12:11:42 CET.
  *   2. Sydney (-33.8688° S, 151.2093° E, `Australia/Sydney`):
+ *      `SITE_COORD='151.2093,-33.8688,0'`
  *      - 2026-01-15T02:04:24Z (Summer / DST, AEDT = UTC+11):
  *        JPL Horizons 02:04:00 az=0.432°, 02:05:00 az=359.374° (-0.626°), transit at 02:04:24 UTC.
  *        Civil time: 13:04:24 AEDT.
  *      - 2026-06-21T01:56:53Z (Winter / non-DST, AEST = UTC+10):
  *        JPL Horizons 01:56:00 az=0.242°, 01:57:00 az=359.970° (-0.030°), transit at 01:56:53 UTC.
  *        Civil time: 11:56:53 AEST.
+ *
+ * Equation-of-time fixture values are independently derived at each transit from
+ * `apparent noon − mean solar time`, where mean local solar time is `UTC + longitude / 15°`.
  */
 internal data class ApparentSolarTimeFixture(
     val siteName: String,
@@ -45,6 +54,7 @@ internal data class ApparentSolarTimeFixture(
     val zoneId: ZoneId,
     val isDst: Boolean,
     val instant: Instant,
+    val expectedEquationOfTimeMinutes: Double,
     val expectedCivilTime: LocalTime,
     val expectedHandAngleDeg: Double,
 )
@@ -58,6 +68,7 @@ internal val apparentSolarTimeFixtures: List<ApparentSolarTimeFixture> =
             zoneId = ZoneId.of("Europe/Prague"),
             isDst = true,
             instant = Instant.parse("2026-06-21T11:04:07Z"),
+            expectedEquationOfTimeMinutes = -1.8022666666667,
             expectedCivilTime = LocalTime.of(13, 4, 7),
             expectedHandAngleDeg = 16.02916666666667,
         ),
@@ -68,6 +79,7 @@ internal val apparentSolarTimeFixtures: List<ApparentSolarTimeFixture> =
             zoneId = ZoneId.of("Europe/Prague"),
             isDst = false,
             instant = Instant.parse("2026-01-15T11:11:42Z"),
+            expectedEquationOfTimeMinutes = -9.3856,
             expectedCivilTime = LocalTime.of(12, 11, 42),
             expectedHandAngleDeg = 2.925,
         ),
@@ -78,6 +90,7 @@ internal val apparentSolarTimeFixtures: List<ApparentSolarTimeFixture> =
             zoneId = ZoneId.of("Australia/Sydney"),
             isDst = true,
             instant = Instant.parse("2026-01-15T02:04:24Z"),
+            expectedEquationOfTimeMinutes = -9.2372,
             expectedCivilTime = LocalTime.of(13, 4, 24),
             expectedHandAngleDeg = 16.10,
         ),
@@ -88,6 +101,7 @@ internal val apparentSolarTimeFixtures: List<ApparentSolarTimeFixture> =
             zoneId = ZoneId.of("Australia/Sydney"),
             isDst = false,
             instant = Instant.parse("2026-06-21T01:56:53Z"),
+            expectedEquationOfTimeMinutes = -1.7205333333333,
             expectedCivilTime = LocalTime.of(11, 56, 53),
             expectedHandAngleDeg = 359.22083333333336,
         ),

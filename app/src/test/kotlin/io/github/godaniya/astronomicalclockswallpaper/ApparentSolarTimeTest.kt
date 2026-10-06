@@ -23,6 +23,7 @@ class ApparentSolarTimeTest {
     @Test
     fun apparentNoonSunBearingAtXii() {
         for (fixture in apparentSolarTimeFixtures) {
+            assertDstMatchesZoneRules(fixture)
             val location =
                 ObservingLocation(
                     latitude = fixture.latitudeDeg,
@@ -63,7 +64,14 @@ class ApparentSolarTimeTest {
 
             // Angular offset between civil hand and Sun marker
             val angularOffset = (handAngle - sunBearingDeg).mod(FULL_TURN_DEGREES)
-            val expectedOffset = fixture.expectedHandAngleDeg.mod(FULL_TURN_DEGREES)
+            val utcOffsetHours =
+                location.zoneId.rules
+                    .getOffset(fixture.instant)
+                    .totalSeconds /
+                    SECONDS_PER_HOUR
+            val longitudeOffsetHours = fixture.longitudeDeg / DEGREES_PER_HOUR
+            val equationOfTimeHours = fixture.expectedEquationOfTimeMinutes / MINUTES_PER_HOUR
+            val expectedOffset = (utcOffsetHours - longitudeOffsetHours - equationOfTimeHours) * DEGREES_PER_HOUR
             val offsetDifference = (angularOffset - expectedOffset).mod(FULL_TURN_DEGREES)
             val offsetDeviation =
                 if (offsetDifference > HALF_TURN_DEGREES) {
@@ -137,11 +145,22 @@ class ApparentSolarTimeTest {
         )
     }
 
+    private fun assertDstMatchesZoneRules(fixture: ApparentSolarTimeFixture) {
+        assertEquals(
+            "DST flag must match the zone rules for ${fixture.siteName}",
+            fixture.isDst,
+            fixture.zoneId.rules.isDaylightSavings(fixture.instant),
+        )
+    }
+
     private companion object {
         const val FULL_TURN_DEGREES = 360.0
         const val HALF_TURN_DEGREES = 180.0
+        const val DEGREES_PER_HOUR = 15.0
+        const val SECONDS_PER_HOUR = 3600.0
+        const val MINUTES_PER_HOUR = 60.0
 
-        // Comparison tolerance against JPL Horizons solar transit (within 0.02° ~ 1.2 arcminutes)
+        // Allows ephemeris/frame differences at independently sourced JPL Horizons solar transits.
         const val SOLAR_NOON_TOLERANCE_DEG = 0.02
 
         // Civil hand angle precision from LocalTime seconds
