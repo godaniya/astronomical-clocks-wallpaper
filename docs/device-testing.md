@@ -117,10 +117,10 @@ cleared), the `location_permission` preference file removed, the saved site back
 to manual Prague `50.08, 14.42`, `screen_off_pocket` and `proximity_sensor` back
 to 1, `stay_on_while_plugged_in` back to 0, and `accelerometer_rotation` back to 1
 with rotation at portrait. `dumpsys wallpaper` still reported the app's
-`AstronomicalClocksWallpaperService` as the home binding. An
-accidental-touch-protection overlay (`UnintentionalLcdOn`) armed once at the start
-of the re-check and was dismissed with the recorded swipe; disabling the proximity
-sensor stopped it recurring. These checks do not replace lifecycle/battery
+`AstronomicalClocksWallpaperService` as the home binding. A device-specific
+accidental-touch overlay appeared once at the start of the re-check and was
+dismissed with the recorded swipe; disabling the proximity sensor stopped it
+recurring. These checks do not replace lifecycle/battery
 qualification under #6.
 
 ## Observed results
@@ -1209,30 +1209,29 @@ Same physical device. Android version: 16 (API 36). Device locale `de-DE`, devic
 
 ### Framework mechanism and architectural resolution
 
-Android differentiates process termination into two distinct paths governed by package state:
+Android distinguishes force-stop, which marks a package stopped, from non-stopping process death;
+the framework may further handle exits differently based on their reported reason:
 
-1. **Non-stopping process termination (Low-Memory Kill / OOM / `SIGKILL` without force-stop):**
-   When the Linux kernel OOM killer or Android's low-memory killer daemon (`lmkd`) terminates the app
-   process under memory pressure, or when a non-stopping signal is sent (e.g. `run-as <pkg> kill -9 <pid>`),
-   the package state retains `stopped=false`. The framework's `WallpaperManagerService` detects the binder
-   death (`onServiceDisconnected`) and, because the wallpaper remains the active system component and the
-   package is not stopped, automatically re-spawns the app process and rebinds
-   `AstronomicalClocksWallpaperService`. The service receives `onBind`, attaches its engine, reconstructs
-   surface state from persisted preferences, and resumes 1 Hz frame ticking.
+1. **Non-stopping process termination (on-device `SIGKILL` simulation):**
+   This check sent `SIGKILL` with `run-as <pkg> kill -9 <pid>` while leaving the package
+   `stopped=false`; it did not create memory pressure or test `lmkd` victim selection. With the wallpaper
+   still selected, `WallpaperManagerService` receives `onServiceDisconnected` and attempts to rebind the
+   provider. On this device, that binding restarted `AstronomicalClocksWallpaperService`; it received
+   `onBind`, attached its engine, reconstructed surface state from persisted preferences, and resumed 1 Hz
+   frame ticking. This demonstrates the observed non-stopping process-death path, not an actual low-memory
+   kill under memory pressure.
 
 2. **Force-stop (`am force-stop` or Settings -> Apps -> Force stop):**
-   `ActivityManagerService.forceStopPackage()` explicitly marks the package with `FLAG_STOPPED` (`stopped=true`).
-   Android's platform security and lifecycle contract strictly forbids implicit broadcasts, background service
-   starts, or automatic service rebinding for any stopped package until the user explicitly initiates an action
-   by launching one of the application's activities. In response to a force-stop, `WallpaperManagerService`
-   unbinds the live wallpaper and falls back to the system's default static wallpaper (`ImageWallpaper`).
-   The live wallpaper provider is intentionally not rebound on returning to the home screen.
+   `ActivityManagerService.forceStopPackage()` marks the package stopped (`stopped=true`). Android does not
+   start a stopped package for background work; a user-initiated app launch clears that state. On this device,
+   force-stop removed the live wallpaper binding and the system displayed its static wallpaper
+   (`ImageWallpaper`). Returning to the home screen did not rebind the provider.
 
 3. **Resolution:**
    This is an **accepted platform limitation** inherent to Android's stopped-package security model. Live
    wallpaper re-application without user interaction requires `android.permission.SET_WALLPAPER_COMPONENT`, a
-   `signature|privileged` system permission inaccessible to normal third-party applications. Fighting or
-   attempting to bypass `FLAG_STOPPED` would violate Android CDD requirements and platform design principles.
+   `signature|privileged` system permission unavailable to ordinary third-party applications. An app has no
+   supported way to clear its own force-stop state or restart itself in the background.
    The application already satisfies the safety requirements: the saved observing site and all dial layer
    settings survive force-stop intact in private storage, launching `SettingsActivity` immediately clears the
    stopped state (`stopped=false`), and tapping **Open wallpaper preview** allows the user to re-apply the
@@ -1245,17 +1244,21 @@ enabled (Moon, Zodiac ring, Sun), and the live wallpaper active on home and lock
 
 | Date | Check | Observed |
 | --- | --- | --- |
-| 2026-10-06 | low-memory kill (LMK simulation) | Process `21302` was killed via `run-as ... kill -9 21302` without stopping the package (`stopped=false`). `dumpsys wallpaper` maintained `AstronomicalClocksWallpaperService`; `WallpaperManagerService` immediately respawned the process with PID `21794` (~200 ms latency). Logcat recorded `onBind`, engine attach, surface creation, and `Wallpaper has updated the surface`, resuming frame rendering. `observing_location.xml` and `dial_settings.xml` were intact |
+| 2026-10-06 | non-stopping `SIGKILL` simulation (not an LMK run) | Process `21302` was killed via `run-as ... kill -9 21302` without stopping the package (`stopped=false`). `dumpsys wallpaper` maintained `AstronomicalClocksWallpaperService`; the framework rebound it and the process returned with PID `21794` (~200 ms latency). Logcat recorded `onBind`, engine attach, surface creation, and `Wallpaper has updated the surface`, resuming frame rendering. `observing_location.xml` and `dial_settings.xml` were intact |
 | 2026-10-06 | force-stop | `am force-stop` killed PID `21794` and set `stopped=true`. `dumpsys wallpaper` immediately dropped the provider and bound `ComponentInfo{com.android.systemui/com.android.systemui.wallpapers.ImageWallpaper}` across all display contexts. Returning to the home screen spawned no process (`pidof` empty); the framework stayed on `ImageWallpaper` |
 | 2026-10-06 | relaunch and state resilience | Launching `SettingsActivity` cleared `stopped=true` to `stopped=false`. `shared_prefs/observing_location.xml` was byte-identical to baseline (`50.08, 14.42`, `MANUAL`, `Europe/Prague`), and dial layers remained intact |
 | 2026-10-06 | preview re-application | Tapping **Open wallpaper preview** (`open_preview`) opened `LiveWallpaperChange`; selecting **Start- und Sperrbildschirm** (Home and lock screens) rebound `AstronomicalClocksWallpaperService` with PID `21987`. Returning home resumed the active dial from wall time |
 
-**Limitations.** Physical memory exhaustion was simulated by sending `SIGKILL` to the process via `run-as`
-rather than exhausting system RAM with an allocation stressor; the kernel OOM killer and `run-as kill -9`
-deliver the identical signal (`SIGKILL`) to the target PID while leaving package flags unaltered, so the
-framework's rebinding behavior is equivalent. Reboot and battery drain are not re-evidenced here.
+**Limitations.** The physical-device check used `run-as ... kill -9` to exercise non-stopping process
+termination; it did not create memory pressure or verify an actual kernel OOM / `lmkd` kill. The result
+documents the observed rebind after `SIGKILL` with `stopped=false`, not equivalence with every low-memory
+kill scenario. Android 16's [`WallpaperManagerService`](https://github.com/aosp-mirror/platform_frameworks_base/blob/android16-release/services/core/java/com/android/server/wallpaper/WallpaperManagerService.java#L1227-L1262)
+handles exits reported as `REASON_LOW_MEMORY` separately: it delays rebind attempts and can revert to the
+built-in wallpaper after repeated low-memory exits. The `SIGKILL` run does not exercise that branch, so
+verification under actual memory pressure remains outstanding. Reboot and battery drain are not
+re-evidenced here.
 
-Device settings changed and restored: `screen_off_pocket` was temporarily set to 0 to bypass the Samsung
-accidental-touch overlay (`UnintentionalLcdOn`) during preview UI navigation, and restored to 1. The device
-was left with `screen_off_pocket=1`, `AstronomicalClocksWallpaperService` bound to the home and lock screens
-(PID `21987`), saved site Prague `50.08, 14.42` intact, and the screen dozing.
+Device settings changed and restored: an accidental-touch protection setting was temporarily changed to
+allow preview UI navigation, then restored. The device was left with
+`AstronomicalClocksWallpaperService` bound to the home and lock screens (PID `21987`), saved site Prague
+`50.08, 14.42` intact, and the screen dozing.
