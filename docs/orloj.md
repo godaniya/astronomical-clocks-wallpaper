@@ -169,13 +169,17 @@ approximately ±16 minutes over the year due to Earth's orbital eccentricity and
 marker uses the engine's geometric position, so the measured angular offset has a small additional
 ephemeris/frame residual.
 
-On the historical Prague Orloj, the Roman scale reads local Prague civil time (CET), the zodiac turns at
-the sidereal rate over fixed day/twilight/night regions, and the Sun sits on a single arm with the civil
-hand. Because Prague (14.42°E) lies within 0.58° (about 2.3 minutes of Earth rotation) of the 15°E
-Central European Time meridian, the civil hand and apparent Sun diverge by only a few minutes during
-standard winter time (CET, UTC+1). At arbitrary global sites, or under daylight saving time (such as CEST,
-UTC+2), the civil hand and Sun marker legitimately diverge by an hour or more. That divergence is the
-astronomical reading of the instrument, not a synchronization defect.
+On the historical Prague Orloj, the Roman scale is described as reading local Prague civil time (CET),
+the zodiac turns at the sidereal rate over fixed day/twilight/night regions, and the Sun sits on a
+single arm with the civil hand. That reading is a mechanical inference from published descriptions of
+the instrument rather than an independently verified measurement; it follows the *Prague astronomical
+clock* entry in [Sources](#sources), and mechanical detail beyond those descriptions is unverified.
+Prague (14.42°E) lies within 0.58° of the 15°E Central European Time meridian, so that longitude term
+alone is small — about 2.3 minutes of Earth rotation — but the equation of time dominates it, swinging
+the standard-time (CET, UTC+1) offset to roughly ±16 minutes over the year. At arbitrary global sites,
+or under daylight saving time (such as CEST, UTC+2), the civil hand and Sun marker legitimately diverge
+by an hour or more. That divergence is the astronomical reading of the instrument, not a synchronization
+defect.
 
 The day, twilight, and night altitude regions depend solely on latitude magnitude `|φ|`, and the
 zodiac's sidereal rotation depends solely on UTC instant and site longitude. Neither depends on the
@@ -303,8 +307,9 @@ up to 13.5 arcseconds. The Sun column's frame, generator, and the reason for its
 recorded there too; its largest residual against the engine is 0.000434° (1.56″), and JPL Horizons
 independently gives the same instant's geocentric Sun to within 0.374″, which is what fixes the
 value as geometric and aberration-free. Independent solar-noon fixtures from JPL Horizons validate
-the Sun marker's bearing against the Roman scale at local apparent noon across northern and southern
-sites under both DST and non-DST conditions, documented in
+the Sun marker's bearing against the Roman scale at local apparent noon, and that it advances at the
+15°/h apparent solar rate an hour later, across northern and southern sites under both DST and
+non-DST conditions, documented in
 [`ApparentSolarTimeFixture.kt`](../app/src/test/kotlin/io/github/godaniya/astronomicalclockswallpaper/ApparentSolarTimeFixture.kt).
 Analytic projection
 tests cover equinoxes/solstices, circle tangencies, rotation direction, northern/southern sites,

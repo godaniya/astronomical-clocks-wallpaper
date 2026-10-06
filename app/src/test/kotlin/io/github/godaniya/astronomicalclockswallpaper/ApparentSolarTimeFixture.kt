@@ -12,13 +12,13 @@ import java.time.ZoneId
  * At Local Apparent Noon:
  * - The Sun transits the local celestial meridian; its apparent local hour angle is `H = 0.0°`.
  * - Local Apparent Solar Time is exactly 12:00:00.
- * - The dial uses the engine's geocentric geometric Sun position, which omits annual aberration;
- *   its marker therefore approximates, rather than exactly represents, the apparent hour angle.
- *   The test checks its bearing against XII within the documented tolerance.
+ * - The dial uses the engine's geocentric geometric Sun position, which omits annual aberration and
+ *   topocentric solar parallax; its marker therefore approximates, rather than exactly represents, the
+ *   apparent hour angle. The test checks its bearing against XII within the documented tolerance, which
+ *   covers that residual.
  * - The civil hand reflects the observing location's geographic timezone (including DST) at that instant.
  * - The civil/apparent offset is predicted by:
- *   `civil - apparent = zone offset (incl. DST) - longitude / 15° - equation of time`
- *   with a small residual from the geometric Sun position used by the engine.
+ *   `civil - apparent = zone offset (incl. DST) - longitude / 15° - equation of time`.
  *
  * Primary sources:
  * - JPL Horizons (DE441 ephemeris), topocentric observer at each site's coordinates, target Sun,
@@ -44,8 +44,13 @@ import java.time.ZoneId
  *        JPL Horizons 01:56:00 az=0.242°, 01:57:00 az=359.970° (-0.030°), transit at 01:56:53 UTC.
  *        Civil time: 11:56:53 AEST.
  *
- * Equation-of-time fixture values are independently derived at each transit from
- * `apparent noon − mean solar time`, where mean local solar time is `UTC + longitude / 15°`.
+ * Equation-of-time fixture values are derived at each transit from the same transit instant and
+ * longitude as the rest of that fixture, as `apparent noon − mean solar time`, where mean local solar
+ * time is `UTC + longitude / 15°`. They are therefore a cross-check on the fixture constants and the
+ * JDK zone rules, not an independent source against the engine's ephemeris: the transit instants above
+ * are independently sourced from JPL Horizons, but each equation-of-time value restates its own transit
+ * instant. The engine residual the tests actually measure is the omitted annual aberration (~20.5″)
+ * plus topocentric solar parallax (~8.8″), both absent from the geometric Sun position the dial projects.
  */
 internal data class ApparentSolarTimeFixture(
     val siteName: String,
@@ -57,7 +62,16 @@ internal data class ApparentSolarTimeFixture(
     val expectedEquationOfTimeMinutes: Double,
     val expectedCivilTime: LocalTime,
     val expectedHandAngleDeg: Double,
-)
+) {
+    /** The manual observing site this fixture describes, as [AstronomyEngineCalculator] consumes it. */
+    val location: ObservingLocation =
+        ObservingLocation(
+            latitude = latitudeDeg,
+            longitude = longitudeDeg,
+            source = ObservingLocation.Source.MANUAL,
+            zoneId = zoneId,
+        )
+}
 
 internal val apparentSolarTimeFixtures: List<ApparentSolarTimeFixture> =
     listOf(
