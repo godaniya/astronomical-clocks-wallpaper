@@ -20,6 +20,7 @@ import kotlin.math.atan2
  *    makes the transit bearing a reading of apparent solar time rather than a coordinate coincidence.
  * 3. Northern and southern sites, under both DST and non-DST conditions, are verified.
  * 4. Dial shading (day, twilight, night regions) and zodiac sidereal rotation are strictly zone-independent.
+ * 5. The fixture set covers a northern and a southern site under both DST and non-DST conditions.
  *
  * The offset check guards the fixture constants and the JDK zone rules, not the engine's ephemeris.
  * It re-derives the documented offset `civil − apparent = UTC offset − east longitude/15° − equation
@@ -31,6 +32,19 @@ import kotlin.math.atan2
  */
 class ApparentSolarTimeTest {
     private val calculator = AstronomyEngineCalculator()
+
+    @Test
+    fun fixturesCoverSitesAndDst() {
+        // Issue #57 requires a northern and a southern site under both DST and non-DST
+        // conditions. Two hemispheres crossed with two DST states is exactly four
+        // combinations, so a full set here keeps a dropped or relabelled fixture from
+        // silently narrowing what the other tests exercise.
+        assertEquals(
+            "fixtures must cover both hemispheres under both DST and non-DST conditions",
+            HEMISPHERE_DST_COMBINATIONS,
+            apparentSolarTimeFixtures.map { (it.latitudeDeg > 0) to it.isDst }.toSet().size,
+        )
+    }
 
     @Test
     fun apparentNoonSunBearingAtXii() {
@@ -209,5 +223,8 @@ class ApparentSolarTimeTest {
 
         // Civil hand angle precision from LocalTime seconds
         const val CIVIL_HAND_TOLERANCE_DEG = 0.005
+
+        // Two hemispheres crossed with two DST states.
+        const val HEMISPHERE_DST_COMBINATIONS = 4
     }
 }
