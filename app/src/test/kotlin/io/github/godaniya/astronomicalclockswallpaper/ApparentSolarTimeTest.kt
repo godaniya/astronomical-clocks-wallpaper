@@ -39,6 +39,15 @@ class ApparentSolarTimeTest {
         // conditions. Two hemispheres crossed with two DST states is exactly four
         // combinations, so a full set here keeps a dropped or relabelled fixture from
         // silently narrowing what the other tests exercise.
+        //
+        // The equator (latitude 0°) belongs to neither hemisphere, and `> 0` would file it
+        // under southern, so an equatorial fixture could stand in for the southern one and
+        // still complete the square. Reject it explicitly; then every fixture is strictly
+        // northern or strictly southern and a count of four does mean the whole matrix.
+        assertTrue(
+            "no solar-noon fixture may sit on the equator: latitude 0° is neither hemisphere",
+            apparentSolarTimeFixtures.none { it.latitudeDeg == 0.0 },
+        )
         assertEquals(
             "fixtures must cover both hemispheres under both DST and non-DST conditions",
             HEMISPHERE_DST_COMBINATIONS,
