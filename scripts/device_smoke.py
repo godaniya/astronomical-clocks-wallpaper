@@ -116,7 +116,9 @@ def restore_device(device: device_layer.AdbDevice, size_override: str | None, *,
 def step_reset_clock_and_show_home(device: device_layer.AdbDevice) -> bool:
     """Wake the screen, dismiss the keyguard, show home, and confirm the debug clock reset."""
     print("Waking the screen and showing the home screen...")
-    device.wake_screen()
+    if not device.wake_screen():
+        print("ERROR: screen wake was not confirmed; skipping the virtual-clock reset.", file=sys.stderr)
+        return False
     device.dismiss_keyguard()
     device.show_home()
     time.sleep(1.0)
@@ -264,7 +266,8 @@ def collect_failures(outcome: SmokeOutcome, *, restored: bool) -> list[str]:
     failures = []
     if not outcome.initial_reset_confirmed:
         failures.append(
-            "initial virtual-clock reset was not confirmed; time travel and surface recreation were skipped"
+            "initial device setup (wake and virtual-clock reset) was not confirmed; "
+            "time travel and surface recreation were skipped"
         )
     else:
         measurement = outcome.measurement
@@ -297,7 +300,7 @@ def print_results(baseline: SmokeBaseline, recreate_size: str, outcome: SmokeOut
     print("| Date | Check | Observed |")
     print("| --- | --- | --- |")
     if not outcome.initial_reset_confirmed:
-        skip_note = "SKIPPED: initial virtual-clock reset was not confirmed by the service log"
+        skip_note = "SKIPPED: initial device setup (wake and virtual-clock reset) was not confirmed"
         print(f"| {today} | virtual time travel (+30m) | {skip_note} |")
         print(f"| {today} | surface recreation | {skip_note} |")
     else:
@@ -360,7 +363,7 @@ def main() -> None:
             recreation = step_recreate_surface(device, baseline.size_override, recreate_size)
         else:
             print(
-                "ERROR: initial virtual-clock reset was not confirmed; "
+                "ERROR: initial device setup (wake and virtual-clock reset) was not confirmed; "
                 "skipping time travel and surface recreation checks.",
                 file=sys.stderr,
             )

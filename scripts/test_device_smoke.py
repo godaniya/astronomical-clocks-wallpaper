@@ -210,6 +210,24 @@ class SmokeHarnessHardeningTest(unittest.TestCase):
         self.assertIsNone(measurement)
         self.assertIn("offset was not confirmed", error_output.getvalue())
 
+    def test_a_failed_wake_skips_the_reset_and_dependent_steps(self) -> None:
+        """A wake that is not confirmed must stop the step before the reset and the navigation."""
+        with (
+            patch.object(device_layer, "wake_screen", return_value=False) as wake,
+            patch.object(device_layer.AdbDevice, "dismiss_keyguard") as dismiss,
+            patch.object(device_layer.AdbDevice, "show_home") as home,
+            patch.object(device_layer, "confirm_virtual_clock_reset") as reset,
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()) as error_output,
+        ):
+            confirmed = device_smoke.step_reset_clock_and_show_home(device_layer.AdbDevice("device"))
+        self.assertFalse(confirmed)
+        wake.assert_called_once_with("device")
+        dismiss.assert_not_called()
+        home.assert_not_called()
+        reset.assert_not_called()
+        self.assertIn("wake was not confirmed", error_output.getvalue())
+
     @patch.object(device_smoke, "step_recreate_surface")
     @patch.object(device_smoke, "step_time_travel")
     @patch.object(device_smoke, "step_reset_clock_and_show_home", return_value=False)

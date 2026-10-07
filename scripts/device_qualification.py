@@ -153,7 +153,9 @@ def restore_device(
 def phase_environment_setup(device: device_layer.AdbDevice, failures: list[str]) -> bool:
     """Wake the device, dismiss the keyguard, show home, and confirm the debug-clock reset."""
     print("\n--- Phase 0: Environment Wake & Unlocking ---")
-    device.wake_screen()
+    if not device.wake_screen():
+        failures.append("Environment wake was not confirmed by the screen-state readback")
+        return False
     device.dismiss_keyguard()
     device.show_home()
     time.sleep(1.0)
@@ -182,12 +184,16 @@ def phase_baseline_capture(device: device_layer.AdbDevice, results: list[tuple[s
 def phase_screen_off_wake(device: device_layer.AdbDevice, results: list[tuple[str, str]], failures: list[str]) -> None:
     """Sleep the screen, wake it, and confirm the hand is rendered again."""
     print("\n--- Phase 1: Screen-Off / Wake Navigation ---")
-    device.sleep_screen()
+    if not device.sleep_screen():
+        failures.append("Screen sleep request failed; the screen-off / wake phase was skipped")
+        return
     time.sleep(4.0)
     screen_went_off = device.read_screen_on() is False
 
     # Wake device back up
-    device.wake_screen()
+    if not device.wake_screen():
+        failures.append("Device wake was not confirmed after the screen-off interval")
+        return
     device.dismiss_keyguard()
     device.show_home()
     time.sleep(1.0)
@@ -614,7 +620,7 @@ def main() -> None:
             current_phase = "total PSS growth"
             phase_total_pss_growth(device, args.max_pss_growth_kb, results, failures)
         else:
-            print("Skipping phases 1-6: environment reset was not confirmed.", file=sys.stderr)
+            print("Skipping phases 1-6: environment setup was not confirmed.", file=sys.stderr)
 
     except (subprocess.SubprocessError, OSError, RuntimeError) as error:
         failures.append(f"Run aborted during {current_phase}: {device_layer.error_detail(error)}")

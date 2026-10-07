@@ -909,6 +909,67 @@ class PhasePrerequisiteTest(unittest.TestCase):
             with self.subTest(readback=readback):
                 self.check_surface_failure_through_main(qualification, readback)
 
+    def test_a_failed_environment_wake_skips_the_reset_broadcast(self) -> None:
+        """An unconfirmed environment wake must stop phase 0 before any reset or navigation."""
+        failures: list[str] = []
+        with (
+            patch.object(device_layer, "wake_screen", return_value=False) as wake,
+            patch.object(device_layer.AdbDevice, "dismiss_keyguard") as dismiss,
+            patch.object(device_layer.AdbDevice, "show_home") as home,
+            patch.object(device_layer, "send_debug_clock_broadcast") as broadcast,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            confirmed = qualification.phase_environment_setup(device_layer.AdbDevice("device"), failures)
+        self.assertFalse(confirmed)
+        wake.assert_called_once_with("device")
+        dismiss.assert_not_called()
+        home.assert_not_called()
+        broadcast.assert_not_called()
+        self.assertEqual(failures, ["Environment wake was not confirmed by the screen-state readback"])
+
+    def test_a_failed_sleep_stops_the_screen_off_phase(self) -> None:
+        """A refused screen-sleep request must not be papered over by the wake/capture checks."""
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with (
+            patch.object(device_layer, "sleep_screen", return_value=False) as sleep,
+            patch.object(device_layer, "read_screen_on") as read_screen,
+            patch.object(device_layer, "wake_screen") as wake,
+            patch.object(device_layer, "capture_frame") as capture,
+            patch.object(qualification.time, "sleep"),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            qualification.phase_screen_off_wake(device_layer.AdbDevice("device"), results, failures)
+        sleep.assert_called_once_with("device")
+        read_screen.assert_not_called()
+        wake.assert_not_called()
+        capture.assert_not_called()
+        self.assertEqual(failures, ["Screen sleep request failed; the screen-off / wake phase was skipped"])
+        self.assertEqual(results, [])
+
+    def test_a_failed_wake_stops_the_screen_off_phase(self) -> None:
+        """An unconfirmed wake must stop the phase before the keyguard, home, and capture checks."""
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with (
+            patch.object(device_layer, "sleep_screen", return_value=True),
+            patch.object(device_layer, "read_screen_on", return_value=False) as read_screen,
+            patch.object(device_layer, "wake_screen", return_value=False) as wake,
+            patch.object(device_layer.AdbDevice, "dismiss_keyguard") as dismiss,
+            patch.object(device_layer.AdbDevice, "show_home") as home,
+            patch.object(device_layer, "capture_frame") as capture,
+            patch.object(qualification.time, "sleep"),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            qualification.phase_screen_off_wake(device_layer.AdbDevice("device"), results, failures)
+        read_screen.assert_called_once_with("device")
+        wake.assert_called_once_with("device")
+        dismiss.assert_not_called()
+        home.assert_not_called()
+        capture.assert_not_called()
+        self.assertEqual(failures, ["Device wake was not confirmed after the screen-off interval"])
+        self.assertEqual(results, [])
+
     def check_surface_failure_through_main(self, module: ModuleType, readback: tuple[str | None, str | None]) -> None:
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.object(sys, "argv", ["harness", "--max-pss-growth-kb", "10"]))
