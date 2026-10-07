@@ -11,6 +11,7 @@ import re
 import struct
 import subprocess
 import sys
+import time
 from collections.abc import Iterable, Iterator, Sequence
 from typing import Final
 
@@ -35,6 +36,11 @@ DEBUG_CLOCK_RESET_MESSAGE: Final = "Debug clock reset to system UTC"
 # Bound every ADB call: a stalled transport would otherwise block the run forever.
 ADB_TIMEOUT_SECONDS: Final = 30
 ADB_RESTORE_TIMEOUT_SECONDS: Final = 60
+
+# The service logs its acceptance asynchronously; a deferred or racy write can land after the
+# broadcast command returns, so the confirmation re-reads a bounded number of times.
+LOG_CONFIRM_ATTEMPTS: Final = 5
+LOG_CONFIRM_INTERVAL_SECONDS: Final = 0.5
 
 PHYSICAL_SIZE_PATTERN: Final = re.compile(r"^Physical size:\s*(\d+x\d+)$")
 OVERRIDE_SIZE_PATTERN: Final = re.compile(r"^Override size:\s*(\d+x\d+)$")
@@ -396,12 +402,15 @@ def run_restore_command(serial: str, command: Sequence[str]) -> bool:
 
 
 def count_service_log_messages(serial: str, message: str) -> int:
-    """Count the current service-tagged logcat lines that contain the given message."""
-    output = run_adb(
-        ["logcat", "-d", "-s", f"{SERVICE_LOG_TAG}:I"],
-        serial=serial,
-    ).decode("utf-8")
-    return sum(message in line for line in output.splitlines())
+    """
+    Count the service-tagged lines containing the message in an unfiltered logcat dump.
+
+    The tag and message match host-side: logcat's device-side `-s` filter reads the compressed
+    buffer entry by entry and measured about 17s on a full buffer against 2.5s for the unfiltered
+    dump, which would otherwise leave little room under the ADB timeout.
+    """
+    output = run_adb(["logcat", "-d"], serial=serial).decode("utf-8", errors="replace")
+    return sum(message in line and f"{SERVICE_LOG_TAG}: " in line for line in output.splitlines())
 
 
 def send_debug_clock_broadcast(serial: str, extras: Sequence[str], expected_message: str) -> bool:
@@ -412,7 +421,12 @@ def send_debug_clock_broadcast(serial: str, extras: Sequence[str], expected_mess
         serial=serial,
         timeout=ADB_RESTORE_TIMEOUT_SECONDS,
     )
-    return count_service_log_messages(serial, expected_message) > before
+    for attempt in range(LOG_CONFIRM_ATTEMPTS):
+        if count_service_log_messages(serial, expected_message) > before:
+            return True
+        if attempt + 1 < LOG_CONFIRM_ATTEMPTS:
+            time.sleep(LOG_CONFIRM_INTERVAL_SECONDS)
+    return False
 
 
 def confirm_virtual_clock_reset(serial: str) -> bool:

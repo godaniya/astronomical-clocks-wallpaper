@@ -200,10 +200,11 @@ class DeviceQualificationTest(unittest.TestCase):
         )
         run_adb.assert_called_once()
 
-    @patch.object(device_layer, "count_service_log_messages", side_effect=[2, 2])
+    @patch.object(device_layer, "count_service_log_messages", return_value=2)
+    @patch.object(device_layer.time, "sleep")
     @patch.object(device_layer, "run_adb")
     def test_debug_clock_broadcast_fails_without_a_new_acceptance_log(
-        self, run_adb: MagicMock, _count_logs: MagicMock
+        self, run_adb: MagicMock, _sleep: MagicMock, count_logs: MagicMock
     ) -> None:
         self.assertFalse(
             device_layer.send_debug_clock_broadcast(
@@ -213,6 +214,19 @@ class DeviceQualificationTest(unittest.TestCase):
             )
         )
         run_adb.assert_called_once()
+        self.assertEqual(count_logs.call_count, device_layer.LOG_CONFIRM_ATTEMPTS + 1)
+
+    @patch.object(device_layer, "run_adb")
+    def test_service_log_count_matches_the_tag_and_message_host_side(self, run_adb: MagicMock) -> None:
+        message = "Debug clock offset set to 1800000ms"
+        run_adb.return_value = (
+            f"10-07 22:55:49.774 15746 15746 I {device_layer.SERVICE_LOG_TAG}: {message}\n"
+            f"10-07 22:55:49.775 15746 15746 I SomeOtherTag: {message}\n"
+            "10-07 22:55:49.776  1858  1858 D WALLPAPER_SVC:WallpaperManagerService( 1858): "
+            f"ComponentInfo{{io.github.godaniya.astronomicalclockswallpaper.{device_layer.SERVICE_LOG_TAG}}}\n"
+            f"10-07 22:55:49.777 15746 15746 W {device_layer.SERVICE_LOG_TAG}: unrelated warning\n"
+        ).encode()
+        self.assertEqual(device_layer.count_service_log_messages("device", message), 1)
 
     @patch.object(device_layer, "read_keyguard_locked", return_value=False)
     @patch.object(device_layer, "read_screen_on", return_value=False)
