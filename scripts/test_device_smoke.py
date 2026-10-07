@@ -195,20 +195,34 @@ class SmokeHarnessHardeningTest(unittest.TestCase):
             self.assertFalse(device_smoke.restore_device(device_layer.AdbDevice("device"), None, screen_was_on=True))
         self.assertIn("not confirmed unlocked", error_output.getvalue())
 
-    @patch.object(device_layer, "read_keyguard_locked", return_value=False)
     @patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16)))
     @patch.object(device_layer, "detect_hand_angle", return_value=0.0)
-    @patch.object(device_layer, "count_service_log_messages", return_value=0)
+    @patch.object(device_layer, "send_debug_clock_broadcast", return_value=False)
     @patch.object(device_layer, "run_adb")
     def test_an_unconfirmed_30m_offset_is_not_measured(
-        self, _run_adb: MagicMock, _count: MagicMock, _angle: MagicMock, _capture: MagicMock, _keyguard: MagicMock
+        self, _run_adb: MagicMock, _send: MagicMock, _angle: MagicMock, _capture: MagicMock
     ) -> None:
-        # The offset broadcast's own log count never advances, so the measurement must come back
+        # The shared confirmation never accepts the offset broadcast, so the measurement must come back
         # unmeasurable rather than reporting a zero-delta advance against an unconfirmed clock.
         with contextlib.redirect_stderr(io.StringIO()) as error_output:
             measurement = device_smoke.step_time_travel(device_layer.AdbDevice("device"))
         self.assertIsNone(measurement)
         self.assertIn("offset was not confirmed", error_output.getvalue())
+
+    @patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16)))
+    @patch.object(device_layer, "detect_hand_angle", return_value=0.0)
+    @patch.object(device_layer, "send_debug_clock_broadcast", return_value=True)
+    @patch.object(device_layer, "run_adb")
+    def test_the_smoke_offset_uses_the_shared_broadcast_confirmation(
+        self, _run_adb: MagicMock, broadcast: MagicMock, _angle: MagicMock, _capture: MagicMock
+    ) -> None:
+        """The offset must go through the shared retry-based confirmation, not a private single read."""
+        with contextlib.redirect_stdout(io.StringIO()):
+            measurement = device_smoke.step_time_travel(device_layer.AdbDevice("device"))
+        broadcast.assert_called_once_with(
+            "device", ["--el", "offset_minutes", "30"], "Debug clock offset set to 1800000ms"
+        )
+        self.assertIsNotNone(measurement)
 
     def test_a_failed_wake_skips_the_reset_and_dependent_steps(self) -> None:
         """A wake that is not confirmed must stop the step before the reset and the navigation."""
@@ -497,7 +511,7 @@ class PhasePrerequisiteTest(unittest.TestCase):
             stack.enter_context(patch.object(module, "read_baseline", return_value=smoke_baseline))
             stack.enter_context(patch.object(module, "step_reset_clock_and_show_home", return_value=True))
             stack.enter_context(
-                patch.object(module, "step_time_travel", return_value=device_smoke.AdvanceMeasurement(7.5, 0.0, 1.0))
+                patch.object(module, "step_time_travel", return_value=device_smoke.AdvanceMeasurement(7.5, 0.0))
             )
             stack.enter_context(patch.object(module, "scan_renderer_log", return_value=[]))
             with self.assertRaises(SystemExit) as exit_error:
@@ -521,7 +535,7 @@ class PhasePrerequisiteTest(unittest.TestCase):
             self.assertEqual(recreation.restore_was_verified, verified)
             outcome = device_smoke.SmokeOutcome(
                 initial_reset_confirmed=True,
-                measurement=device_smoke.AdvanceMeasurement(7.5, 0.0, 1.0),
+                measurement=device_smoke.AdvanceMeasurement(7.5, 0.0),
                 recreation=recreation,
                 warnings=[],
             )
@@ -559,7 +573,7 @@ class SmokeRendererLogTest(unittest.TestCase):
             patch.object(sys, "argv", ["device_smoke.py"]),
             patch.object(device_smoke, "read_baseline", return_value=baseline),
             patch.object(device_smoke, "step_reset_clock_and_show_home", return_value=True),
-            patch.object(device_smoke, "step_time_travel", return_value=device_smoke.AdvanceMeasurement(7.5, 0.0, 1.0)),
+            patch.object(device_smoke, "step_time_travel", return_value=device_smoke.AdvanceMeasurement(7.5, 0.0)),
             patch.object(device_smoke, "step_recreate_surface", return_value=recreation),
             patch.object(device_smoke, "restore_device", return_value=restored) as restore,
             patch.object(device_layer, "run_adb", side_effect=error, return_value=b"--------- beginning of main\n"),

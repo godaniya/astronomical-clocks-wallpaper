@@ -50,7 +50,6 @@ class AdvanceMeasurement:
 
     delta_deg: float
     residual_deg: float
-    broadcast_ms: float
 
 
 @dataclass(frozen=True)
@@ -142,13 +141,7 @@ def step_time_travel(device: device_layer.AdbDevice) -> AdvanceMeasurement | Non
     # Advance virtual time by +30 minutes
     print("Advancing virtual time +30 minutes via debug broadcast...")
     offset_message = "Debug clock offset set to 1800000ms"
-    offset_before = device.count_service_log_messages(offset_message)
-    start_t = time.time()
-    device.run_adb(["shell", "am", "broadcast", "-a", device_layer.DEBUG_ACTION, "--el", "offset_minutes", "30"])
-    broadcast_ms = (time.time() - start_t) * 1000.0
-    print(f"Time travel completed in {broadcast_ms:.1f}ms")
-    time.sleep(0.3)
-    if device.count_service_log_messages(offset_message) <= offset_before:
+    if not device.send_debug_clock_broadcast(["--el", "offset_minutes", "30"], offset_message):
         print("ERROR: +30m time offset was not confirmed by the service log", file=sys.stderr)
         return None
 
@@ -167,7 +160,7 @@ def step_time_travel(device: device_layer.AdbDevice) -> AdvanceMeasurement | Non
         f"Observed angular advance: {delta:.3f}° "
         f"(expected: {device_layer.EXPECTED_ADVANCE_30M_DEG:.3f}°, residual: {residual:+.3f}°)"
     )
-    return AdvanceMeasurement(delta_deg=delta, residual_deg=residual, broadcast_ms=broadcast_ms)
+    return AdvanceMeasurement(delta_deg=delta, residual_deg=residual)
 
 
 def step_recreate_surface(
@@ -311,7 +304,7 @@ def print_results(baseline: SmokeBaseline, recreate_size: str, outcome: SmokeOut
                 f"| {today} | virtual time travel (+30m) | "
                 f"Hand advanced {measurement.delta_deg:.3f}° against {device_layer.EXPECTED_ADVANCE_30M_DEG:.3f}° "
                 f"expected, residual {measurement.residual_deg:+.3f}°; "
-                f"broadcast took {measurement.broadcast_ms:.0f}ms |"
+                "broadcast confirmed by the service log |"
             )
         recreated = "drawn" if recreation.hand_angle is not None else "NOT found"
         applied = "active as requested" if recreation.override_was_active else "NOT active as requested"
