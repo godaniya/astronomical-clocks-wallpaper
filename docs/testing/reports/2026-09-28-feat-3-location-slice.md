@@ -58,7 +58,13 @@ would; that override is no longer needed for manual entry, and the row stays as 
 build it tested.
 
 Unresolved limitations: the display now rounds coordinates to four decimals, as recorded under
-"Coordinate display precision (2026-10-01)" below. The entry fields are seeded from the saved site
+[Coordinate display precision (2026-10-01)](2026-09-30-feat-24-site-timezone.md#coordinate-display-precision-2026-10-01).
+The entry fields are seeded from the saved site
 (#53), so an unchanged Save needs no retyping and keeps the precision below the fourth decimal; that
 seeding landed with its interactive device checks unrun, folded into #42. The offline city chooser
 remains outstanding under #3.
+
+**Editorial note (2026-10-07).** This report was extracted from the original device guide.
+Branch/revision references describe the original feature work. This cleanup corrects report dating,
+cross-report navigation, and evidence scope where applicable; all historical observation rows,
+run dates, measured values, and APK/source attribution are retained. No new measurements were made.

@@ -324,5 +324,5 @@ Representative PNGs for visual inspection are explicitly exported under `app/bui
 `./gradlew exportRepresentativeImages`.
 
 Run `./gradlew qualityGate :app:assembleDebug` and `scripts/verify-apk.sh`. Physical-device home and
-lit-lock-screen correctness for the Sun marker (#27) are documented in [2026-10-03-feat-27-sun-marker.md](testing/reports/2026-10-03-feat-27-sun-marker.md);
+lit-lock-screen correctness for the Sun marker (#27) are documented in [2026-10-04-feat-27-sun-marker.md](testing/reports/2026-10-04-feat-27-sun-marker.md);
 frame cost and battery behavior remain unrun and are tracked in #6.

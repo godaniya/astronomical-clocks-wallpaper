@@ -23,7 +23,20 @@ angle, which is a principal-axis measurement of the hand pixels.
 | 2026-10-03 | repaint cadence, preview | 8 producer frames in 7.0 s, deltas 0.983-1.016 s, so 1.001 Hz |
 | 2026-10-03 | hand angle, preview | Measured hand angle 32.022 degrees against 32.029 degrees implied by the device clock, 0.007 degrees apart |
 
+**Editorial correction (2026-10-07).** The historical “south pole” row above is preserved verbatim.
+The reports use `(latitude, longitude)` (as Sydney's pair demonstrates), so `(0, -90)` is an
+equatorial site, not the south pole. Its annuli observation cannot be attributed to a south-pole
+input from this record. That particular site check remains unverified until original evidence or
+a later device run resolves the inconsistency; no replacement coordinates or measurement are inferred.
+The separate [dial caching report](2026-10-03-perf-39-dial-caching.md) records explicit `(90, 0)`
+and `(-90, 0)` inputs on its own APK; it does not correct the input recorded here.
+
 The equator plate was observed both on the home screen and in the preview; the southern plates on the
 home screen. After the pass the saved site was restored to the device's current location
 (personal coordinates withheld) and the wallpaper was left applied. No failure was observed. The cadence check
 shows only that a frame is produced once per second; battery and frame-cost qualification remain #6.
+
+**Editorial note (2026-10-07).** This report was extracted from the original device guide.
+Branch/revision references describe the original feature work. This cleanup corrects report dating,
+cross-report navigation, and evidence scope where applicable; all historical observation rows,
+run dates, measured values, and APK/source attribution are retained. No new measurements were made.

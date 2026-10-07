@@ -3,8 +3,8 @@
 Test build: local debug `app-debug.apk` from `feat/27-render-sun` at 4ffa962, the review fix on top of
 the rebase at 80e1a9f (APK SHA-256
 1e165b93b8cb1b07b1744ddfc86d3f81cc5c358aebdc064bfd94a07facd46b47), the artifact installed on the
-device below. Subsequent commits on this branch (c0cb0ba and later) are documentation and host-test
-changes only, leaving `app/src/main/` untouched and producing the identical APK bytecode and SHA-256.
+device below. Subsequent commits in the original `feat/27-render-sun` work (c0cb0ba and later)
+are documentation and host-test changes only, leaving `app/src/main/` untouched and producing the identical APK bytecode and SHA-256.
 At 4ffa962, `./gradlew qualityGate :app:assembleDebug` passed with 376 unit tests per build variant
 (now 377 following subsequent host-test additions) and no detekt, ktlint, or Android Lint findings,
 and `scripts/verify-apk.sh` verified the application ID, SDK levels, debug flag, permissions, wallpaper
@@ -80,3 +80,8 @@ equinox-instant and season tests are host tests against fixtures. Always On Disp
 scope per #2. The screenshot pipeline returned the palette unchanged on these captures — `#D8B66A`
 read back as `#D8B66A` — unlike the transform earlier passes recorded; the marker probe normalizes
 each pixel before matching, so its result does not depend on which of the two applies.
+
+**Editorial note (2026-10-07).** This report was extracted from the original device guide.
+Branch/revision references describe the original feature work. This cleanup corrects report dating,
+cross-report navigation, and evidence scope where applicable; all historical observation rows,
+run dates, measured values, and APK/source attribution are retained. No new measurements were made.

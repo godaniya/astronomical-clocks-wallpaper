@@ -42,7 +42,8 @@ altitude -latitude: Prague (50.08) put the centre below the horizon with the nig
 outer day crescent, and Sydney (-33.87) inverted that picture, the centre in daylight with night as
 the outer crescent. The equator put the horizon on a straight line through the hub, and the poles put
 it on concentric circles, with night inside day at the north pole and day inside night at the south
-pole. The southern inversion is the construction replaced in the next section.
+pole. The southern inversion is the construction replaced in the
+[southern plate report](2026-10-03-feat-4-southern-plate.md).
 
 Clearing app data also drops the wallpaper binding, so the wallpaper had to be reapplied by hand
 afterwards; the device was left with the Orloj wallpaper applied and a current-location site
@@ -52,7 +53,12 @@ the reboot row is the process-restart evidence.
 
 The review fixes committed after this pass change documentation, one log string outside the render
 path, and tests, so the rendering output observed above is unchanged and the observations stand for
-the pushed revision.
+the original feature branch's pushed revision, not the current build.
 
-No failure was observed, and no unresolved limitation remains from this pass. The cadence check
+No failure was observed in the checks run. The cadence check
 shows only that a frame is produced once per second; battery and frame-cost qualification remain #6.
+
+**Editorial note (2026-10-07).** This report was extracted from the original device guide.
+Branch/revision references describe the original feature work. This cleanup corrects report dating,
+cross-report navigation, and evidence scope where applicable; all historical observation rows,
+run dates, measured values, and APK/source attribution are retained. No new measurements were made.

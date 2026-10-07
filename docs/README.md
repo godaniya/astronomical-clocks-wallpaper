@@ -64,7 +64,7 @@ Environment configuration, pinned toolchain versions, and dependency governance:
 
 ## 4. Testing & Verification
 
-Reusable procedures, diagnostic commands, acceptance test matrices, and immutable historical verification evidence:
+Reusable procedures, diagnostic commands, acceptance test matrices, and historical verification evidence:
 
 - [**Physical-Device Testing Guide**](device-testing.md) (`device-testing.md`):
   Living canonical guide covering device privacy policies, ADB wireless and USB connections, install and launch procedures, state diagnostic commands, lifecycle state transitions, virtual time manipulation (`DEBUG_SET_TIME`), automated smoke testing (`scripts/device-smoke-test.py`), and the categorized Standard Acceptance Test Matrix.

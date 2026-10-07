@@ -4,7 +4,8 @@ Test build: local debug `app-debug.apk` from `refactor/74-zodiac-hardening` at f
 SHA-256 61d95b92a8c440fe3f2bfdd2ccc1f18d1d23f4904d87ef8aea1076d93f6ea264), the artifact installed on
 the device below, built from a clean tree at that revision.
 
-The pass below predates this branch's rebase onto `main`, which brought in the Sun rendering (#27):
+The pass below predates the original `refactor/74-zodiac-hardening` branch's rebase onto `main`,
+which brought in the Sun rendering (#27):
 `faa4d04` and that APK SHA-256 name the pre-rebase build that was actually installed, and the rebase
 re-created the commit as `eb8fe7a` without repeating the device checks.
 
@@ -13,8 +14,8 @@ override. Firmware build: withheld (embeds the model identifier).
 
 This is the light follow-up spot-check to PR #81. The refactor (discriminant clamp, `try-finally`
 canvas restore, and test hardening) changes no visual output, so the device check confirms the
-structural output is unchanged from the device-verified #43 build rather than re-running the full
-geometry pass. The site was entered through the settings app's coordinate fields as manual Prague
+structural output is unchanged from the [device-verified #43 build](2026-10-03-feat-43-zodiac-compartments.md),
+rather than re-running the full geometry pass. The site was entered through the settings app's coordinate fields as manual Prague
 `50.08, 14.47`.
 
 | Date | Check | Observed |
@@ -26,3 +27,8 @@ geometry pass. The site was entered through the settings app's coordinate fields
 | 2026-10-04 | renderer log | `adb logcat --pid=<pid>` empty over a 31 s steady 1 Hz soak, and no "skipping frame" warning appeared |
 
 The device was left on the saved manual Prague coordinates after the pass.
+
+**Editorial note (2026-10-07).** This report was extracted from the original device guide.
+Branch/revision references describe the original feature work. This cleanup corrects report dating,
+cross-report navigation, and evidence scope where applicable; all historical observation rows,
+run dates, measured values, and APK/source attribution are retained. No new measurements were made.

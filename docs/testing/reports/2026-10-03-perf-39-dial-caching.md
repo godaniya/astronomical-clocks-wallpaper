@@ -10,7 +10,8 @@ override. Firmware build: withheld (embeds the model identifier).
 The caching commit (5272a51) and its review fixes (8935527) change the steady-state render path from
 re-sampling plate contours to redrawing pre-built `Path` objects, and route the first visible frame
 through the same `runTick()` error containment as the posted ticks. This pass re-runs the cadence,
-rendering, nesting, and lifecycle checks of the two preceding sections against that build, so a
+rendering, nesting, and lifecycle checks of the [Orloj foundation](2026-10-03-feat-4-orloj-foundation.md)
+and [southern plate](2026-10-03-feat-4-southern-plate.md) reports against that build, so a
 change to either path would show up against the pre-caching record rather than against inspection.
 
 The twelve zodiac sign glyphs are drawn in `DialStyle.HAND`, so the hand angle was measured with the
@@ -37,11 +38,15 @@ except the hand angle, which is a principal-axis measurement of the hand pixels.
 | 2026-10-03 | reboot | New process, the wallpaper binding and both stored choices survived, 24 ticks and the zodiac ring drew, and cadence held at 6 in 6 s |
 | 2026-10-03 | renderer log | `adb logcat --pid=<pid>` was empty over a 90 s steady 1 Hz soak, and no "skipping frame" warning appeared at any check above |
 
-The equator and Sydney nesting reproduces the preceding section's rows, and the poles' concentric
-annuli match its south-pole row; that record was taken before the caching commit, so the cached paths
-did not alter the plate geometry. The two poles agree because the southern plate is the radial
+The equator and Sydney nesting reproduces the [southern plate report](2026-10-03-feat-4-southern-plate.md)'s
+rows taken before the caching commit, supporting unchanged geometry at those sites. The poles'
+concentric annuli resemble its “south pole” observation, but that report's recorded `(0, -90)` input
+is inconsistent with the label and remains unverified. This pass's explicit `(90, 0)` and `(-90, 0)`
+rows stand as separate polar observations on the caching build. The two poles agree because the
+southern plate is the radial
 inversion of the northern one through the equator circle, so both hemispheres give the same ring
-structure. The 2026-09-29 rows record 60 tick strokes (12 long, 48 short) for the earlier three-hand
+structure. The [2026-09-29 feasibility rows](2026-09-28-feat-2-device-feasibility.md)
+record 60 tick strokes (12 long, 48 short) for the earlier three-hand
 dial; this dial draws 24 hour ticks, one per Roman numeral. After the pass the saved site was
 restored to the device's current location and the wallpaper was left applied.
 
@@ -68,3 +73,8 @@ without a debug hook this build does not carry. `WallpaperFrameTest` and `Wallpa
 remain its evidence, and this pass verifies only that the containment path leaves the rendered output
 and the 1 Hz tick loop unchanged. The cadence check still shows only that a frame is produced once
 per second; battery and frame-cost qualification remain #6.
+
+**Editorial note (2026-10-07).** This report was extracted from the original device guide.
+Branch/revision references describe the original feature work. This cleanup corrects report dating,
+cross-report navigation, and evidence scope where applicable; all historical observation rows,
+run dates, measured values, and APK/source attribution are retained. No new measurements were made.

@@ -2,8 +2,9 @@
 
 Test build: local debug `app-debug.apk` from `feat/28-render-moon` at 25bda1a (APK SHA-256
 `9af9b6e861f1b400a47f96900e524da259f56aaa64eeee31f8e343f59c6d0dad`), the branch tip when the artifact
-was assembled, installed with `adb install -r` over the existing binding. The only later commit on
-this branch is this report, which leaves `app/src/` untouched and produces the identical APK.
+was assembled, installed with `adb install -r` over the existing binding. At the time of the original
+feature work, the only later commit on
+`feat/28-render-moon` was this report, which leaves `app/src/` untouched and produces the identical APK.
 `./gradlew qualityGate :app:assembleDebug` passed with 396 unit tests per build variant and no
 detekt, ktlint, or Android Lint findings, and `scripts/verify-apk.sh` verified the application ID,
 SDK levels, debug flag, permissions, wallpaper declaration, Astronomy Engine notice, and APK
@@ -89,10 +90,15 @@ Prague.
 
 **What this pass did not run.** The reboot row is deliberately not run, per the reduction agreed for
 this pass: a process restart is therefore not re-evidenced here, and #27's own reboot row remains the
-most recent process-recreation evidence on this device. Battery and frame cost remain #6; the cadence
-check shows only that a frame is produced once per second. The 0° Aries star's own position is
+most recent [process-recreation evidence](2026-10-04-feat-27-sun-marker.md) on this device.
+Battery and frame cost remain #6; the cadence check shows only that a frame is produced once per second. The 0° Aries star's own position is
 `ZodiacRenderer`'s claim and `DialRendererTest`'s to keep; this pass only checks that the marker is
 distinguishable from it and from the Sun. Always On Display remains out of scope per #2. The screenshot
 pipeline returned the palette unchanged on these captures, `#D8B66A` reading back as `#D8B66A` and
 `#2C3E50` as itself, so the capture cannot adjudicate the exact gold but can and does match the two
 Moon tones exactly.
+
+**Editorial note (2026-10-07).** This report was extracted from the original device guide.
+Branch/revision references describe the original feature work. This cleanup corrects report dating,
+cross-report navigation, and evidence scope where applicable; all historical observation rows,
+run dates, measured values, and APK/source attribution are retained. No new measurements were made.

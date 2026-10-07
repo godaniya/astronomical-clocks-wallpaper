@@ -32,3 +32,7 @@ connected Android 16 physical device. An existing `CURRENT_COARSE` site retained
 `Europe/Prague` after an untouched Save and force-stop/relaunch; the Save visibly showed
 "Coordinates unchanged; nothing to save." No new device location was requested. Earlier public
 Prague-coordinate checks also covered manual Save, edited manual Save, and relaunch persistence.
+
+**Editorial note (2026-10-07).** The filename date now reflects the first recorded verification
+date, 2026-10-03. Branch/revision references describe the original feature work. Run dates,
+measurements, and APK/source attribution are unchanged; no new measurements were made.

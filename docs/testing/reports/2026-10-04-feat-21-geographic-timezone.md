@@ -24,8 +24,8 @@ Firmware build: withheld (embeds the model identifier)
 | 2026-10-04 | force-stop and relaunch | `am force-stop` emptied `pidof`, and the record still held the Tokyo site on `Pacific/Auckland`; relaunching Settings showed the same coordinates and `Timezone: Pacific/Auckland` with no dialog. The force-stop dropped the wallpaper binding to the stock `ImageWallpaper`, as #42 and #28 also record, and the wallpaper was reapplied afterwards |
 | 2026-10-04 | restore and the confirmation's Save path | Re-entering the original `50.08, 14.42` suggested `Europe/Prague`; the dialog was shown again and the record was still untouched while it was up, and accepting it with **Save** wrote `{"latitude":50.08,"longitude":14.42,"source":"MANUAL","zoneId":"Europe/Prague"}`. That both exercises the dialog's Save button on the device and restores the site the pass found |
 
-The dial row is the same claim as the `saved-site timezone` row in (#24) above, re-checked against the
-build this branch produces. The probe finds the dial centre in the hub's inner disc, which is painted
+The dial row is the same claim as the `saved-site timezone` row in the [site-timezone report](2026-09-30-feat-24-site-timezone.md),
+re-checked against the build the original feature branch produced. The probe finds the dial centre in the hub's inner disc, which is painted
 at the dial origin, and measures the civil hand as the densest 1-degree cluster of hand-coloured
 pixels, because the same colour also paints the twelve zodiac sign glyphs. One pixel of centre error
 moves the measured bearing by about 0.16 deg at the hand's tip radius of 355.1 px, and the frame is
@@ -109,3 +109,8 @@ as found.
 dial-hour, and force-stop rows stay as recorded in the section above. The reboot row and
 process-recreation evidence are unchanged. No current-location fix was acquired, because doing so
 would write the device's own coordinates.
+
+**Editorial note (2026-10-07).** This report was extracted from the original device guide.
+Branch/revision references describe the original feature work. This cleanup corrects report dating,
+cross-report navigation, and evidence scope where applicable; all historical observation rows,
+run dates, measured values, and APK/source attribution are retained. No new measurements were made.

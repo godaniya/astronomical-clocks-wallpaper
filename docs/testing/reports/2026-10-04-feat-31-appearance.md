@@ -3,8 +3,8 @@
 Test build: local debug `app-debug.apk` from `feat/31-appearance` at 82817a7 (APK SHA-256
 `38b7135b8c854350130175c686e4250a2eeb7a01e5d8dc45f27ed63f7c837144`), installed with `adb install -r`
 over the existing binding. The revision and hash describe the branch state when this artifact was
-assembled; this report itself left `app/src/` untouched, but later commits on this branch do change it,
-so those later commits are not covered by the results below.
+assembled; this report itself left `app/src/` untouched, but later commits on the original `feat/31-appearance`
+branch do change it, so those later commits are not covered by the results below.
 `./gradlew qualityGate :app:assembleDebug` passed with 526 unit tests per build variant and no detekt,
 ktlint, or Android Lint findings, and `scripts/verify-apk.sh` verified the application ID, SDK levels,
 debug flag, permissions, wallpaper declaration, Astronomy Engine notice, and APK Signature Scheme v2.
@@ -57,7 +57,9 @@ to the physical 1080x2408, `proximity_sensor` was read back at 1, the wallpaper 
 the device was left with the screen dozing.
 
 **What this pass did not run.** Reboot and the lit lock screen are not re-evidenced here; the earlier
-passes stand for those. Always On Display remains out of scope per #2. The screenshot
+[Sun](2026-10-04-feat-27-sun-marker.md) and [Moon](2026-10-04-feat-28-moon-marker.md)
+passes retain their own reboot/lock-screen evidence on their respective APKs, without qualifying
+these builds. Always On Display remains out of scope per #2. The screenshot
 pipeline returned the palette unchanged on these captures, so the probes match the palette literals
 exactly, but a capture still cannot adjudicate glyph antialiasing: the contrast contract in
 [orloj.md](../../orloj.md#palette-contrast) rests on the palette values, not on these frames.
@@ -116,8 +118,15 @@ restored to manual Prague `50.08, 14.42`. The wallpaper binding survived through
 left with the screen dozing.
 
 **What this pass did not run.** Reboot and the lit lock screen are not re-evidenced here; the earlier
-passes stand for those. Always On Display remains out of scope per #2. The southern check is one
+[Sun](2026-10-04-feat-27-sun-marker.md) and [Moon](2026-10-04-feat-28-moon-marker.md)
+passes retain their own reboot/lock-screen evidence on their respective APKs, without qualifying
+these builds. Always On Display remains out of scope per #2. The southern check is one
 first-quarter capture, not the full two-hemisphere phase pass. The screenshot pipeline returned the
 palette unchanged, so the probes match the palette literals exactly, but a capture still cannot
 adjudicate glyph antialiasing; the marker-outline contrast contract in
 [orloj.md](../../orloj.md#palette-contrast) rests on the palette values, not on these frames.
+
+**Editorial note (2026-10-07).** This report was extracted from the original device guide.
+Branch/revision references describe the original feature work. This cleanup corrects report dating,
+cross-report navigation, and evidence scope where applicable; all historical observation rows,
+run dates, measured values, and APK/source attribution are retained. No new measurements were made.
