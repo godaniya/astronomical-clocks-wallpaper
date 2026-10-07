@@ -144,6 +144,22 @@ class DeviceQualificationTest(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             device_layer.get_wallpaper_pid("device")
 
+    @patch.object(device_layer, "run_adb", return_value=b"  mVisible=true mReportedVisible=true\n")
+    def test_wallpaper_visible_is_parsed_as_true(self, _run_adb: MagicMock) -> None:
+        self.assertTrue(device_layer.read_wallpaper_visible("device"))
+
+    @patch.object(device_layer, "run_adb", return_value=b"  mVisible=false mReportedVisible=false\n")
+    def test_wallpaper_visible_is_parsed_as_false(self, _run_adb: MagicMock) -> None:
+        self.assertFalse(device_layer.read_wallpaper_visible("device"))
+
+    @patch.object(device_layer, "run_adb", return_value=b"no matching pattern\n")
+    def test_unknown_wallpaper_visible_stays_none(self, _run_adb: MagicMock) -> None:
+        self.assertIsNone(device_layer.read_wallpaper_visible("device"))
+
+    @patch.object(device_layer, "run_adb", side_effect=subprocess.SubprocessError("transport down"))
+    def test_failed_wallpaper_visible_probe_stays_none(self, _run_adb: MagicMock) -> None:
+        self.assertIsNone(device_layer.read_wallpaper_visible("device"))
+
     @patch.object(
         device_layer,
         "run_adb",
@@ -1004,6 +1020,51 @@ class PhasePrerequisiteTest(unittest.TestCase):
         capture.assert_not_called()
         self.assertEqual(failures, ["Device wake was not confirmed after the screen-off interval"])
         self.assertEqual(results, [])
+
+    def test_screen_off_wake_measures_wallpaper_hidden_and_wake_hand(self) -> None:
+        """When the wallpaper is reported hidden while asleep, the result records halted rendering."""
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with (
+            patch.object(device_layer, "sleep_screen", return_value=True),
+            patch.object(device_layer, "read_screen_on", side_effect=[False, True]),
+            patch.object(device_layer, "read_wallpaper_visible", return_value=False),
+            patch.object(device_layer, "wake_screen", return_value=True),
+            patch.object(device_layer.AdbDevice, "dismiss_keyguard"),
+            patch.object(device_layer.AdbDevice, "show_home"),
+            patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))),
+            patch.object(device_layer, "detect_hand_angle", return_value=123.456),
+            patch.object(qualification.time, "sleep"),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            qualification.phase_screen_off_wake(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(failures, [])
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0][0], "screen-off / wake navigation")
+        self.assertIn("wallpaper reported hidden (mVisible=false, rendering halted)", results[0][1])
+        self.assertIn("hand visible within 1s of wake at 123.456°", results[0][1])
+
+    def test_screen_off_wake_records_unmeasured_when_wallpaper_visibility_unreadable(self) -> None:
+        """When wallpaper visibility cannot be read, the result records it as unmeasured."""
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with (
+            patch.object(device_layer, "sleep_screen", return_value=True),
+            patch.object(device_layer, "read_screen_on", side_effect=[False, True]),
+            patch.object(device_layer, "read_wallpaper_visible", return_value=None),
+            patch.object(device_layer, "wake_screen", return_value=True),
+            patch.object(device_layer.AdbDevice, "dismiss_keyguard"),
+            patch.object(device_layer.AdbDevice, "show_home"),
+            patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))),
+            patch.object(device_layer, "detect_hand_angle", return_value=123.456),
+            patch.object(qualification.time, "sleep"),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            qualification.phase_screen_off_wake(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(failures, [])
+        self.assertEqual(len(results), 1)
+        self.assertIn("rendering while asleep was not measured", results[0][1])
+        self.assertIn("hand visible within 1s of wake at 123.456°", results[0][1])
 
     def test_an_awake_screen_is_left_alone_before_a_phase(self) -> None:
         """A visible screen must not gain extra wake, keyguard, or home input."""
