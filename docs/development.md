@@ -96,14 +96,15 @@ or incompatible rules, record the rule ID, concrete example, reason, and narrow 
 PR. Removing a finding by lowering global severity or excluding production/test directories is not a fix.
 
 The host-only ADB harnesses in `scripts/` are standard-library Python. [`pyproject.toml`](../pyproject.toml)
-configures their checks. CI runs Ruff through its official
-[`astral-sh/ruff-action`](https://github.com/astral-sh/ruff-action) and ty through the pinned `uv`
-runner before the Android build; the same checks run locally as:
+configures their checks. CI runs the host checks in a dedicated job (Ruff through its official
+[`astral-sh/ruff-action`](https://github.com/astral-sh/ruff-action); ty and codespell through the
+pinned `uv` runner) alongside the Android build; the same checks run locally as:
 
 ```sh
 uvx --from ruff==0.16.10 ruff check --output-format=github scripts
 uvx --from ruff==0.16.10 ruff format --check --output-format=github scripts
 uvx --from ty==0.0.84 ty check --output-format=github scripts
+uvx --from codespell==2.4.3 codespell
 python3 -I -m unittest discover -s scripts -p 'test_*.py' -v
 ```
 
@@ -157,15 +158,27 @@ keeps the pinned `uvx --from ty==0.0.84` runner under the existing `setup-uv` st
 review asked for the official action, and nothing about `ty` prevents it.
 
 **Adopted `.pre-commit-config.yaml`.** Ruff documents an official
-[pre-commit integration](https://docs.astral.sh/ruff/integrations/#pre-commit), and the matching
-[`ty-pre-commit`](https://github.com/astral-sh/ty-pre-commit) hook exists, so the repository now
-carries both, pinned to the same versions CI runs. Install and run locally with `pre-commit install`
-and `pre-commit run --all-files`, or with no local install via
+[pre-commit integration](https://docs.astral.sh/ruff/integrations/#pre-commit), the matching
+[`ty-pre-commit`](https://github.com/astral-sh/ty-pre-commit) hook exists, and the
+[codespell](https://github.com/codespell-project/codespell) hook was adopted in the 2026-10-07
+review round, so the repository carries all three, pinned to the same versions CI runs. Install and
+run locally with `pre-commit install` and `pre-commit run --all-files`, or with no local install via
 `uvx --from pre-commit==4.6.2 pre-commit run --all-files`. The Ruff hooks are scoped to `scripts/` to
 mirror the CI invocation exactly; the ty hook checks the project (its upstream design), needs `uv` on
 PATH, and runs in uv's isolated mode so it cannot create or update a `uv.lock` or `.venv` in a
-repository that has no dependency set to lock. CI stays authoritative and does not run pre-commit:
-it runs the same pinned tools directly.
+repository that has no dependency set to lock. codespell reads its four-word allowlist and skip list
+from `[tool.codespell]` in [`pyproject.toml`](../pyproject.toml); it is a GPL-2.0 development-time
+tool (not bundled, linked, or distributed), recorded in [dependencies.md](dependencies.md). CI stays
+authoritative and does not run pre-commit: it runs the same pinned tools directly.
+
+**codespell's 2026-10-07 scan.** The scan of all 156 tracked files against codespell 2.4.3 reported
+nine findings, and all nine were false positives on correct domain vocabulary and local identifiers:
+`precesses` (the astronomy term; the dictionary suggests "processes"), `America/Nome` (the Alaska
+zone; it suggests "Gnome"), `positionOf` (a test helper name), and `IST` (India Standard Time).
+With the four-word allowlist and the generated-directory skips configured in
+[`pyproject.toml`](../pyproject.toml), the repository runs clean, so the tool catches nothing today;
+its value is preventing future typos in this documentation-heavy repository at the cost of that
+allowlist and one development-time tool.
 
 **`main()` in what looks like a test file.** Previously named `scripts/device_smoke_test.py`, the smoke
 harness is renamed to `scripts/device_smoke.py` under #107 to avoid misleading pytest's default
@@ -201,7 +214,7 @@ qualification harnesses explicit.
 | Ruff `D203`, `D212` | Mutually exclusive pairs with the enabled rules: `D203` (one blank line before a class docstring) contradicts enabled `D211`, and `D212` (multi-line summary on the first line) conflicts with the `D213` layout used throughout `scripts/`. Exactly one rule of each pair can be enabled. | Ruff config, `scripts/` |
 | Ruff `D300` | Triple double quotes. The formatter preserves the one triple-single-quoted docstring (`scripts/test_device_qualification.py:576`) because converting it would introduce escapes, so enabling `D300` would flag formatter-stable output. | Ruff config, `scripts/` |
 | Ruff `COM812` | Trailing-comma missing. The formatter omits trailing commas in compact multi-line calls (`scripts/device_layer.py:101`), so enabling `COM812` makes Ruff emit its own formatter-conflict warning and 71 findings on formatter-stable code. | Ruff config, `scripts/` |
-| Ruff formatter-conflict audit (2026-10-07) | The pinned toolchain was audited against Ruff's documented [formatter-conflict list](https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules): every other listed rule (`W191`, `E111`, `E114`, `E117`, `D206`, `Q000`–`Q004`, `COM819`) was enabled in a temporary config and cleared both `ruff format --check` (no conflict warnings) and `ruff check` (0 findings), on the formatter-stable tree and on a formatting torture fixture (tabs, 2-space indentation, over-indentation, comment indentation, tab-indented docstring paragraph, trailing commas, mixed quotes, escaped quotes). The four rules above are the only Ruff ignores left; re-run the audit whenever the Ruff pin changes. | Ruff config, `scripts/` |
+| Ruff formatter-conflict audit (2026-10-07) | The pinned toolchain was audited against Ruff's documented [formatter-conflict list](https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules): every other listed rule (`W191`, `E111`, `E114`, `E117`, `D206`, `Q000`–`Q004`, `COM819`) was enabled in a temporary config and cleared both `ruff format --check` (no conflict warnings) and `ruff check` (0 findings), on the formatter-stable tree and on a formatting torture fixture (tabs, 2-space indentation, over-indentation, comment indentation, tab-indented docstring paragraph, trailing commas, mixed quotes, escaped quotes). ISC002 is not relaxed: its documented condition (`ISC001` disabled and `allow-multiline = false`) does not apply because `ISC001` stays enabled. The four rules above are the only Ruff ignores left; re-run the audit whenever the Ruff pin changes. | Ruff config, `scripts/` |
 | Ruff `T201` | Both harnesses and the device layer print output or diagnostic errors to stdout/stderr; there is no logger to convert to, and adding one would be a dependency. | `scripts/device_layer.py`, `scripts/device_qualification.py`, `scripts/device_smoke.py` |
 | Ruff `INP001` | `scripts/` deliberately has no `__init__.py`: the harnesses are run as scripts, and the test modules import them from the same directory, which `unittest discover` puts on `sys.path`. | Every file in `scripts/` |
 | Ruff `D102`, `D103` | Test methods and helpers in the suite are described by their names and their docstrings, not by a summary line restating the name. | `scripts/test_device_smoke.py`, `scripts/test_device_qualification.py` |

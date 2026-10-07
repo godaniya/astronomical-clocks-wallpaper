@@ -1,8 +1,8 @@
-# Host tooling for scripts/*.py only. The Gradle build does not read this file, nothing here reaches
-# the APK, and the Android quality gate stays hermetic and independent of it.
+# Host tooling. The Gradle build does not read this file, nothing here reaches the APK, and the
+# Android quality gate stays hermetic and independent of it.
 #
 # The scripts import nothing outside the standard library, so there is no dependency set to resolve
-# or lock and no lockfile here. CI runs Ruff and ty from the exact versions pinned in
+# or lock and no lockfile here. CI runs Ruff, ty, and codespell from the exact versions pinned in
 # .github/workflows/build.yml, which are recorded in docs/dependencies.md.
 
 [tool.ruff]
@@ -17,17 +17,10 @@ preview = false
 
 [tool.ruff.lint]
 select = ["ALL"]
-# Only four rules are relaxed. Ruff's documented formatter-conflict list
-# (https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules) was audited against the pinned
-# toolchain on 2026-10-07: every other listed rule (`W191`, `E111`, `E114`, `E117`, `D206`,
-# `Q000`-`Q004`, `COM819`) is enabled here and produced no formatter warning and no finding on the
-# formatted tree or on a formatting torture fixture. The four kept rules either conflict by pair
-# (`D203` with enabled `D211`; `D212` with the `D213` layout in use) or fire on formatter-stable
-# output (`D300` preserves a triple-single-quoted docstring to avoid escapes; `COM812` wants
-# trailing commas the formatter omits in compact multi-line constructs). Re-run the audit on any
-# Ruff pin bump. ISC002's documented condition (without ISC001 and allow-multiline=false) does not
-# apply because ISC001 stays enabled. Recorded in docs/development.md#rule-exceptions. No rule has
-# its severity lowered and no directory is excluded.
+# Only four rules are relaxed after the 2026-10-07 audit against the pinned toolchain: every other
+# rule on Ruff's documented formatter-conflict list
+# (https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules) runs clean on formatter-stable
+# output. Reasons, examples, and the audit method: docs/development.md#rule-exceptions.
 ignore = [
   "D203",   # one blank line before a class docstring; conflicts with enabled D211
   "D212",   # multi-line summary on the first line; conflicts with the D213 layout in use
@@ -57,6 +50,12 @@ notice-rgx = "# SPDX-License-Identifier: Apache-2\\.0"
 
 # The shared test-only RGBA fixture helper is also a standalone scripts/ module.
 "scripts/device_test_fixtures.py" = ["INP001"]
+
+[tool.codespell]
+# Domain vocabulary and local identifiers that codespell's dictionary flags; see the 2026-10-07
+# scan in docs/development.md. `skip` keeps direct local runs off generated output.
+ignore-words-list = "precesses,Nome,positionOf,IST"
+skip = "build,app/build,.gradle,.kotlin,.ruff_cache"
 
 [tool.ty.rules]
 # ty has no `strict` preset or `--strict` flag, so promoting every rule to an error is how strictness

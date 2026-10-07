@@ -112,5 +112,7 @@ jobs:
           src: ./scripts
       - name: Type-check host scripts (ty)
         run: uvx --from ty==0.0.84 ty check --output-format=github scripts
+      - name: Spell-check text files (codespell)
+        run: uvx --from codespell==2.4.3 codespell
       - name: Test host device harnesses
         run: python3 -I -m unittest discover -s scripts -p 'test_*.py' -v
