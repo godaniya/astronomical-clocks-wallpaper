@@ -379,10 +379,10 @@ def wake_screen(serial: str) -> bool:
     """Wake the screen, returning True only when the readback confirms it is on."""
     try:
         run_adb(["shell", "input", "keyevent", "KEYCODE_WAKEUP"], serial=serial)
+        return read_screen_on(serial) is True
     except (subprocess.SubprocessError, OSError) as error:
         print(f"WARNING: screen wake failed: {error_detail(error)}", file=sys.stderr)
         return False
-    return read_screen_on(serial) is True
 
 
 def run_restore_command(serial: str, command: Sequence[str]) -> bool:

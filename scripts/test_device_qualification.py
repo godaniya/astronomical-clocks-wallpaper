@@ -154,6 +154,21 @@ class DeviceQualificationTest(unittest.TestCase):
             self.assertFalse(device_layer.wake_screen("device"))
         self.assertIn("screen wake failed", error_output.getvalue())
 
+    def test_a_failed_wake_readback_is_reported_not_raised(self) -> None:
+        errors = (
+            subprocess.CalledProcessError(1, ["adb"], stderr=b"device offline"),
+            OSError("adb transport closed"),
+        )
+        for error in errors:
+            with (
+                self.subTest(error=type(error).__name__),
+                patch.object(device_layer, "run_adb"),
+                patch.object(device_layer, "read_screen_on", side_effect=error),
+                contextlib.redirect_stderr(io.StringIO()) as error_output,
+            ):
+                self.assertFalse(device_layer.wake_screen("device"))
+                self.assertIn("screen wake failed", error_output.getvalue())
+
     def test_empty_or_header_only_renderer_log_is_inconclusive(self) -> None:
         self.assertEqual(qualification.matching_renderer_warnings(""), [])
         self.assertEqual(
