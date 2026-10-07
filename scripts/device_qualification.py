@@ -220,11 +220,26 @@ def phase_screen_off_wake(device: device_layer.AdbDevice, results: list[tuple[st
         )
 
 
+def ensure_screen_on(device: device_layer.AdbDevice, failures: list[str]) -> bool:
+    """Re-confirm a visible screen before a phase, waking it if the display timeout switched it off."""
+    if device.read_screen_on() is True:
+        return True
+    if not device.wake_screen():
+        failures.append("Screen wake was not confirmed before a phase that needs the screen on")
+        return False
+    device.dismiss_keyguard()
+    device.show_home()
+    time.sleep(1.0)
+    return True
+
+
 def phase_preview_navigation(
     device: device_layer.AdbDevice, results: list[tuple[str, str]], failures: list[str]
 ) -> None:
     """Open the live-wallpaper preview, back out, and confirm the home hand renders."""
     print("\n--- Phase 2: Preview Navigation ---")
+    if not ensure_screen_on(device, failures):
+        return
     preview_start = device.run_adb(
         [
             "shell",
@@ -276,6 +291,8 @@ def phase_surface_recreation(
 ) -> None:
     """Override the display size and restore it, confirming the dial is redrawn."""
     print("\n--- Phase 3: Surface Recreation ---")
+    if not ensure_screen_on(device, failures):
+        return
     device.run_adb(["shell", "wm", "size", recreate_size])
     time.sleep(0.5)
     _, active_override = device.read_display_size()
@@ -308,6 +325,8 @@ def phase_surface_recreation(
 def phase_process_rebind(device: device_layer.AdbDevice, results: list[tuple[str, str]], failures: list[str]) -> None:
     """Kill the wallpaper process as its own uid and observe a rebound PID with a drawn hand."""
     print("\n--- Phase 4: Process Recreation (kill -9 simulation) ---")
+    if not ensure_screen_on(device, failures):
+        return
     pid_before = device.get_wallpaper_pid()
     pid_after: int | None = None
     angle_post_kill: float | None = None
@@ -354,6 +373,8 @@ def measure_hand_advance(
 def phase_time_travel(device: device_layer.AdbDevice, results: list[tuple[str, str]], failures: list[str]) -> None:
     """Advance the virtual clock +30m then +12h and compare the measured hand advance."""
     print("\n--- Phase 5: Virtual Time Travel (+30m, +12h) ---")
+    if not ensure_screen_on(device, failures):
+        return
     if not device.send_debug_clock_broadcast(
         device_layer.DEBUG_CLOCK_RESET_EXTRAS, device_layer.DEBUG_CLOCK_RESET_MESSAGE
     ):
@@ -414,6 +435,8 @@ def phase_total_pss_growth(
 ) -> None:
     """Sample total PSS ten seconds apart and compare the growth against the supplied budget."""
     print("\n--- Phase 6: Total PSS Growth ---")
+    if not ensure_screen_on(device, failures):
+        return
     if not device.send_debug_clock_broadcast(
         device_layer.DEBUG_CLOCK_RESET_EXTRAS, device_layer.DEBUG_CLOCK_RESET_MESSAGE
     ):

@@ -728,12 +728,13 @@ class HandDetectionTest(unittest.TestCase):
 class PhaseDecisionTest(unittest.TestCase):
     """Decisions taken inside the extracted phase helpers."""
 
+    @patch.object(qualification, "ensure_screen_on", return_value=True)
     @patch.object(device_layer, "detect_hand_angle", side_effect=[0.0, 8.1, 180.0])
     @patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16)))
     @patch.object(device_layer, "send_debug_clock_broadcast", return_value=True)
     @patch.object(qualification.time, "sleep")
     def test_time_travel_rejects_an_advance_past_the_tolerance(
-        self, _sleep: MagicMock, _send: MagicMock, _capture: MagicMock, _angle: MagicMock
+        self, _sleep: MagicMock, _send: MagicMock, _capture: MagicMock, _angle: MagicMock, _ensure: MagicMock
     ) -> None:
         results: list[tuple[str, str]] = []
         failures: list[str] = []
@@ -743,12 +744,13 @@ class PhaseDecisionTest(unittest.TestCase):
         self.assertIn("residuals exceeded tolerance", failures[0])
         self.assertEqual(results, [])
 
+    @patch.object(qualification, "ensure_screen_on", return_value=True)
     @patch.object(device_layer, "detect_hand_angle", side_effect=[359.0, 6.5, 179.0])
     @patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16)))
     @patch.object(device_layer, "send_debug_clock_broadcast", return_value=True)
     @patch.object(qualification.time, "sleep")
     def test_time_travel_measures_across_the_zero_crossing(
-        self, _sleep: MagicMock, _send: MagicMock, _capture: MagicMock, _angle: MagicMock
+        self, _sleep: MagicMock, _send: MagicMock, _capture: MagicMock, _angle: MagicMock, _ensure: MagicMock
     ) -> None:
         results: list[tuple[str, str]] = []
         failures: list[str] = []
@@ -757,12 +759,13 @@ class PhaseDecisionTest(unittest.TestCase):
         self.assertEqual(failures, [])
         self.assertEqual(len(results), 1)
 
+    @patch.object(qualification, "ensure_screen_on", return_value=True)
     @patch.object(device_layer, "detect_hand_angle", side_effect=[0.0, 8.0, 180.0])
     @patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16)))
     @patch.object(device_layer, "send_debug_clock_broadcast", return_value=True)
     @patch.object(qualification.time, "sleep")
     def test_time_travel_accepts_a_residual_exactly_on_the_tolerance(
-        self, _sleep: MagicMock, _send: MagicMock, _capture: MagicMock, _angle: MagicMock
+        self, _sleep: MagicMock, _send: MagicMock, _capture: MagicMock, _angle: MagicMock, _ensure: MagicMock
     ) -> None:
         results: list[tuple[str, str]] = []
         failures: list[str] = []
@@ -770,12 +773,13 @@ class PhaseDecisionTest(unittest.TestCase):
             qualification.phase_time_travel(device_layer.AdbDevice("device"), results, failures)
         self.assertEqual(failures, [])
 
+    @patch.object(qualification, "ensure_screen_on", return_value=True)
     @patch.object(device_layer, "detect_hand_angle")
     @patch.object(device_layer, "capture_frame")
     @patch.object(device_layer, "send_debug_clock_broadcast", return_value=False)
     @patch.object(qualification.time, "sleep")
     def test_time_travel_skips_angle_measurement_when_its_own_reset_is_unconfirmed(
-        self, _sleep: MagicMock, _send: MagicMock, capture: MagicMock, angle: MagicMock
+        self, _sleep: MagicMock, _send: MagicMock, capture: MagicMock, angle: MagicMock, _ensure: MagicMock
     ) -> None:
         results: list[tuple[str, str]] = []
         failures: list[str] = []
@@ -889,6 +893,7 @@ class PhasePrerequisiteTest(unittest.TestCase):
         with (
             patch.object(device_layer, "send_debug_clock_broadcast", return_value=False),
             patch.object(device_layer, "run_adb", return_value=b"TOTAL 100 0 0") as run_adb,
+            patch.object(qualification, "ensure_screen_on", return_value=True),
             patch.object(qualification.time, "sleep") as sleep,
             contextlib.redirect_stdout(io.StringIO()),
         ):
@@ -906,6 +911,7 @@ class PhasePrerequisiteTest(unittest.TestCase):
                 self.subTest(after=after),
                 patch.object(device_layer, "send_debug_clock_broadcast", return_value=True),
                 patch.object(device_layer, "run_adb", side_effect=[b"TOTAL 100 0 0", f"TOTAL {after} 0 0".encode()]),
+                patch.object(qualification, "ensure_screen_on", return_value=True),
                 patch.object(qualification.time, "sleep"),
                 contextlib.redirect_stdout(io.StringIO()),
             ):
@@ -985,6 +991,69 @@ class PhasePrerequisiteTest(unittest.TestCase):
         self.assertEqual(failures, ["Device wake was not confirmed after the screen-off interval"])
         self.assertEqual(results, [])
 
+    def test_an_awake_screen_is_left_alone_before_a_phase(self) -> None:
+        """A visible screen must not gain extra wake, keyguard, or home input."""
+        failures: list[str] = []
+        with (
+            patch.object(device_layer, "read_screen_on", return_value=True),
+            patch.object(device_layer, "wake_screen") as wake,
+            patch.object(device_layer.AdbDevice, "dismiss_keyguard") as dismiss,
+            patch.object(device_layer.AdbDevice, "show_home") as home,
+        ):
+            prepared = qualification.ensure_screen_on(device_layer.AdbDevice("device"), failures)
+        self.assertTrue(prepared)
+        wake.assert_not_called()
+        dismiss.assert_not_called()
+        home.assert_not_called()
+        self.assertEqual(failures, [])
+
+    def test_a_timed_out_screen_is_woken_before_a_phase(self) -> None:
+        """The display timeout can switch the screen off mid-run; the phase must repair it first."""
+        failures: list[str] = []
+        with (
+            patch.object(device_layer, "read_screen_on", return_value=False),
+            patch.object(device_layer, "wake_screen", return_value=True) as wake,
+            patch.object(device_layer.AdbDevice, "dismiss_keyguard") as dismiss,
+            patch.object(device_layer.AdbDevice, "show_home") as home,
+            patch.object(qualification.time, "sleep"),
+        ):
+            prepared = qualification.ensure_screen_on(device_layer.AdbDevice("device"), failures)
+        self.assertTrue(prepared)
+        wake.assert_called_once_with("device")
+        dismiss.assert_called_once_with()
+        home.assert_called_once_with()
+        self.assertEqual(failures, [])
+
+    def test_an_unconfirmed_phase_wake_fails_the_prerequisite(self) -> None:
+        """An unconfirmed wake must record the failure and leave the keyguard and home alone."""
+        failures: list[str] = []
+        with (
+            patch.object(device_layer, "read_screen_on", return_value=False),
+            patch.object(device_layer, "wake_screen", return_value=False),
+            patch.object(device_layer.AdbDevice, "dismiss_keyguard") as dismiss,
+            patch.object(device_layer.AdbDevice, "show_home") as home,
+        ):
+            prepared = qualification.ensure_screen_on(device_layer.AdbDevice("device"), failures)
+        self.assertFalse(prepared)
+        dismiss.assert_not_called()
+        home.assert_not_called()
+        self.assertEqual(failures, ["Screen wake was not confirmed before a phase that needs the screen on"])
+
+    def test_time_travel_skips_the_broadcasts_when_the_screen_cannot_be_confirmed(self) -> None:
+        """No time-travel evidence may be collected while the screen's visibility is unconfirmed."""
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with (
+            patch.object(qualification, "ensure_screen_on", return_value=False),
+            patch.object(device_layer, "send_debug_clock_broadcast") as broadcast,
+            patch.object(device_layer, "capture_frame") as capture,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            qualification.phase_time_travel(device_layer.AdbDevice("device"), results, failures)
+        broadcast.assert_not_called()
+        capture.assert_not_called()
+        self.assertEqual(results, [])
+
     def check_surface_failure_through_main(self, module: ModuleType, readback: tuple[str | None, str | None]) -> None:
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.object(sys, "argv", ["harness", "--max-pss-growth-kb", "10"]))
@@ -1010,6 +1079,7 @@ class PhasePrerequisiteTest(unittest.TestCase):
             stack.enter_context(patch.object(module, "read_device_baseline", return_value=baseline))
             stack.enter_context(patch.object(module, "phase_environment_setup", return_value=True))
             stack.enter_context(patch.object(module, "phase_renderer_log_scan", return_value=True))
+            stack.enter_context(patch.object(module, "ensure_screen_on", return_value=True))
             for phase in (
                 "phase_baseline_capture",
                 "phase_screen_off_wake",
@@ -1034,6 +1104,7 @@ class PhasePrerequisiteTest(unittest.TestCase):
             patch.object(device_layer, "run_adb") as run_adb,
             patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))) as capture,
             patch.object(device_layer, "detect_hand_angle", return_value=1.0),
+            patch.object(qualification, "ensure_screen_on", return_value=True),
             patch.object(qualification.time, "sleep"),
             contextlib.redirect_stdout(io.StringIO()),
         ):
