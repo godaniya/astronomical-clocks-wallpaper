@@ -7,8 +7,9 @@ device below.
 Same physical device. Android version: 16 (API 36). Device locale `de-DE`, with no app-locale
 override. Firmware build: withheld (embeds the model identifier).
 
-The sites were entered by hand through Settings. Sydney, the south pole, and the equator were read
-from the home screen; the Sun-layer checks used the system live-wallpaper preview, which shows the
+The sites were entered by hand through Settings. Sydney, the recorded `(0, -90)` site (historically
+labelled “south pole”; see the editorial correction below), and the equator were read from the home
+screen; the Sun-layer checks used the system live-wallpaper preview, which shows the
 dial unobstructed. The screenshot pipeline applies a colour transform (the hand reads back about
 `#F1E5BD`, not `#F4E5B8`), so these checks are structural rather than exact-colour, except the hand
 angle, which is a principal-axis measurement of the hand pixels.
