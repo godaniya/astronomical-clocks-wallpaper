@@ -1,7 +1,7 @@
 # Astronomy documentation series
 
 This directory documents the astronomical calculations, coordinate systems, projection geometry,
-and cultural astrometry frameworks implemented in the Astronomical Clock Wallpaper.
+and cultural nomenclature comparisons for the Astronomical Clock Wallpaper.
 
 ## Series roadmap
 
@@ -10,7 +10,7 @@ The astronomy documentation is organized into modular specifications:
 | Document | Scope and content |
 | --- | --- |
 | [Calculations and engine specification](calculations.md) | The Kotlin calculation engine (`AstronomyCalculator`, `AstronomyEngineCalculator`), units, atmospheric refraction fits, Hipparcos star reduction, UTC event windows, failure behavior, and independent test tolerances against JPL Horizons, USNO, and IAU SOFA fixtures. |
-| [Ecliptic frames, tropical zodiac, and solar terms](ecliptic-and-solar-terms.md) | The mathematical identity between the Western tropical zodiac and Chinese 24 Solar Terms (定氣法), 12 Solar Stations (十二次), 12 Monthly Generals (月將), stereographic chirality, and Northern vs. Southern Hemisphere duality. Fulfills [#65](https://github.com/godaniya/astronomical-clocks-wallpaper/issues/65). |
+| [Ecliptic frames, tropical zodiac, and solar terms](ecliptic-and-solar-terms.md) | The shared apparent-longitude mapping of tropical signs and Dingqi solar terms, historical 十二次 caveats, an attributed 月將 convention, and the implemented hemisphere projection. Fulfills [#65](https://github.com/godaniya/astronomical-clocks-wallpaper/issues/65). |
 
 ## Related specifications
 

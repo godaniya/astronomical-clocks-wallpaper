@@ -1,7 +1,47 @@
-# Astronomy documentation
+# Astronomy calculations
 
-The astronomy documentation has been reorganized into a modular series under [`docs/astronomy/`](astronomy/README.md):
+The calculation reference has moved to [Astronomy calculations](astronomy/calculations.md).
+See the [series index](astronomy/README.md) and
+[Ecliptic frames, tropical zodiac, and solar terms](astronomy/ecliptic-and-solar-terms.md) for the comparison table.
 
-- [Astronomy documentation series index](astronomy/README.md): Overview and navigation roadmap.
-- [Calculations and engine specification](astronomy/calculations.md): Interface contracts, units, refraction, Hipparcos star reduction, UTC event search windows, and independent test tolerances against JPL Horizons, USNO, and IAU SOFA.
-- [Ecliptic frames, tropical zodiac, and solar terms](astronomy/ecliptic-and-solar-terms.md): Exact mathematical equivalence between the Western tropical zodiac and Chinese 24 Solar Terms (定氣法), Twelve Stations (十二次), Monthly Generals (月將), stereographic chirality, and Northern vs. Southern Hemisphere duality ([#65](https://github.com/godaniya/astronomical-clocks-wallpaper/issues/65)).
+The original headings below preserve legacy fragment links.
+
+## Units
+
+See [Units](astronomy/calculations.md#units).
+
+### Current integration limits
+
+See [Current integration limits](astronomy/calculations.md#current-integration-limits).
+
+## Coordinate frames
+
+See [Coordinate frames](astronomy/calculations.md#coordinate-frames).
+
+## Fixed stars
+
+See [Fixed stars](astronomy/calculations.md#fixed-stars).
+
+## Refraction
+
+See [Refraction](astronomy/calculations.md#refraction).
+
+## Supported date range
+
+See [Supported date range](astronomy/calculations.md#supported-date-range).
+
+## Events and their window
+
+See [Events and their window](astronomy/calculations.md#events-and-their-window).
+
+## Failure behaviour
+
+See [Failure behaviour](astronomy/calculations.md#failure-behaviour).
+
+## Accuracy against independent references
+
+See [Accuracy against independent references](astronomy/calculations.md#accuracy-against-independent-references).
+
+## What is not verified here
+
+See [What is not verified here](astronomy/calculations.md#what-is-not-verified-here).
