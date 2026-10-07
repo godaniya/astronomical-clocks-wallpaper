@@ -228,7 +228,7 @@ successful `finally` cleanup cannot erase a failed phase restore. Qualification'
 stops before memory sampling when its own reset is unconfirmed. These changes retain unconditional
 cleanup and do not alter the CLI, dependencies, or the historical device observations above.
 
-Verification on 2026-10-07: isolated unittest discovery passed 75 tests; Ruff 0.16.10 lint and
+Verification on 2026-10-07: isolated unittest discovery passed 99 tests; Ruff 0.16.10 lint and
 format checks, ty 0.0.84, and `git diff --check` passed. Each of the five new regression tests
 failed by assertion against temporary copies of the previous harness behavior; the smoke copy kept
 the new result schema with restore success assumed, so schema errors could not masquerade as proof.
