@@ -62,6 +62,42 @@ class ZodiacRendererTest {
     }
 
     @Test
+    fun nonFiniteCoordinatesBounded() {
+        for (coordinate in listOf(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)) {
+            assertNonFinitePointBounded(DialPoint(x = coordinate, y = 0.0))
+            assertNonFinitePointBounded(DialPoint(x = 0.0, y = coordinate))
+        }
+    }
+
+    private fun assertNonFinitePointBounded(point: DialPoint) {
+        val caseRenderer = ZodiacRenderer()
+        val canvas = Canvas(Bitmap.createBitmap(800, 800, Bitmap.Config.ARGB_8888))
+        val faultyProjection =
+            object : OrlojProjection(prague) {
+                override fun eclipticPoint(longitudeDeg: Double): DialPoint =
+                    if (longitudeDeg == 30.0) point else super.eclipticPoint(longitudeDeg)
+            }
+        val expectedDistance = if (point.x.isNaN() || point.y.isNaN()) "NaN" else "Infinity"
+
+        ShadowLog.clear()
+        repeat(3) { caseRenderer.draw(canvas, faultyProjection) }
+        val warnings = ShadowLog.getLogsForTag("ZodiacRenderer").filter { it.type == Log.WARN }
+        assertEquals("Warnings for $point", 1, warnings.size)
+        assertTrue(warnings[0].msg.contains("skipping divider: degenerate coordinate"))
+        assertTrue(warnings[0].msg.contains("sign 1: distance=$expectedDistance"))
+
+        caseRenderer.draw(canvas, OrlojProjection(prague))
+        val recoveries = ShadowLog.getLogsForTag("ZodiacRenderer").filter { it.type == Log.INFO }
+        assertEquals("Recoveries for $point", 1, recoveries.size)
+        assertTrue(recoveries[0].msg.contains("recovered after 3 consecutive failures"))
+
+        caseRenderer.draw(canvas, faultyProjection)
+        val subsequentWarnings = ShadowLog.getLogsForTag("ZodiacRenderer").filter { it.type == Log.WARN }
+        assertEquals("New episode for $point", 2, subsequentWarnings.size)
+        assertEquals(warnings[0].msg, subsequentWarnings[1].msg)
+    }
+
+    @Test
     fun nonFiniteEndpointsBounded() {
         val bitmap = Bitmap.createBitmap(800, 800, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
