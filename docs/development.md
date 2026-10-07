@@ -147,21 +147,14 @@ here, which the dependency rules in [AGENTS.md](../AGENTS.md) subject to owner a
 recording, and it would need plugin autoload disabled to preserve CI's `python3 -I` hermeticity. That
 is a separate change with that cost list, not part of this tooling.
 
-**`main()` in what looks like a test file.** `scripts/device_smoke_test.py` is a harness, not a test
-module: `main()` plus `if __name__ == "__main__"` is its command-line entry point, and it defines no
-name pytest would collect. Its `*_test.py` suffix does match pytest's default collection pattern
-while CI collects only `test_*.py`, but collection over `scripts/` collects only the host suite,
-because the harness defines no `test_*` name and has no import-time side effects. The suffix is a
-latent smell, not a defect; the rename is a precondition of any pytest move and is folded into #107
-rather than repeated here after #103 renamed these files once already.
+**`main()` in what looks like a test file.** Previously named `scripts/device_smoke_test.py`, the smoke
+harness is renamed to `scripts/device_smoke.py` under #107 to avoid misleading pytest's default
+`*_test.py` collection pattern while preserving its standalone command-line entry point.
 
-**`serial` passed explicitly, not a class per harness.** `serial` threads through the two harnesses
-because it is the identity every ADB call needs; it is a symptom of the duplication *between* the two
-harnesses rather than of missing classes. A class per harness would fork the device abstraction twice
-and make the deferred merge harder, and the pure helpers take no `serial` at all. #107 records the
-planned shape: one shared device object that owns `serial` as constructor state, absorbs the helpers
-the two harnesses duplicate today, and keeps their deliberately different restore policies explicit.
-Nothing in this pull request changes as a result of that issue.
+**Consolidated ADB device layer.** #107 extracts `scripts/device_layer.py` with an object-oriented
+`AdbDevice` abstraction owning `serial` as constructor state, unifying the shared screencap decoders,
+dial geometry, and command primitives while keeping the distinct restore semantics between smoke and
+qualification harnesses explicit.
 
 ## Rule exceptions
 
@@ -187,11 +180,11 @@ Nothing in this pull request changes as a result of that issue.
 | detekt `TooManyFunctions` | `ClockEngine` is a `WallpaperService.Engine` that carries the four platform lifecycle overrides, whose surface is fixed by the platform, plus the tick-loop and drawing helpers, including #85's `stopTicking`; it already sat at the per-class function budget. The appearance feature adds one more callback, `onConfigurationChanged`, which the enclosing service invokes rather than the platform, and that addition is what takes the class past the budget. Splitting the engine to satisfy the count would separate drawing from the lifecycle that drives it. | Only `AstronomicalClocksWallpaperService.ClockEngine`, annotated in source |
 | Ruff formatter-conflict set (`W191`, `E111`, `E114`, `E117`, `D203`, `D206`, `D300`, `Q000`–`Q004`, `COM812`, `COM819`) | Ruff documents these as conflicting with its formatter wherever the formatter is the authority on layout; the formatter owns indentation, quote style, docstring indentation, and trailing commas, so the lint rule and the format step cannot both hold. | Ruff config, `scripts/` |
 | Ruff `D212` | Multi-line docstring summary on the first line. Conflicts with `D213`, which requires the second line; the docstrings in `scripts/` use the `D213` layout, so exactly one of the pair can be enabled. | Ruff config, `scripts/` |
-| Ruff `T201` | Both harnesses print their report to stdout, and that output *is* the deliverable — the device report is assembled from it. A standard-library logger would add machinery without improving the tabular report. | `scripts/device_qualification.py`, `scripts/device_smoke_test.py` |
+| Ruff `T201` | Both harnesses and the device layer print output or diagnostic errors to stdout/stderr; there is no logger to convert to, and adding one would be a dependency. | `scripts/device_layer.py`, `scripts/device_qualification.py`, `scripts/device_smoke.py` |
 | Ruff `INP001` | `scripts/` deliberately has no `__init__.py`: the harnesses are run as scripts, and the test modules import them from the same directory, which `unittest discover` puts on `sys.path`. | Every file in `scripts/` |
 | Ruff `D102`, `D103` | Test methods and helpers in the suite are described by their names and their docstrings, not by a summary line restating the name. | `scripts/test_device_smoke.py`, `scripts/test_device_qualification.py` |
 | Ruff `PT009`, `PT019`, `PT027` | These are flake8-pytest-style rules, and the suite is standard-library `unittest` because host tooling may not add a dependency. `PT009` and `PT027` want `assertEqual`/`assertRaises` replaced with bare `assert` and `pytest.raises`, which would cost the assertion diffs; `PT019` reads the `unittest.mock.patch` parameters, which are injected positionally, as pytest fixtures. | `scripts/test_device_smoke.py`, `scripts/test_device_qualification.py` |
-| Ruff `S603` | `run_adb` is the one `subprocess.run` call. It executes the developer's own `adb` from `PATH` with an argv built from literals and parsed device output, `check=True`, and no shell, so there is no untrusted input to validate. `S607` is not raised because the executable is not written at the call site. | `run_adb` in both harnesses, annotated in source |
+| Ruff `S603` | `run_adb` is the one `subprocess.run` call in `device_layer.py`. It executes the developer's own `adb` from `PATH` with an argv built from literals and parsed device output, `check=True`, and no shell, so there is no untrusted input to validate. `S607` is not raised because the executable is not written at the call site. | `run_adb` in `scripts/device_layer.py`, annotated in source |
 | Ruff `CPY001` (via `notice-rgx`) | The rule looks for a copyright line; this repository marks licensing with an SPDX identifier instead, and the Kotlin sources, the shell scripts, and the maintained Python files all use that form. | Ruff config, `scripts/` |
 
 Upstream defaults remain the starting point, including per-rule defaults for test documentation and

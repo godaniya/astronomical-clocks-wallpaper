@@ -47,8 +47,9 @@ notice-rgx = "# SPDX-License-Identifier: Apache-2\\.0"
 # Both harnesses print their report to stdout; T201 has no third-party logger to convert to, and the
 # report is the deliverable. scripts/ is deliberately not an importable package, which is what
 # INP001 asks for.
+"scripts/device_layer.py" = ["T201", "INP001"]
 "scripts/device_qualification.py" = ["T201", "INP001"]
-"scripts/device_smoke_test.py" = ["T201", "INP001"]
+"scripts/device_smoke.py" = ["T201", "INP001"]
 # The split test modules are not packages either; their methods are described by their docstrings
 # and names rather than a per-method summary line. The PT rules are flake8-pytest-style, and this
 # suite is stdlib `unittest` by design, because host tooling may not add a dependency and pytest is

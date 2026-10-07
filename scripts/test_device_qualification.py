@@ -13,8 +13,9 @@ from types import ModuleType
 from typing import Final
 from unittest.mock import MagicMock, patch
 
+import device_layer
 import device_qualification as qualification
-import device_smoke_test
+import device_smoke as device_smoke_test
 from device_test_fixtures import (
     BYTES_PER_PIXEL,
     FRAME_HEIGHT,
@@ -97,12 +98,12 @@ class DeviceQualificationTest(unittest.TestCase):
         with self.assertRaises(argparse.ArgumentTypeError):
             qualification.non_negative_int("-1")
 
-    @patch.object(qualification, "run_adb", return_value=b"mWakefulness=Awake")
+    @patch.object(device_layer, "run_adb", return_value=b"mWakefulness=Awake")
     def test_awake_screen_state_is_detected(self, _run_adb: MagicMock) -> None:
         self.assertTrue(qualification.read_screen_on("device"))
 
     @patch.object(
-        qualification,
+        device_layer,
         "run_adb",
         side_effect=[b"power state unknown", b"Display State=OFF"],
     )
@@ -110,7 +111,7 @@ class DeviceQualificationTest(unittest.TestCase):
         self.assertFalse(qualification.read_screen_on("device"))
 
     @patch.object(
-        qualification,
+        device_layer,
         "run_adb",
         side_effect=[b"power state unknown", b"display state unknown"],
     )
@@ -118,11 +119,11 @@ class DeviceQualificationTest(unittest.TestCase):
         self.assertIsNone(qualification.read_screen_on("device"))
         self.assertEqual(run_adb.call_count, 2)
 
-    @patch.object(qualification, "run_adb", return_value=b"night mode output changed")
+    @patch.object(device_layer, "run_adb", return_value=b"night mode output changed")
     def test_unknown_night_mode_stays_unknown(self, _run_adb: MagicMock) -> None:
         self.assertIsNone(qualification.read_night_mode("device"))
 
-    @patch.object(qualification, "run_adb", return_value=b"Night mode: yes\n")
+    @patch.object(device_layer, "run_adb", return_value=b"Night mode: yes\n")
     def test_night_mode_is_parsed(self, _run_adb: MagicMock) -> None:
         self.assertEqual(qualification.read_night_mode("device"), "yes")
 
@@ -137,14 +138,14 @@ class DeviceQualificationTest(unittest.TestCase):
             ["W/DialRenderer: failed draw"],
         )
 
-    @patch.object(qualification, "run_adb")
+    @patch.object(device_layer, "run_adb")
     def test_capture_frame_rejects_inconsistent_payload_length(self, run_adb: MagicMock) -> None:
         run_adb.return_value = struct.pack("<IIII", 2, 2, 1, 0) + bytes(15)
         with self.assertRaisesRegex(RuntimeError, "Unexpected screencap payload size"):
             qualification.capture_frame("device")
 
-    @patch.object(qualification, "count_service_log_messages", side_effect=[0, 1])
-    @patch.object(qualification, "run_adb")
+    @patch.object(device_layer, "count_service_log_messages", side_effect=[0, 1])
+    @patch.object(device_layer, "run_adb")
     def test_debug_clock_broadcast_requires_a_new_acceptance_log(
         self, run_adb: MagicMock, _count_logs: MagicMock
     ) -> None:
@@ -157,8 +158,8 @@ class DeviceQualificationTest(unittest.TestCase):
         )
         run_adb.assert_called_once()
 
-    @patch.object(qualification, "count_service_log_messages", side_effect=[2, 2])
-    @patch.object(qualification, "run_adb")
+    @patch.object(device_layer, "count_service_log_messages", side_effect=[2, 2])
+    @patch.object(device_layer, "run_adb")
     def test_debug_clock_broadcast_fails_without_a_new_acceptance_log(
         self, run_adb: MagicMock, _count_logs: MagicMock
     ) -> None:
@@ -171,12 +172,12 @@ class DeviceQualificationTest(unittest.TestCase):
         )
         run_adb.assert_called_once()
 
-    @patch.object(qualification, "read_keyguard_locked", return_value=False)
-    @patch.object(qualification, "read_screen_on", return_value=False)
-    @patch.object(qualification, "read_night_mode", return_value="auto")
-    @patch.object(qualification, "read_display_size", return_value=("1080x2000", "720x1280"))
-    @patch.object(qualification, "send_debug_clock_broadcast", return_value=True)
-    @patch.object(qualification, "run_adb")
+    @patch.object(device_layer, "read_keyguard_locked", return_value=False)
+    @patch.object(device_layer, "read_screen_on", return_value=False)
+    @patch.object(device_layer, "read_night_mode", return_value="auto")
+    @patch.object(device_layer, "read_display_size", return_value=("1080x2000", "720x1280"))
+    @patch.object(device_layer, "send_debug_clock_broadcast", return_value=True)
+    @patch.object(device_layer, "run_adb")
     def test_restore_succeeds_only_when_state_matches(
         self,
         run_adb: MagicMock,
@@ -194,12 +195,12 @@ class DeviceQualificationTest(unittest.TestCase):
         read_night.assert_called_once_with("device")
         read_screen.assert_called_once_with("device")
 
-    @patch.object(qualification, "read_keyguard_locked", return_value=False)
-    @patch.object(qualification, "read_screen_on", return_value=True)
-    @patch.object(qualification, "read_night_mode", return_value="auto")
-    @patch.object(qualification, "read_display_size", return_value=("1080x2000", None))
-    @patch.object(qualification, "send_debug_clock_broadcast", return_value=True)
-    @patch.object(qualification, "run_adb")
+    @patch.object(device_layer, "read_keyguard_locked", return_value=False)
+    @patch.object(device_layer, "read_screen_on", return_value=True)
+    @patch.object(device_layer, "read_night_mode", return_value="auto")
+    @patch.object(device_layer, "read_display_size", return_value=("1080x2000", None))
+    @patch.object(device_layer, "send_debug_clock_broadcast", return_value=True)
+    @patch.object(device_layer, "run_adb")
     def test_restore_failure_is_reported(
         self,
         run_adb: MagicMock,
@@ -220,12 +221,12 @@ class DeviceQualificationTest(unittest.TestCase):
                 qualification.restore_device("device", None, initial_screen_was_on=True, initial_night_mode="auto")
             )
 
-    @patch.object(qualification, "read_keyguard_locked", return_value=False)
-    @patch.object(qualification, "read_screen_on", return_value=None)
-    @patch.object(qualification, "read_night_mode", return_value=None)
-    @patch.object(qualification, "read_display_size", return_value=("1080x2000", None))
-    @patch.object(qualification, "send_debug_clock_broadcast", return_value=True)
-    @patch.object(qualification, "run_adb")
+    @patch.object(device_layer, "read_keyguard_locked", return_value=False)
+    @patch.object(device_layer, "read_screen_on", return_value=None)
+    @patch.object(device_layer, "read_night_mode", return_value=None)
+    @patch.object(device_layer, "read_display_size", return_value=("1080x2000", None))
+    @patch.object(device_layer, "send_debug_clock_broadcast", return_value=True)
+    @patch.object(device_layer, "run_adb")
     def test_restore_with_unknown_initial_state_is_not_reported_as_success(
         self,
         run_adb: MagicMock,
@@ -253,13 +254,13 @@ class DeviceQualificationTest(unittest.TestCase):
 
         with (
             patch.object(sys, "argv", ["device_qualification.py", "--max-pss-growth-kb", "10"]),
-            patch.object(qualification, "select_target_serial", return_value="device"),
-            patch.object(qualification, "run_adb", side_effect=fail_environment_wakeup),
-            patch.object(qualification, "read_display_size", return_value=("1080x2000", "720x1280")),
-            patch.object(qualification, "read_screen_on", return_value=True),
-            patch.object(qualification, "read_night_mode", return_value="auto"),
-            patch.object(qualification, "read_keyguard_locked", return_value=False),
-            patch.object(qualification, "get_wallpaper_pid", return_value=123),
+            patch.object(device_layer, "select_target_serial", return_value="device"),
+            patch.object(device_layer, "run_adb", side_effect=fail_environment_wakeup),
+            patch.object(device_layer, "read_display_size", return_value=("1080x2000", "720x1280")),
+            patch.object(device_layer, "read_screen_on", return_value=True),
+            patch.object(device_layer, "read_night_mode", return_value="auto"),
+            patch.object(device_layer, "read_keyguard_locked", return_value=False),
+            patch.object(device_layer, "get_wallpaper_pid", return_value=123),
             patch.object(qualification, "restore_device", return_value=False) as restore_device,
             patch.object(qualification.time, "sleep"),
             contextlib.redirect_stdout(io.StringIO()),
@@ -276,9 +277,9 @@ class DeviceQualificationTest(unittest.TestCase):
     def test_preflight_adb_failure_is_reported_before_mutation(self) -> None:
         with (
             patch.object(sys, "argv", ["device_qualification.py", "--max-pss-growth-kb", "10"]),
-            patch.object(qualification, "select_target_serial", return_value="device"),
+            patch.object(device_layer, "select_target_serial", return_value="device"),
             patch.object(
-                qualification,
+                device_layer,
                 "run_adb",
                 side_effect=subprocess.CalledProcessError(1, ["adb"], stderr=b"device offline"),
             ),
@@ -293,13 +294,13 @@ class DeviceQualificationTest(unittest.TestCase):
         self.assertIn("Could not inspect the device before making changes", error_output.getvalue())
         restore_device.assert_not_called()
 
-    @patch.object(qualification, "read_keyguard_locked", return_value=True)
-    @patch.object(qualification, "read_screen_on", return_value=True)
-    @patch.object(qualification, "read_night_mode", return_value="auto")
-    @patch.object(qualification, "read_display_size", return_value=("1080x2000", None))
-    @patch.object(qualification, "get_wallpaper_pid", return_value=123)
-    @patch.object(qualification, "select_target_serial", return_value="device")
-    @patch.object(qualification, "run_adb", return_value=b"")
+    @patch.object(device_layer, "read_keyguard_locked", return_value=True)
+    @patch.object(device_layer, "read_screen_on", return_value=True)
+    @patch.object(device_layer, "read_night_mode", return_value="auto")
+    @patch.object(device_layer, "read_display_size", return_value=("1080x2000", None))
+    @patch.object(device_layer, "get_wallpaper_pid", return_value=123)
+    @patch.object(device_layer, "select_target_serial", return_value="device")
+    @patch.object(device_layer, "run_adb", return_value=b"")
     def test_a_locked_keyguard_stops_the_run_before_any_mutation(
         self,
         run_adb: MagicMock,
@@ -322,13 +323,13 @@ class DeviceQualificationTest(unittest.TestCase):
             any("KEYCODE_WAKEUP" in call_args.args[0] for call_args in run_adb.call_args_list),
         )
 
-    @patch.object(qualification, "read_keyguard_locked", return_value=None)
-    @patch.object(qualification, "read_screen_on", return_value=True)
-    @patch.object(qualification, "read_night_mode", return_value="auto")
-    @patch.object(qualification, "read_display_size", return_value=("1080x2000", None))
-    @patch.object(qualification, "get_wallpaper_pid", return_value=123)
-    @patch.object(qualification, "select_target_serial", return_value="device")
-    @patch.object(qualification, "run_adb", return_value=b"")
+    @patch.object(device_layer, "read_keyguard_locked", return_value=None)
+    @patch.object(device_layer, "read_screen_on", return_value=True)
+    @patch.object(device_layer, "read_night_mode", return_value="auto")
+    @patch.object(device_layer, "read_display_size", return_value=("1080x2000", None))
+    @patch.object(device_layer, "get_wallpaper_pid", return_value=123)
+    @patch.object(device_layer, "select_target_serial", return_value="device")
+    @patch.object(device_layer, "run_adb", return_value=b"")
     def test_an_unreadable_keyguard_state_stops_the_run_before_any_mutation(
         self,
         _run_adb: MagicMock,
@@ -348,16 +349,16 @@ class DeviceQualificationTest(unittest.TestCase):
         self.assertEqual(exit_error.exception.code, 1)
         self.assertIn("could not read the keyguard state", error_output.getvalue())
 
-    @patch.object(qualification, "read_keyguard_locked", return_value=True)
-    @patch.object(qualification, "read_screen_on", return_value=True)
-    @patch.object(qualification, "read_night_mode", return_value="auto")
-    @patch.object(qualification, "read_display_size", return_value=("1080x2000", None))
-    @patch.object(qualification, "run_adb")
+    @patch.object(device_layer, "read_keyguard_locked", return_value=True)
+    @patch.object(device_layer, "read_screen_on", return_value=True)
+    @patch.object(device_layer, "read_night_mode", return_value="auto")
+    @patch.object(device_layer, "read_display_size", return_value=("1080x2000", None))
+    @patch.object(device_layer, "run_adb")
     def test_a_keyguard_that_reappears_fails_restore_even_when_everything_else_matches(
         self, _run_adb: MagicMock, _size: MagicMock, _night: MagicMock, _screen: MagicMock, _keyguard: MagicMock
     ) -> None:
         with (
-            patch.object(qualification, "send_debug_clock_broadcast", return_value=True),
+            patch.object(device_layer, "send_debug_clock_broadcast", return_value=True),
             contextlib.redirect_stderr(io.StringIO()) as error_output,
         ):
             self.assertFalse(
@@ -406,12 +407,12 @@ class DeviceQualificationTest(unittest.TestCase):
             phase.assert_not_called()
         restore_device.assert_called_once()
 
-    @patch.object(qualification, "read_keyguard_locked", return_value=False)
-    @patch.object(qualification, "read_screen_on", return_value=False)
-    @patch.object(qualification, "read_night_mode", return_value="auto")
-    @patch.object(qualification, "read_display_size", return_value=("1080x2000", None))
-    @patch.object(qualification, "send_debug_clock_broadcast", return_value=True)
-    @patch.object(qualification, "run_adb")
+    @patch.object(device_layer, "read_keyguard_locked", return_value=False)
+    @patch.object(device_layer, "read_screen_on", return_value=False)
+    @patch.object(device_layer, "read_night_mode", return_value="auto")
+    @patch.object(device_layer, "read_display_size", return_value=("1080x2000", None))
+    @patch.object(device_layer, "send_debug_clock_broadcast", return_value=True)
+    @patch.object(device_layer, "run_adb")
     def test_restore_state_mismatch_is_reported(
         self,
         _run_adb: MagicMock,
@@ -426,12 +427,12 @@ class DeviceQualificationTest(unittest.TestCase):
                 qualification.restore_device("device", None, initial_screen_was_on=True, initial_night_mode="auto")
             )
 
-    @patch.object(qualification, "read_keyguard_locked", return_value=False)
-    @patch.object(qualification, "read_screen_on", return_value=True)
-    @patch.object(qualification, "read_night_mode", return_value="auto")
-    @patch.object(qualification, "read_display_size", return_value=(None, None))
-    @patch.object(qualification, "send_debug_clock_broadcast", return_value=True)
-    @patch.object(qualification, "run_adb")
+    @patch.object(device_layer, "read_keyguard_locked", return_value=False)
+    @patch.object(device_layer, "read_screen_on", return_value=True)
+    @patch.object(device_layer, "read_night_mode", return_value="auto")
+    @patch.object(device_layer, "read_display_size", return_value=(None, None))
+    @patch.object(device_layer, "send_debug_clock_broadcast", return_value=True)
+    @patch.object(device_layer, "run_adb")
     def test_restore_with_an_unreadable_display_size_is_not_reported_as_success(
         self,
         _run_adb: MagicMock,
@@ -453,7 +454,7 @@ class RendererLogScanTest(unittest.TestCase):
     """Phase 7's split between an inconclusive scan and a failed collection."""
 
     @patch.object(
-        qualification,
+        device_layer,
         "run_adb",
         side_effect=subprocess.CalledProcessError(1, ["adb"], stderr=b"device offline"),
     )
@@ -469,7 +470,7 @@ class RendererLogScanTest(unittest.TestCase):
         self.assertEqual(results[0][0], "renderer log scan")
         self.assertIn("Failed to collect", results[0][1])
 
-    @patch.object(qualification, "run_adb", return_value=b"--------- beginning of main\n")
+    @patch.object(device_layer, "run_adb", return_value=b"--------- beginning of main\n")
     def test_empty_successful_scan_stays_inconclusive_and_fails_nothing(self, _run_adb: MagicMock) -> None:
         results: list[tuple[str, str]] = []
         failures: list[str] = []
@@ -500,22 +501,22 @@ class RendererLogScanTest(unittest.TestCase):
 
         with (
             patch.object(sys, "argv", ["device_qualification.py", "--max-pss-growth-kb", "10"]),
-            patch.object(qualification, "select_target_serial", return_value="device"),
-            patch.object(qualification, "run_adb", side_effect=adb_side_effect),
-            patch.object(qualification, "read_display_size", return_value=("1080x2408", None)),
-            patch.object(qualification, "read_screen_on", return_value=True),
-            patch.object(qualification, "read_night_mode", return_value="auto"),
-            patch.object(qualification, "read_keyguard_locked", return_value=False),
+            patch.object(device_layer, "select_target_serial", return_value="device"),
+            patch.object(device_layer, "run_adb", side_effect=adb_side_effect),
+            patch.object(device_layer, "read_display_size", return_value=("1080x2408", None)),
+            patch.object(device_layer, "read_screen_on", return_value=True),
+            patch.object(device_layer, "read_night_mode", return_value="auto"),
+            patch.object(device_layer, "read_keyguard_locked", return_value=False),
             patch.object(
-                qualification,
+                device_layer,
                 "get_wallpaper_pid",
                 side_effect=[FIXTURE_START_PID, FIXTURE_START_PID, FIXTURE_START_PID, FIXTURE_REBOUND_PID],
             ),
-            patch.object(qualification, "send_debug_clock_broadcast", return_value=True),
+            patch.object(device_layer, "send_debug_clock_broadcast", return_value=True),
             patch.object(qualification, "restore_device", return_value=True),
-            patch.object(qualification, "capture_frame", return_value=(2, 2, bytes(16))),
-            patch.object(qualification, "is_dark_palette", return_value=False),
-            patch.object(qualification, "detect_hand_angle", side_effect=FIXTURE_HAND_ANGLES),
+            patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))),
+            patch.object(device_layer, "is_dark_palette", return_value=False),
+            patch.object(device_layer, "detect_hand_angle", side_effect=FIXTURE_HAND_ANGLES),
             patch.object(qualification.time, "sleep"),
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(io.StringIO()) as error_output,
@@ -588,8 +589,8 @@ class PaletteProbeTest(unittest.TestCase):
         self.assertEqual(qualification.nearest_rim_rgb(midpoint), qualification.DARK_RIM_RGB)
         self.assertEqual(qualification.nearest_rim_rgb((200, 200, 200)), qualification.LIGHT_RIM_RGB)
 
-    @patch.object(qualification, "DARK_RIM_RGB", (0, 0, 0))
-    @patch.object(qualification, "LIGHT_RIM_RGB", (2, 2, 2))
+    @patch.object(device_layer, "DARK_RIM_RGB", (0, 0, 0))
+    @patch.object(device_layer, "LIGHT_RIM_RGB", (2, 2, 2))
     def test_nearest_rim_literal_breaks_a_tie_towards_the_dark_tone(self) -> None:
         self.assertEqual(qualification.nearest_rim_rgb((1, 1, 1)), (0, 0, 0))
 
@@ -658,10 +659,10 @@ class HandDetectionTest(unittest.TestCase):
 
     def test_capture_frame_accepts_a_consistent_payload(self) -> None:
         raw = struct.pack("<IIII", 2, 2, 1, 0) + bytes(2 * 2 * BYTES_PER_PIXEL)
-        with patch.object(qualification, "run_adb", return_value=raw):
+        with patch.object(device_layer, "run_adb", return_value=raw):
             self.assertEqual(qualification.capture_frame("device"), (2, 2, bytes(2 * 2 * BYTES_PER_PIXEL)))
 
-    @patch.object(qualification, "run_adb", return_value=bytes(8))
+    @patch.object(device_layer, "run_adb", return_value=bytes(8))
     def test_capture_frame_rejects_a_truncated_header(self, _run_adb: MagicMock) -> None:
         with self.assertRaisesRegex(RuntimeError, "payload too small"):
             qualification.capture_frame("device")
@@ -776,11 +777,11 @@ class DeviceStateParsingTest(unittest.TestCase):
             ("Physical size: 1080x2408\nPhysical size: 720x1280", (None, None)),
             ("Physical size: 1080x2408\nOverride size: 720x1280\nOverride size: 480x800", (None, None)),
         )
-        for harness in (qualification,):
+        for harness in (qualification, device_layer):
             for output, expected in cases:
                 with (
                     self.subTest(harness=harness.__name__, output=output),
-                    patch.object(harness, "run_adb", return_value=output.encode()),
+                    patch.object(device_layer, "run_adb", return_value=output.encode()),
                 ):
                     self.assertEqual(harness.read_display_size("device"), expected)
 
@@ -800,11 +801,11 @@ class DeviceStateParsingTest(unittest.TestCase):
             ("isKeyguardShowing=false\nisKeyguardShowing=unknown", None),
             ("isKeyguardShowing=unknown\nisKeyguardShowing=false", None),
         )
-        for harness in (qualification,):
+        for harness in (qualification, device_layer):
             for output, expected in cases:
                 with (
                     self.subTest(harness=harness.__name__, output=output),
-                    patch.object(harness, "run_adb", return_value=output.encode()),
+                    patch.object(device_layer, "run_adb", return_value=output.encode()),
                 ):
                     self.assertIs(harness.read_keyguard_locked("device"), expected)
 
@@ -816,8 +817,8 @@ class PhasePrerequisiteTest(unittest.TestCase):
         results: list[tuple[str, str]] = []
         failures: list[str] = []
         with (
-            patch.object(qualification, "send_debug_clock_broadcast", return_value=False),
-            patch.object(qualification, "run_adb", return_value=b"TOTAL 100 0 0") as run_adb,
+            patch.object(device_layer, "send_debug_clock_broadcast", return_value=False),
+            patch.object(device_layer, "run_adb", return_value=b"TOTAL 100 0 0") as run_adb,
             patch.object(qualification.time, "sleep") as sleep,
             contextlib.redirect_stdout(io.StringIO()),
         ):
@@ -833,8 +834,8 @@ class PhasePrerequisiteTest(unittest.TestCase):
             failures: list[str] = []
             with (
                 self.subTest(after=after),
-                patch.object(qualification, "send_debug_clock_broadcast", return_value=True),
-                patch.object(qualification, "run_adb", side_effect=[b"TOTAL 100 0 0", f"TOTAL {after} 0 0".encode()]),
+                patch.object(device_layer, "send_debug_clock_broadcast", return_value=True),
+                patch.object(device_layer, "run_adb", side_effect=[b"TOTAL 100 0 0", f"TOTAL {after} 0 0".encode()]),
                 patch.object(qualification.time, "sleep"),
                 contextlib.redirect_stdout(io.StringIO()),
             ):

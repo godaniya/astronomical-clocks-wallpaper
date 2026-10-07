@@ -12,7 +12,8 @@ from types import ModuleType
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-import device_smoke_test
+import device_layer
+import device_smoke as device_smoke_test
 from device_test_fixtures import (
     BYTES_PER_PIXEL,
     FRAME_HEIGHT,
@@ -40,11 +41,11 @@ LIGHT_HAND_RGB: Final = (78, 52, 27)
 class SmokeHarnessHardeningTest(unittest.TestCase):
     """The smoke harness's own false-pass paths, closed alongside the qualification ones."""
 
-    @patch.object(device_smoke_test, "read_keyguard_locked", return_value=False)
-    @patch.object(device_smoke_test, "read_screen_on", return_value=True)
-    @patch.object(device_smoke_test, "read_display_size", return_value=("1080x2408", None))
-    @patch.object(device_smoke_test, "count_service_log_messages", return_value=0)
-    @patch.object(device_smoke_test, "run_adb")
+    @patch.object(device_layer, "read_keyguard_locked", return_value=False)
+    @patch.object(device_layer, "read_screen_on", return_value=True)
+    @patch.object(device_layer, "read_display_size", return_value=("1080x2408", None))
+    @patch.object(device_layer, "count_service_log_messages", return_value=0)
+    @patch.object(device_layer, "run_adb")
     def test_restore_fails_when_the_clock_reset_is_never_logged(
         self, _run_adb: MagicMock, _count: MagicMock, _size: MagicMock, _screen: MagicMock, _keyguard: MagicMock
     ) -> None:
@@ -52,22 +53,22 @@ class SmokeHarnessHardeningTest(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertFalse(device_smoke_test.restore_device("device", None, screen_was_on=True))
 
-    @patch.object(device_smoke_test, "read_keyguard_locked", return_value=False)
-    @patch.object(device_smoke_test, "read_screen_on", return_value=True)
-    @patch.object(device_smoke_test, "read_display_size", return_value=("1080x2408", "720x1280"))
-    @patch.object(device_smoke_test, "count_service_log_messages", side_effect=[0, 1])
-    @patch.object(device_smoke_test, "run_adb")
+    @patch.object(device_layer, "read_keyguard_locked", return_value=False)
+    @patch.object(device_layer, "read_screen_on", return_value=True)
+    @patch.object(device_layer, "read_display_size", return_value=("1080x2408", "720x1280"))
+    @patch.object(device_layer, "count_service_log_messages", side_effect=[0, 1])
+    @patch.object(device_layer, "run_adb")
     def test_restore_fails_when_the_display_size_does_not_return(
         self, _run_adb: MagicMock, _count: MagicMock, _size: MagicMock, _screen: MagicMock, _keyguard: MagicMock
     ) -> None:
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertFalse(device_smoke_test.restore_device("device", None, screen_was_on=True))
 
-    @patch.object(device_smoke_test, "read_keyguard_locked", return_value=False)
-    @patch.object(device_smoke_test, "read_screen_on", return_value=True)
-    @patch.object(device_smoke_test, "read_display_size", return_value=(None, None))
-    @patch.object(device_smoke_test, "count_service_log_messages", side_effect=[0, 1])
-    @patch.object(device_smoke_test, "run_adb")
+    @patch.object(device_layer, "read_keyguard_locked", return_value=False)
+    @patch.object(device_layer, "read_screen_on", return_value=True)
+    @patch.object(device_layer, "read_display_size", return_value=(None, None))
+    @patch.object(device_layer, "count_service_log_messages", side_effect=[0, 1])
+    @patch.object(device_layer, "run_adb")
     def test_restore_with_an_unreadable_display_size_is_not_reported_as_success(
         self, _run_adb: MagicMock, _count: MagicMock, _size: MagicMock, _screen: MagicMock, _keyguard: MagicMock
     ) -> None:
@@ -76,10 +77,10 @@ class SmokeHarnessHardeningTest(unittest.TestCase):
             self.assertFalse(device_smoke_test.restore_device("device", None, screen_was_on=True))
         self.assertIn("could not read the display size after restore", error_output.getvalue())
 
-    @patch.object(device_smoke_test, "detect_hand_angle", return_value=1.0)
-    @patch.object(device_smoke_test, "capture_frame", return_value=(2, 2, bytes(16)))
-    @patch.object(device_smoke_test, "read_display_size", return_value=("1080x2408", None))
-    @patch.object(device_smoke_test, "run_adb")
+    @patch.object(device_layer, "detect_hand_angle", return_value=1.0)
+    @patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16)))
+    @patch.object(device_layer, "read_display_size", return_value=("1080x2408", None))
+    @patch.object(device_layer, "run_adb")
     def test_recreation_reports_an_override_that_never_took_effect(
         self, _run_adb: MagicMock, _size: MagicMock, _capture: MagicMock, _angle: MagicMock
     ) -> None:
@@ -100,16 +101,16 @@ class SmokeHarnessHardeningTest(unittest.TestCase):
         failures = device_smoke_test.collect_failures(outcome, restored=True)
         self.assertIn("display-size override was not active as requested", failures)
 
-    @patch.object(device_smoke_test, "run_adb")
+    @patch.object(device_layer, "run_adb")
     def test_capture_frame_rejects_a_truncated_payload(self, run_adb: MagicMock) -> None:
         run_adb.return_value = struct.pack("<IIII", 2, 2, 1, 0) + bytes(15)
         with self.assertRaisesRegex(RuntimeError, "Unexpected screencap payload size"):
             device_smoke_test.capture_frame("device")
 
-    @patch.object(device_smoke_test, "read_screen_on", return_value=True)
-    @patch.object(device_smoke_test, "read_display_size", return_value=(None, None))
-    @patch.object(device_smoke_test, "select_target_serial", return_value="device")
-    @patch.object(device_smoke_test, "run_adb", return_value=b"")
+    @patch.object(device_layer, "read_screen_on", return_value=True)
+    @patch.object(device_layer, "read_display_size", return_value=(None, None))
+    @patch.object(device_layer, "select_target_serial", return_value="device")
+    @patch.object(device_layer, "run_adb", return_value=b"")
     def test_an_unreadable_display_size_stops_the_run_before_any_mutation(
         self, _run_adb: MagicMock, _select: MagicMock, _size: MagicMock, _screen: MagicMock
     ) -> None:
@@ -122,11 +123,11 @@ class SmokeHarnessHardeningTest(unittest.TestCase):
         self.assertEqual(exit_error.exception.code, 1)
         self.assertIn("could not read the physical display size", error_output.getvalue())
 
-    @patch.object(device_smoke_test, "read_keyguard_locked", return_value=True)
-    @patch.object(device_smoke_test, "read_screen_on", return_value=True)
-    @patch.object(device_smoke_test, "read_display_size", return_value=("1080x2408", None))
-    @patch.object(device_smoke_test, "select_target_serial", return_value="device")
-    @patch.object(device_smoke_test, "run_adb", return_value=b"")
+    @patch.object(device_layer, "read_keyguard_locked", return_value=True)
+    @patch.object(device_layer, "read_screen_on", return_value=True)
+    @patch.object(device_layer, "read_display_size", return_value=("1080x2408", None))
+    @patch.object(device_layer, "select_target_serial", return_value="device")
+    @patch.object(device_layer, "run_adb", return_value=b"")
     def test_a_locked_keyguard_stops_the_run_before_any_mutation(
         self, run_adb: MagicMock, _select: MagicMock, _size: MagicMock, _screen: MagicMock, _keyguard: MagicMock
     ) -> None:
@@ -144,11 +145,11 @@ class SmokeHarnessHardeningTest(unittest.TestCase):
             any("KEYCODE_WAKEUP" in call_args.args[0] for call_args in run_adb.call_args_list),
         )
 
-    @patch.object(device_smoke_test, "read_keyguard_locked", return_value=None)
-    @patch.object(device_smoke_test, "read_screen_on", return_value=True)
-    @patch.object(device_smoke_test, "read_display_size", return_value=("1080x2408", None))
-    @patch.object(device_smoke_test, "select_target_serial", return_value="device")
-    @patch.object(device_smoke_test, "run_adb", return_value=b"")
+    @patch.object(device_layer, "read_keyguard_locked", return_value=None)
+    @patch.object(device_layer, "read_screen_on", return_value=True)
+    @patch.object(device_layer, "read_display_size", return_value=("1080x2408", None))
+    @patch.object(device_layer, "select_target_serial", return_value="device")
+    @patch.object(device_layer, "run_adb", return_value=b"")
     def test_an_unreadable_keyguard_state_stops_the_run_before_any_mutation(
         self, _run_adb: MagicMock, _select: MagicMock, _size: MagicMock, _screen: MagicMock, _keyguard: MagicMock
     ) -> None:
@@ -161,25 +162,25 @@ class SmokeHarnessHardeningTest(unittest.TestCase):
         self.assertEqual(exit_error.exception.code, 1)
         self.assertIn("could not read the keyguard state", error_output.getvalue())
 
-    @patch.object(device_smoke_test, "read_keyguard_locked", return_value=True)
-    @patch.object(device_smoke_test, "read_screen_on", return_value=True)
-    @patch.object(device_smoke_test, "read_display_size", return_value=("1080x2408", None))
-    @patch.object(device_smoke_test, "run_adb")
+    @patch.object(device_layer, "read_keyguard_locked", return_value=True)
+    @patch.object(device_layer, "read_screen_on", return_value=True)
+    @patch.object(device_layer, "read_display_size", return_value=("1080x2408", None))
+    @patch.object(device_layer, "run_adb")
     def test_a_keyguard_that_reappears_fails_restore_even_when_everything_else_matches(
         self, _run_adb: MagicMock, _size: MagicMock, _screen: MagicMock, _keyguard: MagicMock
     ) -> None:
         with (
-            patch.object(device_smoke_test, "count_service_log_messages", side_effect=[0, 1]),
+            patch.object(device_layer, "count_service_log_messages", side_effect=[0, 1]),
             contextlib.redirect_stderr(io.StringIO()) as error_output,
         ):
             self.assertFalse(device_smoke_test.restore_device("device", None, screen_was_on=True))
         self.assertIn("not confirmed unlocked", error_output.getvalue())
 
-    @patch.object(device_smoke_test, "read_keyguard_locked", return_value=False)
-    @patch.object(device_smoke_test, "capture_frame", return_value=(2, 2, bytes(16)))
-    @patch.object(device_smoke_test, "detect_hand_angle", return_value=0.0)
-    @patch.object(device_smoke_test, "count_service_log_messages", return_value=0)
-    @patch.object(device_smoke_test, "run_adb")
+    @patch.object(device_layer, "read_keyguard_locked", return_value=False)
+    @patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16)))
+    @patch.object(device_layer, "detect_hand_angle", return_value=0.0)
+    @patch.object(device_layer, "count_service_log_messages", return_value=0)
+    @patch.object(device_layer, "run_adb")
     def test_an_unconfirmed_30m_offset_is_not_measured(
         self, _run_adb: MagicMock, _count: MagicMock, _angle: MagicMock, _capture: MagicMock, _keyguard: MagicMock
     ) -> None:
@@ -213,7 +214,7 @@ class SmokeHarnessHardeningTest(unittest.TestCase):
             screen_was_on=True,
         )
         with (
-            patch.object(sys, "argv", ["device_smoke_test.py"]),
+            patch.object(sys, "argv", ["device_smoke.py"]),
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(io.StringIO()),
             self.assertRaises(SystemExit) as exit_error,
@@ -224,10 +225,10 @@ class SmokeHarnessHardeningTest(unittest.TestCase):
         step_recreate_surface.assert_not_called()
         restore_device.assert_called_once()
 
-    @patch.object(device_smoke_test, "read_screen_on", return_value=None)
-    @patch.object(device_smoke_test, "read_display_size", return_value=("1080x2408", None))
-    @patch.object(device_smoke_test, "select_target_serial", return_value="device")
-    @patch.object(device_smoke_test, "run_adb", return_value=b"")
+    @patch.object(device_layer, "read_screen_on", return_value=None)
+    @patch.object(device_layer, "read_display_size", return_value=("1080x2408", None))
+    @patch.object(device_layer, "select_target_serial", return_value="device")
+    @patch.object(device_layer, "run_adb", return_value=b"")
     def test_an_unreadable_screen_state_stops_the_run_before_any_mutation(
         self, _run_adb: MagicMock, _select: MagicMock, _size: MagicMock, _screen: MagicMock
     ) -> None:
@@ -319,8 +320,8 @@ class PaletteProbeTest(unittest.TestCase):
         self.assertEqual(device_smoke_test.nearest_rim_rgb(midpoint), device_smoke_test.DARK_RIM_RGB)
         self.assertEqual(device_smoke_test.nearest_rim_rgb((200, 200, 200)), device_smoke_test.LIGHT_RIM_RGB)
 
-    @patch.object(device_smoke_test, "DARK_RIM_RGB", (0, 0, 0))
-    @patch.object(device_smoke_test, "LIGHT_RIM_RGB", (2, 2, 2))
+    @patch.object(device_layer, "DARK_RIM_RGB", (0, 0, 0))
+    @patch.object(device_layer, "LIGHT_RIM_RGB", (2, 2, 2))
     def test_nearest_rim_literal_breaks_a_tie_towards_the_dark_tone(self) -> None:
         self.assertEqual(device_smoke_test.nearest_rim_rgb((1, 1, 1)), (0, 0, 0))
 
@@ -386,10 +387,10 @@ class HandDetectionTest(unittest.TestCase):
 
     def test_capture_frame_accepts_a_consistent_payload(self) -> None:
         raw = struct.pack("<IIII", 2, 2, 1, 0) + bytes(2 * 2 * BYTES_PER_PIXEL)
-        with patch.object(device_smoke_test, "run_adb", return_value=raw):
+        with patch.object(device_layer, "run_adb", return_value=raw):
             self.assertEqual(device_smoke_test.capture_frame("device"), (2, 2, bytes(2 * 2 * BYTES_PER_PIXEL)))
 
-    @patch.object(device_smoke_test, "run_adb", return_value=bytes(8))
+    @patch.object(device_layer, "run_adb", return_value=bytes(8))
     def test_capture_frame_rejects_a_truncated_header(self, _run_adb: MagicMock) -> None:
         with self.assertRaisesRegex(RuntimeError, "payload too small"):
             device_smoke_test.capture_frame("device")
@@ -413,11 +414,11 @@ class DeviceStateParsingTest(unittest.TestCase):
             ("Physical size: 1080x2408\nPhysical size: 720x1280", (None, None)),
             ("Physical size: 1080x2408\nOverride size: 720x1280\nOverride size: 480x800", (None, None)),
         )
-        for harness in (device_smoke_test,):
+        for harness in (device_smoke_test, device_layer):
             for output, expected in cases:
                 with (
                     self.subTest(harness=harness.__name__, output=output),
-                    patch.object(harness, "run_adb", return_value=output.encode()),
+                    patch.object(device_layer, "run_adb", return_value=output.encode()),
                 ):
                     self.assertEqual(harness.read_display_size("device"), expected)
 
@@ -437,11 +438,11 @@ class DeviceStateParsingTest(unittest.TestCase):
             ("isKeyguardShowing=false\nisKeyguardShowing=unknown", None),
             ("isKeyguardShowing=unknown\nisKeyguardShowing=false", None),
         )
-        for harness in (device_smoke_test,):
+        for harness in (device_smoke_test, device_layer):
             for output, expected in cases:
                 with (
                     self.subTest(harness=harness.__name__, output=output),
-                    patch.object(harness, "run_adb", return_value=output.encode()),
+                    patch.object(device_layer, "run_adb", return_value=output.encode()),
                 ):
                     self.assertIs(harness.read_keyguard_locked("device"), expected)
 
@@ -465,13 +466,13 @@ class PhasePrerequisiteTest(unittest.TestCase):
     def check_surface_failure_through_main(self, module: ModuleType, readback: tuple[str | None, str | None]) -> None:
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.object(sys, "argv", ["harness"]))
-            stack.enter_context(patch.object(module, "run_adb"))
-            stack.enter_context(patch.object(module.time, "sleep"))
+            stack.enter_context(patch.object(device_layer, "run_adb"))
+            stack.enter_context(patch.object(device_smoke_test.time, "sleep"))
             stack.enter_context(
-                patch.object(module, "read_display_size", side_effect=[("1080x2408", "1080x2000"), readback])
+                patch.object(device_layer, "read_display_size", side_effect=[("1080x2408", "1080x2000"), readback])
             )
-            stack.enter_context(patch.object(module, "capture_frame", return_value=(2, 2, bytes(16))))
-            stack.enter_context(patch.object(module, "detect_hand_angle", return_value=1.0))
+            stack.enter_context(patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))))
+            stack.enter_context(patch.object(device_layer, "detect_hand_angle", return_value=1.0))
             restore = stack.enter_context(patch.object(module, "restore_device", return_value=True))
             stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
             error_output = stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
@@ -498,11 +499,11 @@ class PhasePrerequisiteTest(unittest.TestCase):
         failures: list[str] = []
         verified = readback[0] is not None and readback[1] == original
         with (
-            patch.object(module, "read_display_size", side_effect=[("1080x2408", "1080x2000"), readback]),
-            patch.object(module, "run_adb") as run_adb,
-            patch.object(module, "capture_frame", return_value=(2, 2, bytes(16))) as capture,
-            patch.object(module, "detect_hand_angle", return_value=1.0),
-            patch.object(module.time, "sleep"),
+            patch.object(device_layer, "read_display_size", side_effect=[("1080x2408", "1080x2000"), readback]),
+            patch.object(device_layer, "run_adb") as run_adb,
+            patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))) as capture,
+            patch.object(device_layer, "detect_hand_angle", return_value=1.0),
+            patch.object(device_smoke_test.time, "sleep"),
             contextlib.redirect_stdout(io.StringIO()),
         ):
             recreation = device_smoke_test.step_recreate_surface("device", original, "1080x2000")
@@ -546,7 +547,7 @@ class SmokeRendererLogTest(unittest.TestCase):
             override_was_active=True, restore_was_verified=True, hand_angle=1.0
         )
         with (
-            patch.object(sys, "argv", ["device_smoke_test.py"]),
+            patch.object(sys, "argv", ["device_smoke.py"]),
             patch.object(device_smoke_test, "read_baseline", return_value=baseline),
             patch.object(device_smoke_test, "step_reset_clock_and_show_home", return_value=True),
             patch.object(
@@ -554,9 +555,7 @@ class SmokeRendererLogTest(unittest.TestCase):
             ),
             patch.object(device_smoke_test, "step_recreate_surface", return_value=recreation),
             patch.object(device_smoke_test, "restore_device", return_value=restored) as restore,
-            patch.object(
-                device_smoke_test, "run_adb", side_effect=error, return_value=b"--------- beginning of main\n"
-            ),
+            patch.object(device_layer, "run_adb", side_effect=error, return_value=b"--------- beginning of main\n"),
             contextlib.redirect_stdout(io.StringIO()) as output,
             contextlib.redirect_stderr(io.StringIO()) as errors,
         ):

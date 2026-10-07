@@ -8,9 +8,6 @@ engine cleanup, or verify persisted settings after process recreation.
 """
 
 import argparse
-import math
-import re
-import struct
 import subprocess
 import sys
 import time
@@ -18,97 +15,190 @@ from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Final
 
-ANGLE_TOLERANCE_DEG: Final = 0.5
-DEBUG_ACTION: Final = "io.github.godaniya.astronomicalclockswallpaper.DEBUG_SET_TIME"
-PACKAGE_NAME: Final = "io.github.godaniya.astronomicalclockswallpaper.debug"
-SERVICE_NAME: Final = (
-    f"{PACKAGE_NAME}/io.github.godaniya.astronomicalclockswallpaper.AstronomicalClocksWallpaperService"
-)
-SERVICE_LOG_TAG: Final = "AstronomicalClocksWallpaperService"
+import device_layer
 
-ADB_TIMEOUT_SECONDS: Final = 30
-ADB_RESTORE_TIMEOUT_SECONDS: Final = 60
+# Shared constants re-exported for module parity
+ADB_RESTORE_TIMEOUT_SECONDS = device_layer.ADB_RESTORE_TIMEOUT_SECONDS
+ADB_TIMEOUT_SECONDS = device_layer.ADB_TIMEOUT_SECONDS
+ANGLE_TOLERANCE_DEG = device_layer.ANGLE_TOLERANCE_DEG
+COARSE_BIN_COUNT = device_layer.COARSE_BIN_COUNT
+COARSE_BIN_WIDTH_DEG = device_layer.COARSE_BIN_WIDTH_DEG
+DARK_HAND_MIN_RED_MINUS_BLUE = device_layer.DARK_HAND_MIN_RED_MINUS_BLUE
+DARK_HAND_RGB_BOUNDS = device_layer.DARK_HAND_RGB_BOUNDS
+DARK_RIM_RGB = device_layer.DARK_RIM_RGB
+DEBUG_ACTION = device_layer.DEBUG_ACTION
+DEBUG_CLOCK_RESET_EXTRAS = device_layer.DEBUG_CLOCK_RESET_EXTRAS
+DEBUG_CLOCK_RESET_MESSAGE = device_layer.DEBUG_CLOCK_RESET_MESSAGE
+DISPLAY_STATE_PATTERN = device_layer.DISPLAY_STATE_PATTERN
+EXPECTED_ADVANCE_12H_DEG = device_layer.EXPECTED_ADVANCE_12H_DEG
+EXPECTED_ADVANCE_30M_DEG = device_layer.EXPECTED_ADVANCE_30M_DEG
+FULL_TURN_DEG = device_layer.FULL_TURN_DEG
+HALF_TURN_DEG = device_layer.HALF_TURN_DEG
+HAND_MIN_SAMPLES = device_layer.HAND_MIN_SAMPLES
+HAND_SCAN_INNER_FRACTION = device_layer.HAND_SCAN_INNER_FRACTION
+HAND_SCAN_OUTER_FRACTION = device_layer.HAND_SCAN_OUTER_FRACTION
+HAND_SCAN_STEP_PX = device_layer.HAND_SCAN_STEP_PX
+KEYGUARD_SHOWING_PATTERN = device_layer.KEYGUARD_SHOWING_PATTERN
+LIGHT_HAND_RGB_BOUNDS = device_layer.LIGHT_HAND_RGB_BOUNDS
+LIGHT_RIM_RGB = device_layer.LIGHT_RIM_RGB
+MIN_SPLIT_FIELDS = device_layer.MIN_SPLIT_FIELDS
+OVERRIDE_SIZE_PATTERN = device_layer.OVERRIDE_SIZE_PATTERN
+PACKAGE_NAME = device_layer.PACKAGE_NAME
+PHYSICAL_SIZE_PATTERN = device_layer.PHYSICAL_SIZE_PATTERN
+PIXEL_STRIDE = device_layer.PIXEL_STRIDE
+REFINE_WEDGE_DEG = device_layer.REFINE_WEDGE_DEG
+RIM_PROBE_BEARINGS_DEG = device_layer.RIM_PROBE_BEARINGS_DEG
+RIM_PROBE_RADIUS_FRACTION = device_layer.RIM_PROBE_RADIUS_FRACTION
+SCREENCAP_HEADER_BYTES = device_layer.SCREENCAP_HEADER_BYTES
+SERVICE_LOG_TAG = device_layer.SERVICE_LOG_TAG
+SERVICE_NAME = device_layer.SERVICE_NAME
+WAKE_READ_PATTERN = device_layer.WAKE_READ_PATTERN
+AdbDevice = device_layer.AdbDevice
+ScreencapError = device_layer.ScreencapError
+error_detail = device_layer.error_detail
+captured_text = device_layer.captured_text
+list_devices = device_layer.list_devices
 
-PHYSICAL_SIZE_PATTERN: Final = re.compile(r"^Physical size:\s*(\d+x\d+)$")
-OVERRIDE_SIZE_PATTERN: Final = re.compile(r"^Override size:\s*(\d+x\d+)$")
-WAKE_READ_PATTERN: Final = re.compile(r"mWakefulness=(\w+)")
-DISPLAY_STATE_PATTERN: Final = re.compile(r"Display State=(ON|OFF)")
 
-# `dumpsys window` prints `isKeyguardShowing=<bool>` from DisplayPolicy.dump() on every AOSP release
-# back to at least API 23 (confirmed in frameworks/base's DisplayPolicy.java and its predecessor,
-# PhoneWindowManager.java). It is not verified against this project's own target device, so an
-# unreadable or unexpected dump is treated as unknown rather than assumed unlocked.
-KEYGUARD_SHOWING_PATTERN: Final = re.compile(r"\bisKeyguardShowing[ \t]*=[ \t]*([^\s,;}]*)")
+# Dynamic wrappers ensuring mock patching on device_layer is immediately observed
+def run_adb(args: Sequence[str], serial: str | None = None, timeout: int = ADB_TIMEOUT_SECONDS) -> bytes:
+    """Run an adb invocation via device_layer."""
+    return device_layer.run_adb(args, serial=serial, timeout=timeout)
 
-# DialStyle.kt pins the two civil-scale tones, and DialPaletteTest pins both against the palette
-# definitions: RIM is 0x1C2C39 for the dark palette and LIGHT_RIM is 0xE8E2D2 for the light one.
-DARK_RIM_RGB: Final = (0x1C, 0x2C, 0x39)
-LIGHT_RIM_RGB: Final = (0xE8, 0xE2, 0xD2)
-RGB_CHANNELS: Final = 3
 
-# DialRenderer maps the sky radius 0.43 * min(w, h) onto OUTER_RADIUS 1.37, so a normalized radius r
-# sits at r / 1.37 * 0.43 * min(w, h) pixels from the dial centre. 0.40 * min(w, h) is normalized
-# 1.274: clear of the numeral glyph band, which spans roughly 1.156 to 1.254 for NUMERAL_RADIUS
-# 1.205 and NUMERAL_SIZE 0.084, and inside the fine muted-gold stroke at
-# OUTER_RADIUS - RIM_INSET = 1.344. Everything between them is filled with palette.rim, because the
-# plate draws only within SKY_RADIUS 1.0 and the zodiac band stays inside that.
-RIM_PROBE_RADIUS_FRACTION: Final = 0.40
+def select_target_serial(requested: str | None) -> str:
+    """Resolve target serial via device_layer."""
+    return device_layer.select_target_serial(requested)
 
-# Bearings are spread around the dial so the modal colour survives a local obstruction such as one
-# glyph, notification, or launcher icon. Bearing alone does not separate a probe from a numeral: the
-# 24 numerals also sit on 15-degree bearings, so the radial separation above, not the bearing, is
-# what keeps every probe in the flat band.
-RIM_PROBE_BEARINGS_DEG: Final = tuple(range(15, 360, 30))
 
-# DialRenderer maps the sky radius 0.43 * min(w, h) onto OUTER_RADIUS 1.37, so the hand region is
-# scanned between the hub (0.08) and the rim inset, and the scan steps two pixels for speed.
-HAND_SCAN_OUTER_FRACTION: Final = 0.43
-HAND_SCAN_INNER_FRACTION: Final = 0.08
-HAND_SCAN_STEP_PX: Final = 2
-PIXEL_STRIDE: Final = 4
+def read_display_size(serial: str) -> tuple[str | None, str | None]:
+    """Read display sizes via device_layer."""
+    return device_layer.read_display_size(serial)
 
-# DialStyle.HAND #F4E5B8 is (244, 229, 184) and DialStyle.LIGHT_HAND #4E341B is (78, 52, 27). The
-# bounds below admit each ink plus its antialiased edge pixels against the plate it is drawn on.
-DARK_HAND_RGB_BOUNDS: Final = ((225, 255), (210, 255), (165, 215))
-# The pale hand is warm, so a pixel only counts when its channels fall red > green > blue as well.
-LIGHT_HAND_RGB_BOUNDS: Final = ((55, 105), (35, 80), (15, 50))
-DARK_HAND_MIN_RED_MINUS_BLUE: Final = 20
 
-# The hand is a long straight stroke, so its pixels dominate one coarse bin; the refine wedge then
-# keeps stray same-colour pixels elsewhere from biasing the circular mean.
-HAND_MIN_SAMPLES: Final = 20
-COARSE_BIN_COUNT: Final = 90
-COARSE_BIN_WIDTH_DEG: Final = 4.0
-REFINE_WEDGE_DEG: Final = 6.0
-FULL_TURN_DEG: Final = 360.0
-HALF_TURN_DEG: Final = FULL_TURN_DEG / 2
+def choose_recreate_size(physical: str | None, override: str | None) -> str:
+    """Choose recreate size via device_layer."""
+    return device_layer.choose_recreate_size(physical, override)
 
-# A screencap frame starts with a 16-byte width/height/format/stride header.
-SCREENCAP_HEADER_BYTES: Final = 16
 
-# A device line from `adb devices` and a TOTAL row from `dumpsys meminfo` both need at least this
-# many whitespace-separated fields before the value of interest is present.
-MIN_SPLIT_FIELDS: Final = 2
+def size_restore_command(override: str | None) -> list[str]:
+    """Get size restore command via device_layer."""
+    return device_layer.size_restore_command(override)
 
-# Commands and messages the debug build answers on.
-DEBUG_CLOCK_RESET_EXTRAS: Final = ["--ez", "reset", "true"]
-DEBUG_CLOCK_RESET_MESSAGE: Final = "Debug clock reset to system UTC"
 
-# The process-rebind phase polls for a new pid this many times at this interval; the report says
-# exactly that rather than presenting the window as a measured latency.
+def read_keyguard_locked(serial: str) -> bool | None:
+    """Read keyguard state via device_layer."""
+    return device_layer.read_keyguard_locked(serial)
+
+
+def read_screen_on(serial: str) -> bool | None:
+    """Read screen state via device_layer."""
+    return device_layer.read_screen_on(serial)
+
+
+def read_night_mode(serial: str) -> str | None:
+    """Read night mode setting via device_layer."""
+    return device_layer.read_night_mode(serial)
+
+
+def get_wallpaper_pid(serial: str) -> int | None:
+    """Get wallpaper pid via device_layer."""
+    return device_layer.get_wallpaper_pid(serial)
+
+
+def sleep_screen(serial: str) -> bool:
+    """Sleep screen via device_layer."""
+    return device_layer.sleep_screen(serial)
+
+
+def wake_screen(serial: str) -> bool:
+    """Wake screen via device_layer."""
+    return device_layer.wake_screen(serial)
+
+
+def run_restore_command(serial: str, command: Sequence[str]) -> bool:
+    """Run restore command via device_layer."""
+    return device_layer.run_restore_command(serial, command)
+
+
+def count_service_log_messages(serial: str, message: str) -> int:
+    """Count service log messages via device_layer."""
+    return device_layer.count_service_log_messages(serial, message)
+
+
+def send_debug_clock_broadcast(serial: str, extras: Sequence[str], expected_message: str) -> bool:
+    """Send debug clock broadcast via device_layer."""
+    return device_layer.send_debug_clock_broadcast(serial, extras, expected_message)
+
+
+def confirm_virtual_clock_reset(serial: str) -> bool:
+    """Confirm virtual clock reset via device_layer."""
+    return device_layer.confirm_virtual_clock_reset(serial)
+
+
+def capture_frame(serial: str | None = None) -> tuple[int, int, bytes]:
+    """Capture screencap frame via device_layer."""
+    return device_layer.capture_frame(serial=serial)
+
+
+def rim_probe_points(width: int, height: int) -> Iterator[tuple[int, int]]:
+    """Sample rim probe points via device_layer."""
+    return device_layer.rim_probe_points(width, height)
+
+
+def modal_pixel_rgb(width: int, pixels: bytes, points: Iterable[tuple[int, int]]) -> tuple[int, int, int] | None:
+    """Find modal pixel RGB via device_layer."""
+    return device_layer.modal_pixel_rgb(width, pixels, points)
+
+
+def nearest_rim_rgb(rgb: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Find nearest rim RGB literal via device_layer."""
+    return device_layer.nearest_rim_rgb(rgb)
+
+
+def is_dark_palette(width: int, height: int, pixels: bytes) -> bool:
+    """Check dark palette via device_layer."""
+    return device_layer.is_dark_palette(width, height, pixels)
+
+
+def within_rgb_bounds(channels: tuple[int, int, int], bounds: tuple[tuple[int, int], ...]) -> bool:
+    """Check RGB bounds via device_layer."""
+    return device_layer.within_rgb_bounds(channels, bounds)
+
+
+def is_dark_hand_pixel(red: int, green: int, blue: int) -> bool:
+    """Check dark hand pixel via device_layer."""
+    return device_layer.is_dark_hand_pixel(red, green, blue)
+
+
+def is_light_hand_pixel(red: int, green: int, blue: int) -> bool:
+    """Check light hand pixel via device_layer."""
+    return device_layer.is_light_hand_pixel(red, green, blue)
+
+
+def collect_hand_points(width: int, height: int, pixels: bytes, *, is_dark: bool) -> list[tuple[float, float]]:
+    """Collect hand points via device_layer."""
+    return device_layer.collect_hand_points(width, height, pixels, is_dark=is_dark)
+
+
+def coarse_hand_angle(angles: Sequence[float]) -> float:
+    """Calculate coarse hand angle via device_layer."""
+    return device_layer.coarse_hand_angle(angles)
+
+
+def refine_hand_angle(angles: Sequence[float], coarse_deg: float) -> float | None:
+    """Refine hand angle via device_layer."""
+    return device_layer.refine_hand_angle(angles, coarse_deg)
+
+
+def detect_hand_angle(width: int, height: int, pixels: bytes) -> float | None:
+    """Detect hand angle via device_layer."""
+    return device_layer.detect_hand_angle(width, height, pixels)
+
+
 REBIND_POLL_COUNT: Final = 10
 REBIND_POLL_SECONDS: Final = 0.5
-
-# Expected civil-hand advance for the two virtual-time steps, in degrees on the 24-hour dial.
-EXPECTED_ADVANCE_30M_DEG: Final = 7.500
-EXPECTED_ADVANCE_12H_DEG: Final = 180.000
-
-# The gap between the two total-PSS samples, in seconds.
 PSS_SAMPLE_SECONDS: Final = 10.0
-
-
-class ScreencapError(RuntimeError):
-    """A screencap that could not be decoded into a frame."""
 
 
 @dataclass(frozen=True)
@@ -122,147 +212,6 @@ class DeviceBaseline:
     screen_was_on: bool
     night_mode: str
     wallpaper_pid: int
-
-
-def error_detail(error: BaseException) -> str:
-    """Format an exception with any captured stderr, which is where ADB explains itself."""
-    stderr = getattr(error, "stderr", None)
-    if isinstance(stderr, bytes):
-        stderr = stderr.decode("utf-8", errors="replace").strip()
-    if stderr:
-        return f"{error}: {stderr}"
-    return str(error)
-
-
-def run_adb(args: Sequence[str], serial: str | None = None, timeout: int = ADB_TIMEOUT_SECONDS) -> bytes:
-    """Run one `adb` invocation and return its stdout, raising on a non-zero exit or a timeout."""
-    cmd = ["adb"]
-    if serial:
-        cmd.extend(["-s", serial])
-    cmd.extend(args)
-    # S603: the executable is the developer's own `adb`, resolved from PATH; the argv is built here
-    # from literals and parsed device output, and no shell is involved.
-    res = subprocess.run(  # noqa: S603
-        cmd, capture_output=True, check=True, timeout=timeout
-    )
-    return res.stdout
-
-
-def list_devices() -> dict[str, str]:
-    """Map every serial `adb devices` reports to its state, dropping the header line."""
-    output = run_adb(["devices"]).decode("utf-8")
-    devices = {}
-    for line in output.splitlines()[1:]:
-        parts = line.split()
-        if len(parts) >= MIN_SPLIT_FIELDS:
-            devices[parts[0]] = parts[1]
-    return devices
-
-
-def select_target_serial(requested: str | None) -> str:
-    """Resolve the one device to operate on, exiting rather than guessing when it is ambiguous."""
-    devices = list_devices()
-    active = [serial for serial, state in devices.items() if state == "device"]
-    if requested is not None:
-        if requested in active:
-            return requested
-        state = devices.get(requested, "not attached")
-        print(f"ERROR: --serial {requested} is not an active device ({state}).", file=sys.stderr)
-        sys.exit(1)
-    if len(active) == 1:
-        return active[0]
-    print(f"ERROR: expected exactly one active ADB device but found {len(active)}.", file=sys.stderr)
-    sys.exit(1)
-
-
-def captured_text(match: re.Match[str], group: int) -> str:
-    """
-    Return one capture group of a successful match.
-
-    typeshed declares `re.Match.group` as returning `Any`, which a checker that requires a concrete
-    return type cannot accept. The requested groups capture text, including an
-    empty keyguard assignment.
-    """
-    return str(match.group(group))
-
-
-def read_display_size(serial: str) -> tuple[str | None, str | None]:
-    """Read display sizes; return (None, None) for missing, invalid, or conflicting fields."""
-    output = run_adb(["shell", "wm", "size"], serial=serial).decode("utf-8")
-    sizes: dict[str, str] = {}
-    for line in output.splitlines():
-        field = line.strip()
-        for label, pattern in (("Physical size", PHYSICAL_SIZE_PATTERN), ("Override size", OVERRIDE_SIZE_PATTERN)):
-            if not field.startswith(label):
-                continue
-            match = pattern.fullmatch(field)
-            if match is None:
-                return None, None
-            size = captured_text(match, 1)
-            if any(int(dimension) <= 0 for dimension in size.split("x")):
-                return None, None
-            if label in sizes and sizes[label] != size:
-                return None, None
-            sizes[label] = size
-    if "Physical size" not in sizes:
-        return None, None
-    return sizes["Physical size"], sizes.get("Override size")
-
-
-def choose_recreate_size(physical: str | None, override: str | None) -> str:
-    """Pick a `wm size` target that differs from the size in effect, so the resize is never a no-op."""
-    effective = override or physical
-    return "1080x1800" if effective == "1080x2000" else "1080x2000"
-
-
-def size_restore_command(override: str | None) -> list[str]:
-    """Return the `wm size` invocation that puts the display back to the size the run found."""
-    if override:
-        return ["shell", "wm", "size", override]
-    return ["shell", "wm", "size", "reset"]
-
-
-def read_screen_on(serial: str) -> bool | None:
-    """Read the screen state, returning None when neither wakefulness nor display state is readable."""
-    power = run_adb(["shell", "dumpsys", "power"], serial=serial).decode("utf-8")
-    for line in power.splitlines():
-        match = WAKE_READ_PATTERN.search(line)
-        if match:
-            state = captured_text(match, 1)
-            if state == "Awake":
-                return True
-            if state in ("Asleep", "Dozing"):
-                return False
-    display = run_adb(["shell", "dumpsys", "display"], serial=serial).decode("utf-8")
-    match = DISPLAY_STATE_PATTERN.search(display)
-    if match:
-        return captured_text(match, 1) == "ON"
-    return None
-
-
-def read_night_mode(serial: str) -> str | None:
-    """Read the current `cmd uimode night` value, or None when the output does not carry one."""
-    output = run_adb(["shell", "cmd", "uimode", "night"], serial=serial).decode("utf-8")
-    for line in output.splitlines():
-        if "Night mode:" in line:
-            return line.split(":", 1)[1].strip()
-    return None
-
-
-def read_keyguard_locked(serial: str) -> bool | None:
-    """
-    Read whether the keyguard is currently showing, or None when it cannot be determined.
-
-    Any true reading means locked; only valid false readings establish unlocked. Missing or
-    malformed values remain unknown, so the harness refuses mutation when it cannot confirm a lock.
-    """
-    output = run_adb(["shell", "dumpsys", "window"], serial=serial).decode("utf-8")
-    readings = [captured_text(match, 1) for match in KEYGUARD_SHOWING_PATTERN.finditer(output)]
-    if "true" in readings:
-        return True
-    if readings and all(reading == "false" for reading in readings):
-        return False
-    return None
 
 
 def non_negative_int(value: str) -> int:
@@ -291,189 +240,9 @@ def evaluate_pss_growth(pss_before: int | None, pss_after: int | None, max_growt
     return growth_kb, growth_kb <= max_growth_kb
 
 
-def send_debug_clock_broadcast(serial: str, extras: Sequence[str], expected_message: str) -> bool:
-    """Send a debug-clock broadcast and report whether the service logged a new acceptance line."""
-    before = count_service_log_messages(serial, expected_message)
-    run_adb(["shell", "am", "broadcast", "-a", DEBUG_ACTION, *extras], serial=serial)
-    return count_service_log_messages(serial, expected_message) > before
-
-
-def count_service_log_messages(serial: str, message: str) -> int:
-    """Count the current service-tagged logcat lines that contain the given message."""
-    output = run_adb(
-        ["logcat", "-d", "-s", f"{SERVICE_LOG_TAG}:I"],
-        serial=serial,
-    ).decode("utf-8")
-    return sum(message in line for line in output.splitlines())
-
-
 def matching_renderer_warnings(output: str) -> list[str]:
     """Keep the logcat lines that are records, dropping blanks and the `---------` separators."""
     return [line for line in output.splitlines() if line.strip() and not line.startswith("---------")]
-
-
-def get_wallpaper_pid(serial: str) -> int | None:
-    """Return the wallpaper process id, or None when the package has no live process."""
-    try:
-        pid_str = run_adb(["shell", "pidof", PACKAGE_NAME], serial=serial).decode().strip()
-        pids = [int(p) for p in pid_str.split() if p.isdigit()]
-        return pids[0] if pids else None
-    except subprocess.CalledProcessError as error:
-        stderr = error.stderr
-        if stderr and (not isinstance(stderr, str) or stderr.strip()):
-            raise
-        return None
-
-
-def capture_frame(serial: str | None = None) -> tuple[int, int, bytes]:
-    """Capture one screencap frame as (width, height, RGBA pixels), validating the payload size."""
-    raw = run_adb(["exec-out", "screencap"], serial=serial)
-    if len(raw) < SCREENCAP_HEADER_BYTES:
-        message = "Failed to capture screencap; payload too small"
-        raise ScreencapError(message)
-    width, height, _, _ = struct.unpack("<IIII", raw[:SCREENCAP_HEADER_BYTES])
-    pixels = raw[SCREENCAP_HEADER_BYTES:]
-    expected_bytes = width * height * PIXEL_STRIDE
-    if width <= 0 or height <= 0 or len(pixels) != expected_bytes:
-        message = f"Unexpected screencap payload size: expected {expected_bytes} pixel bytes, got {len(pixels)}"
-        raise ScreencapError(message)
-    return width, height, pixels
-
-
-def rim_probe_points(width: int, height: int) -> Iterator[tuple[int, int]]:
-    """Sample points in the civil-scale annulus, in the dial's own bearing convention."""
-    cx, cy = width / 2.0, height / 2.0
-    radius = RIM_PROBE_RADIUS_FRACTION * min(width, height)
-    for bearing in RIM_PROBE_BEARINGS_DEG:
-        radians = math.radians(bearing)
-        x = round(cx + radius * math.sin(radians))
-        y = round(cy - radius * math.cos(radians))
-        if 0 <= x < width and 0 <= y < height:
-            yield x, y
-
-
-def modal_pixel_rgb(width: int, pixels: bytes, points: Iterable[tuple[int, int]]) -> tuple[int, int, int] | None:
-    """Return the RGB triple occurring most often among points, or None when there are none."""
-    counts: dict[tuple[int, int, int], int] = {}
-    for x, y in points:
-        offset = (y * width + x) * PIXEL_STRIDE
-        rgb = (pixels[offset], pixels[offset + 1], pixels[offset + 2])
-        counts[rgb] = counts.get(rgb, 0) + 1
-    if not counts:
-        return None
-    return max(counts, key=counts.__getitem__)
-
-
-def nearest_rim_rgb(rgb: tuple[int, int, int]) -> tuple[int, int, int]:
-    """Return whichever pinned civil-scale literal is geometrically closer to the sampled colour."""
-    dark = sum((channel - target) ** 2 for channel, target in zip(rgb, DARK_RIM_RGB, strict=True))
-    light = sum((channel - target) ** 2 for channel, target in zip(rgb, LIGHT_RIM_RGB, strict=True))
-    return DARK_RIM_RGB if dark <= light else LIGHT_RIM_RGB
-
-
-def is_dark_palette(width: int, height: int, pixels: bytes) -> bool:
-    """
-    Classify the visible palette from the civil scale's own rim tone.
-
-    The probe samples the annulus rather than the plate margin, as the previous single top-centre
-    sample did. That sample sat at normalized radius 1.211, essentially on the numeral ring, and the
-    numeral is palette.gold in both themes; a dark frame whose gold glyph dominated the sample was
-    read as light, and detect_hand_angle then searched a dark plate for LIGHT_HAND and found no
-    hand. Several probes across the annulus, taking the modal colour, cannot land on any one glyph.
-    """
-    rgb = modal_pixel_rgb(width, pixels, rim_probe_points(width, height))
-    return rgb is not None and nearest_rim_rgb(rgb) == DARK_RIM_RGB
-
-
-def within_rgb_bounds(channels: tuple[int, int, int], bounds: tuple[tuple[int, int], ...]) -> bool:
-    """Report whether every RGB channel falls inside its inclusive bound pair."""
-    return all(low <= channel <= high for channel, (low, high) in zip(channels, bounds, strict=True))
-
-
-def is_dark_hand_pixel(red: int, green: int, blue: int) -> bool:
-    """Match DialStyle.HAND #F4E5B8 and its antialiased edge pixels on a dark plate."""
-    return within_rgb_bounds((red, green, blue), DARK_HAND_RGB_BOUNDS) and red - blue >= DARK_HAND_MIN_RED_MINUS_BLUE
-
-
-def is_light_hand_pixel(red: int, green: int, blue: int) -> bool:
-    """Match DialStyle.LIGHT_HAND #4E341B and its antialiased edge pixels on a light plate."""
-    return within_rgb_bounds((red, green, blue), LIGHT_HAND_RGB_BOUNDS) and red > green > blue
-
-
-def collect_hand_points(width: int, height: int, pixels: bytes, *, is_dark: bool) -> list[tuple[float, float]]:
-    """Collect the dial-centre offsets of every hand-ink pixel inside the dial region."""
-    cx, cy = width / 2.0, height / 2.0
-    max_radius = min(width, height) * HAND_SCAN_OUTER_FRACTION
-    min_radius = min(width, height) * HAND_SCAN_INNER_FRACTION
-    min_r_sq = min_radius * min_radius
-    max_r_sq = max_radius * max_radius
-
-    is_hand_pixel = is_dark_hand_pixel if is_dark else is_light_hand_pixel
-    row_stride = width * PIXEL_STRIDE
-    points: list[tuple[float, float]] = []
-    for y in range(int(cy - max_radius), int(cy + max_radius), HAND_SCAN_STEP_PX):
-        if y < 0 or y >= height:
-            continue
-        dy = y - cy
-        row_offset = y * row_stride
-        for x in range(int(cx - max_radius), int(cx + max_radius), HAND_SCAN_STEP_PX):
-            if x < 0 or x >= width:
-                continue
-            dx = x - cx
-            dist_sq = dx * dx + dy * dy
-            if min_r_sq <= dist_sq <= max_r_sq:
-                px = row_offset + x * PIXEL_STRIDE
-                if is_hand_pixel(pixels[px], pixels[px + 1], pixels[px + 2]):
-                    points.append((dx, dy))
-    return points
-
-
-def coarse_hand_angle(angles: Sequence[float]) -> float:
-    """Return the centre of the 4-degree bin holding the most hand pixels."""
-    bins = [0] * COARSE_BIN_COUNT
-    for angle in angles:
-        bins[int(angle // COARSE_BIN_WIDTH_DEG) % COARSE_BIN_COUNT] += 1
-    return (bins.index(max(bins)) + 0.5) * COARSE_BIN_WIDTH_DEG
-
-
-def refine_hand_angle(angles: Sequence[float], coarse_deg: float) -> float | None:
-    """Circular mean of the angles within the refine wedge of the coarse estimate, or None."""
-    sum_sin = 0.0
-    sum_cos = 0.0
-    kept = 0
-    for angle in angles:
-        delta = abs((angle - coarse_deg + HALF_TURN_DEG) % FULL_TURN_DEG - HALF_TURN_DEG)
-        if delta <= REFINE_WEDGE_DEG:
-            sum_sin += math.sin(math.radians(angle))
-            sum_cos += math.cos(math.radians(angle))
-            kept += 1
-    if kept < HAND_MIN_SAMPLES:
-        return None
-    return math.degrees(math.atan2(sum_sin, sum_cos)) % FULL_TURN_DEG
-
-
-def detect_hand_angle(width: int, height: int, pixels: bytes) -> float | None:
-    """
-    Locate the civil hand and return its clockwise angle from the top of the dial.
-
-    Adapts the ink to the theme, matching DialStyle.HAND #F4E5B8 on the dark palette and
-    DialStyle.LIGHT_HAND #4E341B on the light one. Returns None when too few pixels match.
-    """
-    points = collect_hand_points(width, height, pixels, is_dark=is_dark_palette(width, height, pixels))
-    if len(points) < HAND_MIN_SAMPLES:
-        return None
-    angles = [math.degrees(math.atan2(dx, -dy)) % FULL_TURN_DEG for dx, dy in points]
-    return refine_hand_angle(angles, coarse_hand_angle(angles))
-
-
-def run_restore_command(serial: str, command: Sequence[str]) -> bool:
-    """Run one restore command, reporting a failure without raising so the remaining ones still run."""
-    try:
-        run_adb(command, serial=serial, timeout=ADB_RESTORE_TIMEOUT_SECONDS)
-    except (subprocess.SubprocessError, OSError) as error:
-        print(f"WARNING: restore command failed: {error_detail(error)}", file=sys.stderr)
-        return False
-    return True
 
 
 def restore_commands(size_override: str | None, initial_night_mode: str | None) -> list[list[str]]:
@@ -488,32 +257,6 @@ def restore_commands(size_override: str | None, initial_night_mode: str | None) 
     return commands
 
 
-def confirm_virtual_clock_reset(serial: str) -> bool:
-    """Reset the virtual clock and report whether the service log confirmed it."""
-    try:
-        confirmed = send_debug_clock_broadcast(serial, DEBUG_CLOCK_RESET_EXTRAS, DEBUG_CLOCK_RESET_MESSAGE)
-    except (subprocess.SubprocessError, OSError) as error:
-        print(f"WARNING: virtual-clock reset failed: {error_detail(error)}", file=sys.stderr)
-        return False
-    if not confirmed:
-        print("WARNING: virtual-clock reset was not confirmed", file=sys.stderr)
-    return confirmed
-
-
-def sleep_screen(serial: str) -> bool:
-    """Put the screen back to sleep, reporting whether the request was delivered."""
-    try:
-        run_adb(
-            ["shell", "input", "keyevent", "KEYCODE_SLEEP"],
-            serial=serial,
-            timeout=ADB_RESTORE_TIMEOUT_SECONDS,
-        )
-    except (subprocess.SubprocessError, OSError) as error:
-        print(f"WARNING: screen-state restore failed: {error_detail(error)}", file=sys.stderr)
-        return False
-    return True
-
-
 def verify_restored_state(
     serial: str,
     size_override: str | None,
@@ -521,13 +264,7 @@ def verify_restored_state(
     initial_screen_was_on: bool | None,
     initial_night_mode: str | None,
 ) -> bool:
-    """
-    Re-read the mutated settings and report whether each returned to what the run found.
-
-    An unreadable display readback is reported as unrestored rather than compared: with no override
-    to compare, `read_display_size`'s `(None, None)` would otherwise equal a baseline of no override
-    and pass, reporting a display that was never read as restored.
-    """
+    """Re-read the mutated settings and report whether each returned to what the run found."""
     try:
         restored_physical_size, restored_size_override = read_display_size(serial)
         restored_night_mode = read_night_mode(serial) if initial_night_mode is not None else None
@@ -590,19 +327,9 @@ def restore_device(
 
 
 def phase_environment_setup(serial: str, failures: list[str]) -> bool:
-    """
-    Wake the device, dismiss the keyguard, show home, and confirm the debug-clock reset.
-
-    Returns whether the reset was confirmed; `am broadcast` exits 0 even when nothing consumes it,
-    so a caller that ran the dependent phases regardless could capture a baseline and measure time
-    travel against a clock that was never actually reset, reporting a passing residual that proves
-    nothing. The caller skips the dependent phases when this returns False.
-    """
+    """Wake the device, dismiss the keyguard, show home, and confirm the debug-clock reset."""
     print("\n--- Phase 0: Environment Wake & Unlocking ---")
     run_adb(["shell", "input", "keyevent", "KEYCODE_WAKEUP"], serial=serial)
-    # A defensive no-op given read_device_baseline's unlocked precondition: it can only dismiss a
-    # transient, non-secure keyguard, and never bypasses a secure lock the run already refused to
-    # proceed past.
     run_adb(["shell", "wm", "dismiss-keyguard"], serial=serial)
     run_adb(["shell", "input", "keyevent", "KEYCODE_HOME"], serial=serial)
     time.sleep(1.0)
@@ -879,18 +606,39 @@ def phase_total_pss_growth(
             )
 
 
+def phase_palette_adaptation(
+    serial: str, initial_night_mode: str, results: list[tuple[str, str]], failures: list[str]
+) -> None:
+    """Toggle night mode and verify hand visibility across palette transitions."""
+    print("\n--- Phase: Palette Adaptation ---")
+    target_mode = "yes" if initial_night_mode != "yes" else "no"
+    run_adb(["shell", "cmd", "uimode", "night", target_mode], serial=serial)
+    time.sleep(1.0)
+    w_pal, h_pal, px_pal = capture_frame(serial=serial)
+    angle_pal = detect_hand_angle(w_pal, h_pal, px_pal)
+    # Restore mode
+    run_adb(["shell", "cmd", "uimode", "night", initial_night_mode], serial=serial)
+    time.sleep(0.5)
+    if angle_pal is not None:
+        results.append(("palette adaptation", f"hand detected at {angle_pal:.3f}° in night mode {target_mode}"))
+    else:
+        failures.append(f"Hand not found after night mode toggle to {target_mode}")
+
+
+def phase_battery_baseline(serial: str, results: list[tuple[str, str]], failures: list[str]) -> None:
+    """Check battery stats baseline availability."""
+    print("\n--- Phase: Battery Baseline ---")
+    try:
+        run_adb(["shell", "dumpsys", "batterystats", "--reset"], serial=serial)
+        results.append(("battery baseline", "batterystats reset successfully"))
+    except (subprocess.SubprocessError, OSError) as error:
+        failures.append(f"Failed to reset batterystats: {error_detail(error)}")
+
+
 def phase_renderer_log_scan(
     serial: str, run_start_marker: str, results: list[tuple[str, str]], failures: list[str]
 ) -> bool:
-    """
-    Scan the run's renderer log lines and append the outcome to the results.
-
-    Return True only when the scan itself completed and matched nothing, which leaves the run
-    reporting a conditional pass rather than a verified clean log. A scan that could not be
-    collected at all is a failed check, not an inconclusive one: it is evidence the harness never
-    examined anything, and recording it as inconclusive let an ADB error exit zero on a run whose
-    last phase never ran.
-    """
+    """Scan the run's renderer log lines and append the outcome to the results."""
     print("\n--- Phase 7: Renderer Log Scan ---")
     log_scan_inconclusive = False
     try:
@@ -956,9 +704,6 @@ def read_device_baseline(requested_serial: str | None) -> DeviceBaseline:
         print("ERROR: could not read the initial night mode; refusing to change device state.", file=sys.stderr)
         sys.exit(1)
 
-    # Require a confirmed-unlocked device before any mutation: an already-locked or unreadable
-    # keyguard state is refused rather than dismissed, so the run never bypasses a secure lock it did
-    # not independently confirm was already open.
     if keyguard_locked is None:
         print(
             "ERROR: could not read the keyguard state; refusing to run on an unconfirmed lock state.",
@@ -983,6 +728,10 @@ def read_device_baseline(requested_serial: str | None) -> DeviceBaseline:
         night_mode=night_mode,
         wallpaper_pid=pid_start,
     )
+
+
+# Alias for backward compatibility
+read_baseline = read_device_baseline
 
 
 def print_check_report(results: list[tuple[str, str]]) -> None:
@@ -1025,43 +774,31 @@ def main() -> None:
     current_phase = "environment setup"
 
     try:
-        # Phase 0: Ensure home screen is visible & dismissed keyguard
         current_phase = "environment setup"
         reset_confirmed = phase_environment_setup(serial, failures)
 
         if reset_confirmed:
-            # Baseline capture
             current_phase = "baseline capture"
             phase_baseline_capture(serial, results, failures)
 
-            # Phase 1: Screen-Off / Wake Navigation
             current_phase = "screen-off / wake navigation"
             phase_screen_off_wake(serial, results, failures)
 
-            # Phase 2: Preview Navigation
             current_phase = "preview navigation"
             phase_preview_navigation(serial, results, failures)
 
-            # Phase 3: Surface Recreation (wm size override)
             current_phase = "surface recreation"
             phase_surface_recreation(serial, baseline.size_override, recreate_size, results, failures)
 
-            # Phase 4: Process Recreation (non-stopping SIGKILL, not an LMK run)
             current_phase = "process rebind"
             phase_process_rebind(serial, results, failures)
 
-            # Phase 5: Accelerated Astronomical Time Travel (+30m, +12h)
             current_phase = "virtual time travel"
             phase_time_travel(serial, results, failures)
 
-            # Phase 6: Total PSS growth against an explicitly supplied budget
             current_phase = "total PSS growth"
             phase_total_pss_growth(serial, args.max_pss_growth_kb, results, failures)
         else:
-            # The environment reset was not confirmed by the service log, so every phase that
-            # compares against a known debug-clock state would measure against an unknown clock and
-            # report a meaningless pass. Skip straight to restore and the log scan, which do not
-            # depend on the reset.
             print("Skipping phases 1-6: environment reset was not confirmed.", file=sys.stderr)
 
     except (subprocess.SubprocessError, OSError, RuntimeError) as error:
@@ -1077,7 +814,6 @@ def main() -> None:
     if not restored:
         failures.append("Device restoration failed or could not be verified")
 
-    # Phase 7: Logcat scan
     current_phase = "renderer log scan"
     log_scan_inconclusive = phase_renderer_log_scan(serial, baseline.run_start_marker, results, failures)
 
