@@ -279,10 +279,12 @@ The stable release ID is `io.github.godaniya.astronomicalclockswallpaper`; relea
 Debug signing keys are disposable and local/CI APKs may require uninstalling the previous debug app.
 
 GitHub Actions runs on pull requests and pushes to `main`. Actions use immutable commit references,
-and the job has only `contents: read`. Open the **Android quality gate** run and download
-`debug-apk-<source revision>` or `check-reports-<source revision>`. The PR run checks GitHub's merge
-revision, recorded in the artifact name and `toolchain.txt`. Check reports upload even on failure;
-the APK uploads only after a successful gate and APK verification. No release credentials are used.
+and the jobs have only `contents: read`. The host checks and the Android build run as separate
+parallel jobs, so a failure in one does not withhold the other's artifacts and diagnostics. Open the
+**Android quality gate** run and download `debug-apk-<source revision>` or
+`check-reports-<source revision>`. The PR run checks GitHub's merge revision, recorded in the
+artifact name and `toolchain.txt`. Check reports upload even on failure; the APK uploads only after a
+successful gate and APK verification. No release credentials are used.
 
 Install a downloaded debug APK with `adb install -r app-debug.apk`, open **Astro Clocks**, and
 tap **Open wallpaper preview**. See [device-testing.md](device-testing.md) for the physical-device
