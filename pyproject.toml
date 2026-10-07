@@ -17,28 +17,22 @@ preview = false
 
 [tool.ruff.lint]
 select = ["ALL"]
-# Only the rules Ruff's formatter conflicts with, plus D212, which conflicts with the D213 layout
-# already in use. Re-audited against Ruff's documented formatter-conflict list
-# (https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules): every rule it lists is ignored,
-# and its ISC002 condition (ISC002 without ISC001 and allow-multiline=false) does not apply because
-# ISC001 stays enabled. D212 is the local extra for the D213 layout. Recorded with reasons in
-# docs/development.md#rule-exceptions. No rule has its severity lowered and no directory is excluded.
+# Only four rules are relaxed. Ruff's documented formatter-conflict list
+# (https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules) was audited against the pinned
+# toolchain on 2026-10-07: every other listed rule (`W191`, `E111`, `E114`, `E117`, `D206`,
+# `Q000`-`Q004`, `COM819`) is enabled here and produced no formatter warning and no finding on the
+# formatted tree or on a formatting torture fixture. The four kept rules either conflict by pair
+# (`D203` with enabled `D211`; `D212` with the `D213` layout in use) or fire on formatter-stable
+# output (`D300` preserves a triple-single-quoted docstring to avoid escapes; `COM812` wants
+# trailing commas the formatter omits in compact multi-line constructs). Re-run the audit on any
+# Ruff pin bump. ISC002's documented condition (without ISC001 and allow-multiline=false) does not
+# apply because ISC001 stays enabled. Recorded in docs/development.md#rule-exceptions. No rule has
+# its severity lowered and no directory is excluded.
 ignore = [
-  "W191", # tab indentation would be reformatted
-  "E111", # indentation is not a multiple of four
-  "E114", # indentation is not a multiple of four (comment)
-  "E117", # over-indented
-  "D203", # one blank line before class docstring; conflicts with D211
-  "D206", # docstring indentation; the formatter owns it
-  "D300", # triple double quotes; the formatter owns it
-  "Q000", # bad quotes for inline strings
-  "Q001", # bad quotes for multiline strings
-  "Q002", # bad quotes for docstrings
-  "Q003", # avoidable escaped quote
-  "Q004", # unnecessary escaped quote
-  "COM812", # missing trailing comma
-  "COM819", # prohibited trailing comma
-  "D212", # multi-line summary first line; conflicts with the D213 layout in use
+  "D203",   # one blank line before a class docstring; conflicts with enabled D211
+  "D212",   # multi-line summary on the first line; conflicts with the D213 layout in use
+  "D300",   # formatter preserves triple-single-quoted docstrings to avoid escapes
+  "COM812", # formatter omits trailing commas in compact multi-line constructs; Ruff warns
 ]
 
 [tool.ruff.lint.flake8-copyright]

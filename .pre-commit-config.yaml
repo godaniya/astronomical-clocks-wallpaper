@@ -1,0 +1,21 @@
+# Local convenience hooks; CI stays authoritative and does not run pre-commit -- it runs the same
+# pinned tool versions directly (astral-sh/ruff-action and `uvx --from ty==...`).
+#
+# The Ruff hooks mirror the CI invocation exactly: scoped to `scripts/` because ruff-pre-commit's
+# `ruff-format` hook also matches Markdown (code blocks) by default, which CI does not format.
+# The ty hook checks the whole project (its upstream design) and requires `uv` on PATH. It runs in
+# uv's isolated mode so it cannot create or update a `uv.lock` or a local `.venv`: the scripts have
+# no dependency set to lock, and the repository deliberately carries no lockfile.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.10
+    hooks:
+      - id: ruff-check
+        files: ^scripts/
+      - id: ruff-format
+        files: ^scripts/
+  - repo: https://github.com/astral-sh/ty-pre-commit
+    rev: v0.0.84
+    hooks:
+      - id: ty
+        args: [--isolated]

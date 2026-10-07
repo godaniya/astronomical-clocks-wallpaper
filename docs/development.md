@@ -96,7 +96,9 @@ or incompatible rules, record the rule ID, concrete example, reason, and narrow 
 PR. Removing a finding by lowering global severity or excluding production/test directories is not a fix.
 
 The host-only ADB harnesses in `scripts/` are standard-library Python. [`pyproject.toml`](../pyproject.toml)
-configures their checks, and CI runs all four commands before the Android build:
+configures their checks. CI runs Ruff through its official
+[`astral-sh/ruff-action`](https://github.com/astral-sh/ruff-action) and ty through the pinned `uv`
+runner before the Android build; the same checks run locally as:
 
 ```sh
 uvx --from ruff==0.16.10 ruff check --output-format=github scripts
@@ -147,19 +149,23 @@ here, which the dependency rules in [AGENTS.md](../AGENTS.md) subject to owner a
 recording, and it would need plugin autoload disabled to preserve CI's `python3 -I` hermeticity. That
 is a separate change with that cost list, not part of this tooling.
 
-**`uvx --from ruff==…` and `uvx --from ty==…`, not `astral-sh/ruff-action`.** Ruff's official
+**Ruff through `astral-sh/ruff-action`, ty through `uvx`.** Ruff's official
 [GitHub Actions integration](https://docs.astral.sh/ruff/integrations/#github-actions) documents both
-a plain install-and-run step and the `ruff-action` wrapper. One pinned `setup-uv` action here runs
-both Ruff and `ty`, so a single mechanism and a single place pin every host-check version;
-`ruff-action` would add another action to keep pinned and cannot run `ty`, which has no official
-action. The workflow comment records the same rationale.
+a plain install-and-run step and the `ruff-action` wrapper; CI uses the wrapper, pinned by commit
+SHA (278981a2, `v4.1.0`) and the exact `0.16.10` version input. `ty` has no official action, so it
+keeps the pinned `uvx --from ty==0.0.84` runner under the existing `setup-uv` step. The owner's
+review asked for the official action, and nothing about `ty` prevents it.
 
-**No `.pre-commit-config.yaml`.** Ruff documents an official
-[pre-commit integration](https://docs.astral.sh/ruff/integrations/#pre-commit), and it would run the
-same pinned Ruff version locally. It is not adopted: CI is the authoritative gate and already pins
-and runs Ruff, `ty`, and the unittest suite on every pull request, while a pre-commit configuration
-would add an unpinned local tool and a second declaration of the Ruff version to keep in sync.
-Contributors run the four documented commands directly.
+**Adopted `.pre-commit-config.yaml`.** Ruff documents an official
+[pre-commit integration](https://docs.astral.sh/ruff/integrations/#pre-commit), and the matching
+[`ty-pre-commit`](https://github.com/astral-sh/ty-pre-commit) hook exists, so the repository now
+carries both, pinned to the same versions CI runs. Install and run locally with `pre-commit install`
+and `pre-commit run --all-files`, or with no local install via
+`uvx --from pre-commit==4.6.2 pre-commit run --all-files`. The Ruff hooks are scoped to `scripts/` to
+mirror the CI invocation exactly; the ty hook checks the project (its upstream design), needs `uv` on
+PATH, and runs in uv's isolated mode so it cannot create or update a `uv.lock` or `.venv` in a
+repository that has no dependency set to lock. CI stays authoritative and does not run pre-commit:
+it runs the same pinned tools directly.
 
 **`main()` in what looks like a test file.** Previously named `scripts/device_smoke_test.py`, the smoke
 harness is renamed to `scripts/device_smoke.py` under #107 to avoid misleading pytest's default
@@ -192,8 +198,10 @@ qualification harnesses explicit.
 | detekt `TooGenericExceptionCaught` | `dialGeometryOrNull` catches `RuntimeException` around `dialGeometry` to fall back to the 24-hour civil dial rather than blanking the frame on geometry calculation failures. | Only `ClockEngine.dialGeometryOrNull`, annotated in source |
 | Lint `UnspecifiedRegisterReceiverFlag` | `registerDebugReceiver` calls the 2-argument `registerReceiver` on API < 33 when `RECEIVER_EXPORTED` is unavailable; lint requires annotating the API 33+ branch guard. | Only `AstronomicalClocksWallpaperService.registerDebugReceiver`, annotated in source |
 | detekt `TooManyFunctions` | `ClockEngine` is a `WallpaperService.Engine` that carries the four platform lifecycle overrides, whose surface is fixed by the platform, plus the tick-loop and drawing helpers, including #85's `stopTicking`; it already sat at the per-class function budget. The appearance feature adds one more callback, `onConfigurationChanged`, which the enclosing service invokes rather than the platform, and that addition is what takes the class past the budget. Splitting the engine to satisfy the count would separate drawing from the lifecycle that drives it. | Only `AstronomicalClocksWallpaperService.ClockEngine`, annotated in source |
-| Ruff formatter-conflict set (`W191`, `E111`, `E114`, `E117`, `D203`, `D206`, `D300`, `Q000`–`Q004`, `COM812`, `COM819`) | Ruff documents these as conflicting with its formatter wherever the formatter is the authority on layout; the formatter owns indentation, quote style, docstring indentation, and trailing commas, so the lint rule and the format step cannot both hold. | Ruff config, `scripts/` |
-| Ruff `D212` | Multi-line docstring summary on the first line. Conflicts with `D213`, which requires the second line; the docstrings in `scripts/` use the `D213` layout, so exactly one of the pair can be enabled. | Ruff config, `scripts/` |
+| Ruff `D203`, `D212` | Mutually exclusive pairs with the enabled rules: `D203` (one blank line before a class docstring) contradicts enabled `D211`, and `D212` (multi-line summary on the first line) conflicts with the `D213` layout used throughout `scripts/`. Exactly one rule of each pair can be enabled. | Ruff config, `scripts/` |
+| Ruff `D300` | Triple double quotes. The formatter preserves the one triple-single-quoted docstring (`scripts/test_device_qualification.py:576`) because converting it would introduce escapes, so enabling `D300` would flag formatter-stable output. | Ruff config, `scripts/` |
+| Ruff `COM812` | Trailing-comma missing. The formatter omits trailing commas in compact multi-line calls (`scripts/device_layer.py:101`), so enabling `COM812` makes Ruff emit its own formatter-conflict warning and 71 findings on formatter-stable code. | Ruff config, `scripts/` |
+| Ruff formatter-conflict audit (2026-10-07) | The pinned toolchain was audited against Ruff's documented [formatter-conflict list](https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules): every other listed rule (`W191`, `E111`, `E114`, `E117`, `D206`, `Q000`–`Q004`, `COM819`) was enabled in a temporary config and cleared both `ruff format --check` (no conflict warnings) and `ruff check` (0 findings), on the formatter-stable tree and on a formatting torture fixture (tabs, 2-space indentation, over-indentation, comment indentation, tab-indented docstring paragraph, trailing commas, mixed quotes, escaped quotes). The four rules above are the only Ruff ignores left; re-run the audit whenever the Ruff pin changes. | Ruff config, `scripts/` |
 | Ruff `T201` | Both harnesses and the device layer print output or diagnostic errors to stdout/stderr; there is no logger to convert to, and adding one would be a dependency. | `scripts/device_layer.py`, `scripts/device_qualification.py`, `scripts/device_smoke.py` |
 | Ruff `INP001` | `scripts/` deliberately has no `__init__.py`: the harnesses are run as scripts, and the test modules import them from the same directory, which `unittest discover` puts on `sys.path`. | Every file in `scripts/` |
 | Ruff `D102`, `D103` | Test methods and helpers in the suite are described by their names and their docstrings, not by a summary line restating the name. | `scripts/test_device_smoke.py`, `scripts/test_device_qualification.py` |
