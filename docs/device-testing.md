@@ -92,7 +92,7 @@ The matrix below maps standard verification areas to their expected behavior, fa
 | Category | Key Acceptance Criteria | Diagnostic Checks | Baseline Verification Report |
 | :--- | :--- | :--- | :--- |
 | **Lifecycle & Surfaces** | Wallpaper resumes on surface recreation (`wm size`) and visibility toggles; halts when hidden; recovers after non-stopping `SIGKILL`. Force-stop is an accepted platform limitation requiring manual re-application. | `dumpsys wallpaper`, `pidof`, `onVisibilityChanged`, `onSurfaceChanged` | [2026-10-06 Force-Stop vs Lifecycle](testing/reports/2026-10-06-docs-36-force-stop-lifecycle.md), [2026-09-28 Feasibility](testing/reports/2026-09-28-feat-2-device-feasibility.md) |
-| **Cadence & Ticking** | Steady 1.000 Hz frame cadence; no dropped frames or thread churn; zero allocation in draw loop. | `atrace -a <pid> gfx view`, `logcat` skipping-frame probe | [2026-10-01 Orloj Foundation](testing/reports/2026-10-01-feat-4-orloj-foundation.md), [2026-10-02 Dial Caching](testing/reports/2026-10-02-perf-39-dial-caching.md) |
+| **Cadence & Ticking** | Steady 1.000 Hz frame cadence; no dropped frames or thread churn. Allocation behavior requires a separate profiling pass. | `atrace -a <pid> gfx view`, `logcat` skipping-frame probe | [2026-10-01 Orloj Foundation](testing/reports/2026-10-01-feat-4-orloj-foundation.md), [2026-10-02 Dial Caching](testing/reports/2026-10-02-perf-39-dial-caching.md) |
 | **Virtual Time Travel** | Advance by offsets and fixed instants via debug broadcast; civil hand moves proportionally (7.5° per 30m); automated smoke test passes. | `scripts/device-smoke-test.py`, `DEBUG_SET_TIME` broadcast | [2026-10-04 Virtual Time Smoke](testing/reports/2026-10-04-feat-6-virtual-time-smoke.md) |
 | **Location & Permissions** | Non-promptable denial shows recovery dialog; promptable denial shows rationale; neutral manual coordinates persist across restarts; pure-read storage never writes on read. | `dumpsys package`, `LocationStore`, `observing_location.xml` | [2026-10-05 Permission Recovery](testing/reports/2026-10-05-fix-3-permission-recovery.md), [2026-10-05 Pure-Read Storage](testing/reports/2026-10-05-refactor-35-pure-location-store.md), [2026-09-29 Location Slice](testing/reports/2026-09-29-feat-3-location-slice.md) |
 | **Site Timezone & Selection** | Preserves site geographic timezone across device timezone changes; unchanged Save preserves `CURRENT_COARSE`; searchable picker pre-selects active zone and filters accurately. | `persist.sys.timezone`, `SettingsActivity`, timezone picker dialog | [2026-09-30 Site Timezone](testing/reports/2026-09-30-feat-24-site-timezone.md), [2026-10-02 Unchanged Save](testing/reports/2026-10-02-fix-42-unchanged-save.md), [2026-10-04 Timezone Picker](testing/reports/2026-10-04-feat-21-geographic-timezone.md) |
@@ -101,25 +101,7 @@ The matrix below maps standard verification areas to their expected behavior, fa
 
 ## Historical verification reports
 
-Detailed, immutable physical-device verification reports are maintained in [`docs/testing/reports/`](testing/reports/):
-
-| Date | Topic / Feature | Primary Evidence | Report Link |
-| :--- | :--- | :--- | :--- |
-| 2026-09-07 | Repository bootstrap | Toolchain, quality gate, negative compiler/linter probes | [2026-09-07-bootstrap.md](testing/reports/2026-09-07-bootstrap.md) |
-| 2026-09-28 | Device feasibility & initial render (#2, #19) | Hand angles, tick geometry, 1 Hz ticking, surface recreation | [2026-09-28-feat-2-device-feasibility.md](testing/reports/2026-09-28-feat-2-device-feasibility.md) |
-| 2026-09-29 | Location slice & coordinate locale (#3) | Manual coordinates, coarse location prompt, German locale separator | [2026-09-29-feat-3-location-slice.md](testing/reports/2026-09-29-feat-3-location-slice.md) |
-| 2026-09-30 | Saved-site timezone & coordinate precision (#24) | Zone retention across phone-zone changes, 4-decimal precision | [2026-09-30-feat-24-site-timezone.md](testing/reports/2026-09-30-feat-24-site-timezone.md) |
-| 2026-10-01 | Orloj 24-hour foundation (#4, #5) | 24-hour scale, 1.000 Hz cadence, representative sites | [2026-10-01-feat-4-orloj-foundation.md](testing/reports/2026-10-01-feat-4-orloj-foundation.md) |
-| 2026-10-02 | Southern plate & Sun layer (#4, #5) | Southern stereographic projection, horizon nesting, Sun toggle | [2026-10-02-feat-4-southern-plate.md](testing/reports/2026-10-02-feat-4-southern-plate.md) |
-| 2026-10-02 | Dial caching & error containment (#39) | Path caching, 1 Hz steady cadence, first-frame error containment | [2026-10-02-perf-39-dial-caching.md](testing/reports/2026-10-02-perf-39-dial-caching.md) |
-| 2026-10-02 | Unchanged Save provenance & zone retention (#42) | Untouched Save preserves CURRENT_COARSE and geographic zone | [2026-10-02-fix-42-unchanged-save.md](testing/reports/2026-10-02-fix-42-unchanged-save.md) |
-| 2026-10-03 | Zodiac compartments & vernal equinox star (#43) | 12 sign compartments, 0° Aries star, reoriented dial-centre dividers | [2026-10-03-feat-43-zodiac-compartments.md](testing/reports/2026-10-03-feat-43-zodiac-compartments.md) |
-| 2026-10-03 | Sun marker & ERFA ephemeris verification (#27) | Sun marker bearing/radius vs ERFA ephemeris, lock screen | [2026-10-03-feat-27-sun-marker.md](testing/reports/2026-10-03-feat-27-sun-marker.md) |
-| 2026-10-03 | Zodiac hardening (#74) | Discriminant clamp, try-finally canvas restore spot-check | [2026-10-03-refactor-74-zodiac-hardening.md](testing/reports/2026-10-03-refactor-74-zodiac-hardening.md) |
-| 2026-10-04 | Moon marker & phase terminator (#28) | Moon bearing, radius, phase fidelity, southern limb mirror | [2026-10-04-feat-28-moon-marker.md](testing/reports/2026-10-04-feat-28-moon-marker.md) |
-| 2026-10-04 | Geographic timezone & searchable picker (#21, #24) | Offline timezone estimation dialog, searchable picker list | [2026-10-04-feat-21-geographic-timezone.md](testing/reports/2026-10-04-feat-21-geographic-timezone.md) |
-| 2026-10-04 | Virtual time travel & smoke harness (#6) | Broadcast-driven time travel (+30m), automated script validation | [2026-10-04-feat-6-virtual-time-smoke.md](testing/reports/2026-10-04-feat-6-virtual-time-smoke.md) |
-| 2026-10-04 | Appearance themes & night mode (#31) | Light/Dark/System themes, live night mode repainting, marker contrast | [2026-10-04-feat-31-appearance.md](testing/reports/2026-10-04-feat-31-appearance.md) |
-| 2026-10-05 | Pure-read location storage & startup migration (#35) | Zero-write load(), startup migration and repair once in Application.onCreate | [2026-10-05-refactor-35-pure-location-store.md](testing/reports/2026-10-05-refactor-35-pure-location-store.md) |
-| 2026-10-05 | Location permission recovery (#3) | Non-promptable denial recovery dialog, promptable denial toast | [2026-10-05-fix-3-permission-recovery.md](testing/reports/2026-10-05-fix-3-permission-recovery.md) |
-| 2026-10-06 | Force-stop vs process-recreation lifecycle (#36) | Non-stopping SIGKILL auto-rebind vs force-stop platform limitations | [2026-10-06-docs-36-force-stop-lifecycle.md](testing/reports/2026-10-06-docs-36-force-stop-lifecycle.md) |
+Discover dated reports in [`docs/testing/reports/`](testing/reports/). Each report records its
+original source/APK attribution and distinguishes observations from unrun acceptance checks.
+The matrix above links existing baseline evidence; new reports are linked from their PR and
+found through the directory listing rather than appended to this living guide.

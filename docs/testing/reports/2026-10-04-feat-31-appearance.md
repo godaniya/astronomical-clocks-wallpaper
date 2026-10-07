@@ -75,7 +75,7 @@ debug flag, permissions, wallpaper declaration, Astronomy Engine notice, and APK
 
 Same physical device as the earlier passes. Android version: 16 (API 36). Firmware build: withheld
 (embeds the model identifier). The device's found site was its coarse current location
-(`CURRENT_COARSE`, ≈ 50.126, 14.472, `Europe/Prague`); the southern spot-check below moved it to
+(`CURRENT_COARSE`, personal coordinates withheld, `Europe/Prague`); the southern spot-check below moved it to
 manual Sydney and it was restored to manual Prague `50.08, 14.42`, matching the earlier appearance
 pass's site.
 

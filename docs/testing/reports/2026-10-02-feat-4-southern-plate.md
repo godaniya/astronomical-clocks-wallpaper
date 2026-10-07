@@ -25,5 +25,5 @@ angle, which is a principal-axis measurement of the hand pixels.
 
 The equator plate was observed both on the home screen and in the preview; the southern plates on the
 home screen. After the pass the saved site was restored to the device's current location
-(50.1081, 14.4695) and the wallpaper was left applied. No failure was observed. The cadence check
+(personal coordinates withheld) and the wallpaper was left applied. No failure was observed. The cadence check
 shows only that a frame is produced once per second; battery and frame-cost qualification remain #6.

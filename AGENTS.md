@@ -217,8 +217,9 @@ locations out of public reports (see [CONTRIBUTING.md](CONTRIBUTING.md#physical-
 Physical-device procedures and standard acceptance criteria are maintained in
 [docs/device-testing.md](docs/device-testing.md). When a pull request requires physical-device
 evidence, do not append to `docs/device-testing.md`; add a standalone, immutable report in
-`docs/testing/reports/YYYY-MM-DD-<issue-number>-<short-description>.md` and link it from the pull
-request and `docs/device-testing.md`. This decouples historical audit trails from living
+`docs/testing/reports/YYYY-MM-DD-<kind>-<issue-number>-<short-description>.md` and link it from the pull
+request. Discover reports through the directory listing; future reports do not need a new
+entry in this guide or the documentation hub. This decouples historical audit trails from living
 operating procedures and prevents merge conflicts across concurrent worktrees.
 Record limitations and unresolved failures in the issue and PR; do not silently
 weaken acceptance criteria.
