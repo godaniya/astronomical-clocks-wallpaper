@@ -94,6 +94,22 @@ This clock moves the civil hand and the astronomy together from one instant, so 
 marker follows the ephemeris but does not replace the independent ERFA comparison in the Sun and Moon
 passes. A smoke run only measures the hand; it does not exercise lifecycle, reboot, or the lock screen.
 
+## Qualification harness
+
+Run `python3 scripts/device_qualification.py --max-pss-growth-kb <agreed-limit> [--serial <device>]`
+with the wallpaper applied and the keyguard already unlocked. Agree the PSS limit before the run.
+The harness requires readable display, screen, keyguard, and night-mode state before mutation.
+It checks the baseline hand, screen-off/wake navigation, preview navigation, a temporary surface
+resize, non-stopping SIGKILL/rebind, +30m/+12h hand advances, and a short total-PSS sample.
+Each dependent phase requires its own confirmed clock prerequisite. Final cleanup restores and
+verifies the original override, screen state, night mode, and unlocked keyguard; the virtual clock
+is reset to system time. An unreadable renderer log fails; an empty successful scan is inconclusive.
+
+SIGKILL does not exercise `lmkd` or prove low-memory recovery. These ADB checks do not establish
+zero hidden frames, preview-engine cleanup, persisted preferences, midnight rollover, or battery/CPU
+qualification. Host unit tests establish no device behavior. Historical observations retain their
+original APK/source attribution in the reports directory; future runs require new dated reports.
+
 ## Standard acceptance test matrix
 
 The expected behavior describes the implementation contract; diagnostics describe how to investigate
