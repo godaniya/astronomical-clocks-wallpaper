@@ -95,14 +95,14 @@ internal class ZodiacRenderer {
                         center = circle.center,
                         radius = circle.radius + halfBand,
                     )
-                if (start.isFinite() && end.isFinite()) {
-                    canvas.drawLine(
-                        (ux * start).toFloat(),
-                        (uy * start).toFloat(),
-                        (ux * end).toFloat(),
-                        (uy * end).toFloat(),
-                        paint,
-                    )
+                val startX = (ux * start).toFloat()
+                val startY = (uy * start).toFloat()
+                val endX = (ux * end).toFloat()
+                val endY = (uy * end).toFloat()
+                val isStartFinite = start.isFinite() && startX.isFinite() && startY.isFinite()
+                val isEndFinite = end.isFinite() && endX.isFinite() && endY.isFinite()
+                if (isStartFinite && isEndFinite) {
+                    canvas.drawLine(startX, startY, endX, endY, paint)
                 } else if (firstNonFiniteIndex == -1) {
                     firstNonFiniteIndex = index
                     firstNonFiniteStart = start
