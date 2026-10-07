@@ -351,9 +351,12 @@ def get_wallpaper_pid(serial: str) -> int | None:
     try:
         output = run_adb(["shell", "pidof", PACKAGE_NAME], serial=serial).decode().strip()
     except subprocess.CalledProcessError as error:
-        if error.returncode == 1:
-            return None
-        raise
+        # `pidof` exits 1 both when nothing matches and when the transport itself failed; only a
+        # failure that wrote to stderr is a transport error that must not be read as "no process".
+        stderr = error.stderr
+        if stderr and (not isinstance(stderr, str) or stderr.strip()):
+            raise
+        return None
     pids = output.split()
     return int(pids[0]) if pids and pids[0].isdigit() else None
 
@@ -376,7 +379,8 @@ def wake_screen(serial: str) -> bool:
     """Wake the screen, returning True only when the readback confirms it is on."""
     try:
         run_adb(["shell", "input", "keyevent", "KEYCODE_WAKEUP"], serial=serial)
-    except (subprocess.SubprocessError, OSError):
+    except (subprocess.SubprocessError, OSError) as error:
+        print(f"WARNING: screen wake failed: {error_detail(error)}", file=sys.stderr)
         return False
     return read_screen_on(serial) is True
 

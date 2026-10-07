@@ -9,179 +9,19 @@ Exercises live wallpaper on an attached Android device via ADB:
 - Surface recreation (wm size), confirmed by reading the override back
 - A verified debug-clock reset and a renderer log scan, which reports an empty scan as inconclusive
   rather than as a clean log
+
+The shared device layer owns the ADB primitives, the dial/frame analysis, and the target device
+identity; this module keeps the smoke scenario, its restore policy, and its report.
 """
 
 import argparse
 import subprocess
 import sys
 import time
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import device_layer
-
-# Shared constants re-exported for module parity
-ADB_RESTORE_TIMEOUT_SECONDS = device_layer.ADB_RESTORE_TIMEOUT_SECONDS
-ADB_TIMEOUT_SECONDS = device_layer.ADB_TIMEOUT_SECONDS
-ANGLE_TOLERANCE_DEG = device_layer.ANGLE_TOLERANCE_DEG
-COARSE_BIN_COUNT = device_layer.COARSE_BIN_COUNT
-COARSE_BIN_WIDTH_DEG = device_layer.COARSE_BIN_WIDTH_DEG
-DARK_HAND_MIN_RED_MINUS_BLUE = device_layer.DARK_HAND_MIN_RED_MINUS_BLUE
-DARK_HAND_RGB_BOUNDS = device_layer.DARK_HAND_RGB_BOUNDS
-DARK_RIM_RGB = device_layer.DARK_RIM_RGB
-DEBUG_ACTION = device_layer.DEBUG_ACTION
-DEBUG_CLOCK_RESET_EXTRAS = device_layer.DEBUG_CLOCK_RESET_EXTRAS
-DEBUG_CLOCK_RESET_MESSAGE = device_layer.DEBUG_CLOCK_RESET_MESSAGE
-DISPLAY_STATE_PATTERN = device_layer.DISPLAY_STATE_PATTERN
-EXPECTED_ADVANCE_12H_DEG = device_layer.EXPECTED_ADVANCE_12H_DEG
-EXPECTED_ADVANCE_30M_DEG = device_layer.EXPECTED_ADVANCE_30M_DEG
-FULL_TURN_DEG = device_layer.FULL_TURN_DEG
-HALF_TURN_DEG = device_layer.HALF_TURN_DEG
-HAND_MIN_SAMPLES = device_layer.HAND_MIN_SAMPLES
-HAND_SCAN_INNER_FRACTION = device_layer.HAND_SCAN_INNER_FRACTION
-HAND_SCAN_OUTER_FRACTION = device_layer.HAND_SCAN_OUTER_FRACTION
-HAND_SCAN_STEP_PX = device_layer.HAND_SCAN_STEP_PX
-KEYGUARD_SHOWING_PATTERN = device_layer.KEYGUARD_SHOWING_PATTERN
-LIGHT_HAND_RGB_BOUNDS = device_layer.LIGHT_HAND_RGB_BOUNDS
-LIGHT_RIM_RGB = device_layer.LIGHT_RIM_RGB
-MIN_SPLIT_FIELDS = device_layer.MIN_SPLIT_FIELDS
-OVERRIDE_SIZE_PATTERN = device_layer.OVERRIDE_SIZE_PATTERN
-PACKAGE_NAME = device_layer.PACKAGE_NAME
-PHYSICAL_SIZE_PATTERN = device_layer.PHYSICAL_SIZE_PATTERN
-PIXEL_STRIDE = device_layer.PIXEL_STRIDE
-REFINE_WEDGE_DEG = device_layer.REFINE_WEDGE_DEG
-RIM_PROBE_BEARINGS_DEG = device_layer.RIM_PROBE_BEARINGS_DEG
-RIM_PROBE_RADIUS_FRACTION = device_layer.RIM_PROBE_RADIUS_FRACTION
-SCREENCAP_HEADER_BYTES = device_layer.SCREENCAP_HEADER_BYTES
-SERVICE_LOG_TAG = device_layer.SERVICE_LOG_TAG
-SERVICE_NAME = device_layer.SERVICE_NAME
-WAKE_READ_PATTERN = device_layer.WAKE_READ_PATTERN
-AdbDevice = device_layer.AdbDevice
-ScreencapError = device_layer.ScreencapError
-error_detail = device_layer.error_detail
-captured_text = device_layer.captured_text
-list_devices = device_layer.list_devices
-
-
-# Dynamic wrappers ensuring mock patching on device_layer is immediately observed
-def run_adb(args: Sequence[str], serial: str | None = None, timeout: int = ADB_TIMEOUT_SECONDS) -> bytes:
-    """Run an adb invocation via device_layer."""
-    return device_layer.run_adb(args, serial=serial, timeout=timeout)
-
-
-def select_target_serial(requested: str | None) -> str:
-    """Resolve target serial via device_layer."""
-    return device_layer.select_target_serial(requested)
-
-
-def read_display_size(serial: str) -> tuple[str | None, str | None]:
-    """Read display sizes via device_layer."""
-    return device_layer.read_display_size(serial)
-
-
-def choose_recreate_size(physical: str | None, override: str | None) -> str:
-    """Choose recreate size via device_layer."""
-    return device_layer.choose_recreate_size(physical, override)
-
-
-def size_restore_command(override: str | None) -> list[str]:
-    """Get size restore command via device_layer."""
-    return device_layer.size_restore_command(override)
-
-
-def read_keyguard_locked(serial: str) -> bool | None:
-    """Read keyguard state via device_layer."""
-    return device_layer.read_keyguard_locked(serial)
-
-
-def read_screen_on(serial: str) -> bool | None:
-    """Read screen state via device_layer."""
-    return device_layer.read_screen_on(serial)
-
-
-def sleep_screen(serial: str) -> bool:
-    """Sleep screen via device_layer."""
-    return device_layer.sleep_screen(serial)
-
-
-def run_restore_command(serial: str, command: Sequence[str]) -> bool:
-    """Run restore command via device_layer."""
-    return device_layer.run_restore_command(serial, command)
-
-
-def count_service_log_messages(serial: str, message: str) -> int:
-    """Count service log messages via device_layer."""
-    return device_layer.count_service_log_messages(serial, message)
-
-
-def send_debug_clock_broadcast(serial: str, extras: Sequence[str], expected_message: str) -> bool:
-    """Send debug clock broadcast via device_layer."""
-    return device_layer.send_debug_clock_broadcast(serial, extras, expected_message)
-
-
-def confirm_virtual_clock_reset(serial: str) -> bool:
-    """Confirm virtual clock reset via device_layer."""
-    return device_layer.confirm_virtual_clock_reset(serial)
-
-
-def capture_frame(serial: str | None = None) -> tuple[int, int, bytes]:
-    """Capture screencap frame via device_layer."""
-    return device_layer.capture_frame(serial=serial)
-
-
-def rim_probe_points(width: int, height: int) -> Iterator[tuple[int, int]]:
-    """Sample rim probe points via device_layer."""
-    return device_layer.rim_probe_points(width, height)
-
-
-def modal_pixel_rgb(width: int, pixels: bytes, points: Iterable[tuple[int, int]]) -> tuple[int, int, int] | None:
-    """Find modal pixel RGB via device_layer."""
-    return device_layer.modal_pixel_rgb(width, pixels, points)
-
-
-def nearest_rim_rgb(rgb: tuple[int, int, int]) -> tuple[int, int, int]:
-    """Find nearest rim RGB literal via device_layer."""
-    return device_layer.nearest_rim_rgb(rgb)
-
-
-def is_dark_palette(width: int, height: int, pixels: bytes) -> bool:
-    """Check dark palette via device_layer."""
-    return device_layer.is_dark_palette(width, height, pixels)
-
-
-def within_rgb_bounds(channels: tuple[int, int, int], bounds: tuple[tuple[int, int], ...]) -> bool:
-    """Check RGB bounds via device_layer."""
-    return device_layer.within_rgb_bounds(channels, bounds)
-
-
-def is_dark_hand_pixel(red: int, green: int, blue: int) -> bool:
-    """Check dark hand pixel via device_layer."""
-    return device_layer.is_dark_hand_pixel(red, green, blue)
-
-
-def is_light_hand_pixel(red: int, green: int, blue: int) -> bool:
-    """Check light hand pixel via device_layer."""
-    return device_layer.is_light_hand_pixel(red, green, blue)
-
-
-def collect_hand_points(width: int, height: int, pixels: bytes, *, is_dark: bool) -> list[tuple[float, float]]:
-    """Collect hand points via device_layer."""
-    return device_layer.collect_hand_points(width, height, pixels, is_dark=is_dark)
-
-
-def coarse_hand_angle(angles: Sequence[float]) -> float:
-    """Calculate coarse hand angle via device_layer."""
-    return device_layer.coarse_hand_angle(angles)
-
-
-def refine_hand_angle(angles: Sequence[float], coarse_deg: float) -> float | None:
-    """Refine hand angle via device_layer."""
-    return device_layer.refine_hand_angle(angles, coarse_deg)
-
-
-def detect_hand_angle(width: int, height: int, pixels: bytes) -> float | None:
-    """Detect hand angle via device_layer."""
-    return device_layer.detect_hand_angle(width, height, pixels)
 
 
 @dataclass(frozen=True)
@@ -224,14 +64,16 @@ class SmokeOutcome:
     log_collection_error: str | None = None
 
 
-def verify_restored_state(serial: str, size_override: str | None, *, screen_was_on: bool | None) -> bool:
+def verify_restored_state(
+    device: device_layer.AdbDevice, size_override: str | None, *, screen_was_on: bool | None
+) -> bool:
     """Re-read the mutated settings and report whether each returned to what the run found."""
     try:
-        restored_physical_size, restored_size_override = read_display_size(serial)
-        restored_screen_on = read_screen_on(serial) if screen_was_on is not None else None
-        keyguard_locked = read_keyguard_locked(serial)
+        restored_physical_size, restored_size_override = device.read_display_size()
+        restored_screen_on = device.read_screen_on() if screen_was_on is not None else None
+        keyguard_locked = device.read_keyguard_locked()
     except (subprocess.SubprocessError, OSError) as error:
-        print(f"WARNING: could not verify restored device state: {error_detail(error)}", file=sys.stderr)
+        print(f"WARNING: could not verify restored device state: {device_layer.error_detail(error)}", file=sys.stderr)
         return False
 
     restored = True
@@ -250,17 +92,15 @@ def verify_restored_state(serial: str, size_override: str | None, *, screen_was_
     return restored
 
 
-def restore_device(serial: str, size_override: str | None, *, screen_was_on: bool | None) -> bool:
+def restore_device(device: device_layer.AdbDevice, size_override: str | None, *, screen_was_on: bool | None) -> bool:
     """Best-effort reset of every setting the run changes, never raising."""
     restored = True
-    commands = [size_restore_command(size_override)]
-    for command in commands:
-        if not run_restore_command(serial, command):
-            restored = False
-    if not confirm_virtual_clock_reset(serial):
+    if not device.run_restore_command(device_layer.size_restore_command(size_override)):
+        restored = False
+    if not device.confirm_virtual_clock_reset():
         restored = False
     # Last, after the clock reset and display restore, so a failure among the earlier commands still attempts it.
-    if screen_was_on is False and not sleep_screen(serial):
+    if screen_was_on is False and not device.sleep_screen():
         restored = False
     if screen_was_on is None:
         restored = False
@@ -268,30 +108,30 @@ def restore_device(serial: str, size_override: str | None, *, screen_was_on: boo
             "WARNING: initial screen state was unreadable; the screen cannot be reported as restored",
             file=sys.stderr,
         )
-    if not verify_restored_state(serial, size_override, screen_was_on=screen_was_on):
+    if not verify_restored_state(device, size_override, screen_was_on=screen_was_on):
         restored = False
     return restored
 
 
-def step_reset_clock_and_show_home(serial: str) -> bool:
+def step_reset_clock_and_show_home(device: device_layer.AdbDevice) -> bool:
     """Wake the screen, dismiss the keyguard, show home, and confirm the debug clock reset."""
     print("Waking the screen and showing the home screen...")
-    run_adb(["shell", "input", "keyevent", "KEYCODE_WAKEUP"], serial=serial)
-    run_adb(["shell", "wm", "dismiss-keyguard"], serial=serial)
-    run_adb(["shell", "input", "keyevent", "KEYCODE_HOME"], serial=serial)
+    device.wake_screen()
+    device.dismiss_keyguard()
+    device.show_home()
     time.sleep(1.0)
     print("Resetting virtual clock...")
-    confirmed = confirm_virtual_clock_reset(serial)
+    confirmed = device.confirm_virtual_clock_reset()
     time.sleep(0.5)
     return confirmed
 
 
-def step_time_travel(serial: str) -> AdvanceMeasurement | None:
+def step_time_travel(device: device_layer.AdbDevice) -> AdvanceMeasurement | None:
     """Capture the baseline hand, advance the debug clock by a confirmed 30 minutes, and measure it."""
     # Capture baseline frame t0
     print("Capturing baseline frame t0...")
-    w0, h0, px0 = capture_frame(serial=serial)
-    angle0 = detect_hand_angle(w0, h0, px0)
+    w0, h0, px0 = device.capture_frame()
+    angle0 = device_layer.detect_hand_angle(w0, h0, px0)
     if angle0 is not None:
         print(f"Baseline hand angle at t0: {angle0:.3f}°")
     else:
@@ -300,54 +140,56 @@ def step_time_travel(serial: str) -> AdvanceMeasurement | None:
     # Advance virtual time by +30 minutes
     print("Advancing virtual time +30 minutes via debug broadcast...")
     offset_message = "Debug clock offset set to 1800000ms"
-    offset_before = count_service_log_messages(serial, offset_message)
+    offset_before = device.count_service_log_messages(offset_message)
     start_t = time.time()
-    run_adb(["shell", "am", "broadcast", "-a", DEBUG_ACTION, "--el", "offset_minutes", "30"], serial=serial)
+    device.run_adb(["shell", "am", "broadcast", "-a", device_layer.DEBUG_ACTION, "--el", "offset_minutes", "30"])
     broadcast_ms = (time.time() - start_t) * 1000.0
     print(f"Time travel completed in {broadcast_ms:.1f}ms")
     time.sleep(0.3)
-    if count_service_log_messages(serial, offset_message) <= offset_before:
+    if device.count_service_log_messages(offset_message) <= offset_before:
         print("ERROR: +30m time offset was not confirmed by the service log", file=sys.stderr)
         return None
 
     # Capture frame t1 at +30 minutes
     print("Capturing frame t1 at +30m...")
-    w1, h1, px1 = capture_frame(serial=serial)
-    angle1 = detect_hand_angle(w1, h1, px1)
+    w1, h1, px1 = device.capture_frame()
+    angle1 = device_layer.detect_hand_angle(w1, h1, px1)
     if angle1 is not None:
         print(f"Hand angle at t1 (+30m): {angle1:.3f}°")
     if angle0 is None or angle1 is None:
         return None
 
-    delta = (angle1 - angle0) % FULL_TURN_DEG
-    residual = delta - EXPECTED_ADVANCE_30M_DEG
+    delta = (angle1 - angle0) % device_layer.FULL_TURN_DEG
+    residual = delta - device_layer.EXPECTED_ADVANCE_30M_DEG
     print(
         f"Observed angular advance: {delta:.3f}° "
-        f"(expected: {EXPECTED_ADVANCE_30M_DEG:.3f}°, residual: {residual:+.3f}°)"
+        f"(expected: {device_layer.EXPECTED_ADVANCE_30M_DEG:.3f}°, residual: {residual:+.3f}°)"
     )
     return AdvanceMeasurement(delta_deg=delta, residual_deg=residual, broadcast_ms=broadcast_ms)
 
 
-def step_recreate_surface(serial: str, size_override: str | None, recreate_size: str) -> SurfaceRecreation:
+def step_recreate_surface(
+    device: device_layer.AdbDevice, size_override: str | None, recreate_size: str
+) -> SurfaceRecreation:
     """Override the display size, restore it, and report whether it took effect and what was drawn."""
     print("Testing surface recreation...")
-    run_adb(["shell", "wm", "size", recreate_size], serial=serial)
+    device.run_adb(["shell", "wm", "size", recreate_size])
     time.sleep(0.5)
-    _, active_override = read_display_size(serial)
-    run_adb(size_restore_command(size_override), serial=serial)
+    _, active_override = device.read_display_size()
+    device.run_adb(device_layer.size_restore_command(size_override))
     time.sleep(0.5)
-    physical, restored_override = read_display_size(serial)
+    physical, restored_override = device.read_display_size()
     if physical is None or restored_override != size_override:
         return SurfaceRecreation(
             override_was_active=active_override == recreate_size,
             restore_was_verified=False,
             hand_angle=None,
         )
-    w2, h2, px2 = capture_frame(serial=serial)
+    w2, h2, px2 = device.capture_frame()
     return SurfaceRecreation(
         override_was_active=active_override == recreate_size,
         restore_was_verified=True,
-        hand_angle=detect_hand_angle(w2, h2, px2),
+        hand_angle=device_layer.detect_hand_angle(w2, h2, px2),
     )
 
 
@@ -360,13 +202,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
 
 def read_baseline(requested_serial: str | None) -> SmokeBaseline:
     """Resolve the target and record the device state the run must put back afterwards."""
-    target_serial = select_target_serial(requested_serial)
+    target_serial = device_layer.select_target_serial(requested_serial)
     print(f"Targeting ADB device: {target_serial}")
+    device = device_layer.AdbDevice(target_serial)
 
-    log_start = run_adb(["shell", "date +'%m-%d %H:%M:%S.000'"], serial=target_serial).decode().strip()
+    log_start = device.run_adb(["shell", "date +'%m-%d %H:%M:%S.000'"]).decode().strip()
     print(f"Logcat start marker: {log_start}")
 
-    physical_size, size_override = read_display_size(target_serial)
+    physical_size, size_override = device.read_display_size()
     if physical_size is None:
         print(
             "ERROR: could not read the physical display size; refusing to change device state.",
@@ -380,7 +223,7 @@ def read_baseline(requested_serial: str | None) -> SmokeBaseline:
             file=sys.stderr,
         )
 
-    screen_was_on = read_screen_on(target_serial)
+    screen_was_on = device.read_screen_on()
     if screen_was_on is None:
         print(
             "ERROR: could not read the initial screen state; refusing to wake the device.",
@@ -388,7 +231,7 @@ def read_baseline(requested_serial: str | None) -> SmokeBaseline:
         )
         sys.exit(1)
 
-    keyguard_locked = read_keyguard_locked(target_serial)
+    keyguard_locked = device.read_keyguard_locked()
     if keyguard_locked is None:
         print(
             "ERROR: could not read the keyguard state; refusing to run on an unconfirmed lock state.",
@@ -408,11 +251,10 @@ def read_baseline(requested_serial: str | None) -> SmokeBaseline:
     )
 
 
-def scan_renderer_log(serial: str, log_start: str) -> list[str]:
+def scan_renderer_log(device: device_layer.AdbDevice, log_start: str) -> list[str]:
     """Return this run's renderer warning records, isolated by the device-time marker."""
-    logs = run_adb(
-        ["logcat", "-d", "-T", log_start, "-s", f"{SERVICE_LOG_TAG}:W", "DialRenderer:W"],
-        serial=serial,
+    logs = device.run_adb(
+        ["logcat", "-d", "-T", log_start, "-s", f"{device_layer.SERVICE_LOG_TAG}:W", "DialRenderer:W"]
     ).decode("utf-8")
     return [line for line in logs.splitlines() if line.strip() and not line.startswith("---------")]
 
@@ -429,8 +271,10 @@ def collect_failures(outcome: SmokeOutcome, *, restored: bool) -> list[str]:
         recreation = outcome.recreation
         if measurement is None:
             failures.append("hand not found; wallpaper must be visible and unobstructed")
-        elif abs(measurement.residual_deg) > ANGLE_TOLERANCE_DEG:
-            failures.append(f"hand advance residual {measurement.residual_deg:+.3f}° exceeds ±{ANGLE_TOLERANCE_DEG}°")
+        elif abs(measurement.residual_deg) > device_layer.ANGLE_TOLERANCE_DEG:
+            failures.append(
+                f"hand advance residual {measurement.residual_deg:+.3f}° exceeds ±{device_layer.ANGLE_TOLERANCE_DEG}°"
+            )
         if not recreation.override_was_active:
             failures.append("display-size override was not active as requested")
         if not recreation.restore_was_verified:
@@ -462,8 +306,9 @@ def print_results(baseline: SmokeBaseline, recreate_size: str, outcome: SmokeOut
         if measurement is not None:
             print(
                 f"| {today} | virtual time travel (+30m) | "
-                f"Hand advanced {measurement.delta_deg:.3f}° against {EXPECTED_ADVANCE_30M_DEG:.3f}° expected, "
-                f"residual {measurement.residual_deg:+.3f}°; broadcast took {measurement.broadcast_ms:.0f}ms |"
+                f"Hand advanced {measurement.delta_deg:.3f}° against {device_layer.EXPECTED_ADVANCE_30M_DEG:.3f}° "
+                f"expected, residual {measurement.residual_deg:+.3f}°; "
+                f"broadcast took {measurement.broadcast_ms:.0f}ms |"
             )
         recreated = "drawn" if recreation.hand_angle is not None else "NOT found"
         applied = "active as requested" if recreation.override_was_active else "NOT active as requested"
@@ -500,7 +345,8 @@ def main() -> None:
     """Reset the clock, advance it, recreate the surface, restore the device, and report."""
     args = build_argument_parser().parse_args()
     baseline = read_baseline(args.serial)
-    recreate_size = choose_recreate_size(baseline.physical_size, baseline.size_override)
+    device = device_layer.AdbDevice(baseline.serial)
+    recreate_size = device_layer.choose_recreate_size(baseline.physical_size, baseline.size_override)
 
     measurement: AdvanceMeasurement | None = None
     recreation = SurfaceRecreation(override_was_active=False, restore_was_verified=False, hand_angle=None)
@@ -508,10 +354,10 @@ def main() -> None:
     initial_reset_confirmed = False
 
     try:
-        initial_reset_confirmed = step_reset_clock_and_show_home(baseline.serial)
+        initial_reset_confirmed = step_reset_clock_and_show_home(device)
         if initial_reset_confirmed:
-            measurement = step_time_travel(baseline.serial)
-            recreation = step_recreate_surface(baseline.serial, baseline.size_override, recreate_size)
+            measurement = step_time_travel(device)
+            recreation = step_recreate_surface(device, baseline.size_override, recreate_size)
         else:
             print(
                 "ERROR: initial virtual-clock reset was not confirmed; "
@@ -520,14 +366,14 @@ def main() -> None:
             )
     finally:
         print("Restoring virtual clock, display size, and screen state...")
-        restored = restore_device(baseline.serial, baseline.size_override, screen_was_on=baseline.screen_was_on)
+        restored = restore_device(device, baseline.size_override, screen_was_on=baseline.screen_was_on)
 
     log_collection_error = None
     try:
-        warnings = scan_renderer_log(baseline.serial, baseline.log_start)
+        warnings = scan_renderer_log(device, baseline.log_start)
     except (subprocess.SubprocessError, OSError) as error:
         warnings = []
-        log_collection_error = error_detail(error)
+        log_collection_error = device_layer.error_detail(error)
     if log_collection_error is not None:
         print(f"Renderer log collection failed: {log_collection_error}", file=sys.stderr)
     elif warnings:

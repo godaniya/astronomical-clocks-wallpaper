@@ -18,8 +18,11 @@ preview = false
 [tool.ruff.lint]
 select = ["ALL"]
 # Only the rules Ruff's formatter conflicts with, plus D212, which conflicts with the D213 layout
-# already in use. Recorded with reasons in docs/development.md#rule-exceptions. No rule has its
-# severity lowered and no directory is excluded.
+# already in use. Re-audited against Ruff's documented formatter-conflict list
+# (https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules): every rule it lists is ignored,
+# and its ISC002 condition (ISC002 without ISC001 and allow-multiline=false) does not apply because
+# ISC001 stays enabled. D212 is the local extra for the D213 layout. Recorded with reasons in
+# docs/development.md#rule-exceptions. No rule has its severity lowered and no directory is excluded.
 ignore = [
   "W191", # tab indentation would be reformatted
   "E111", # indentation is not a multiple of four

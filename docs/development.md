@@ -147,6 +147,20 @@ here, which the dependency rules in [AGENTS.md](../AGENTS.md) subject to owner a
 recording, and it would need plugin autoload disabled to preserve CI's `python3 -I` hermeticity. That
 is a separate change with that cost list, not part of this tooling.
 
+**`uvx --from ruff==…` and `uvx --from ty==…`, not `astral-sh/ruff-action`.** Ruff's official
+[GitHub Actions integration](https://docs.astral.sh/ruff/integrations/#github-actions) documents both
+a plain install-and-run step and the `ruff-action` wrapper. One pinned `setup-uv` action here runs
+both Ruff and `ty`, so a single mechanism and a single place pin every host-check version;
+`ruff-action` would add another action to keep pinned and cannot run `ty`, which has no official
+action. The workflow comment records the same rationale.
+
+**No `.pre-commit-config.yaml`.** Ruff documents an official
+[pre-commit integration](https://docs.astral.sh/ruff/integrations/#pre-commit), and it would run the
+same pinned Ruff version locally. It is not adopted: CI is the authoritative gate and already pins
+and runs Ruff, `ty`, and the unittest suite on every pull request, while a pre-commit configuration
+would add an unpinned local tool and a second declaration of the Ruff version to keep in sync.
+Contributors run the four documented commands directly.
+
 **`main()` in what looks like a test file.** Previously named `scripts/device_smoke_test.py`, the smoke
 harness is renamed to `scripts/device_smoke.py` under #107 to avoid misleading pytest's default
 `*_test.py` collection pattern while preserving its standalone command-line entry point.

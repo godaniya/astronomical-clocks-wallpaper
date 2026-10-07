@@ -2,11 +2,13 @@
 
 ## Overview
 
-Verification of the consolidated host-side ADB testing layer ([#107](https://github.com/godaniya/astronomical-clocks-wallpaper/issues/107)), re-anchoring on top of `origin/chore/6-python-policy` (`058567a25ee740b8fb2bbcd0517ab64cf3aac84e`). The refactoring extracts `scripts/device_layer.py` providing an object-oriented `AdbDevice` abstraction and pure dial geometry and frame decoders, renames `scripts/device_smoke_test.py` to `scripts/device_smoke.py`, and preserves the distinct restore policies between smoke and qualification testing.
+Verification of the consolidated host-side ADB testing layer ([#107](https://github.com/godaniya/astronomical-clocks-wallpaper/issues/107)), re-anchored on `upstream/main` (`40281d6b6d54bbc365f41e3bda2c6ce774fe88a2`), where the Python-policy prerequisites merged via #103 and #109. The refactoring extracts `scripts/device_layer.py` providing an object-oriented `AdbDevice` abstraction and pure dial geometry and frame decoders, renames `scripts/device_smoke_test.py` to `scripts/device_smoke.py`, and preserves the distinct restore policies between smoke and qualification testing.
 
 Test build: local debug `app-debug.apk` built from this branch at revision `058567a25ee740b8fb2bbcd0517ab64cf3aac84e` (APK SHA-256 `e252d65fbba61b37c13282d001d68a01dfa5f950e848e9db3cf36264286ac5b1`), verified with `./scripts/verify-apk.sh` and installed over the existing wallpaper binding via `adb install -r`.
 
-Target platform: physical device running Android 16 (API 36). Hardware serial number, OEM, model name, and firmware build identifier are withheld in accordance with the project's [physical-device privacy policy](../../CONTRIBUTING.md#physical-device-testing-and-privacy).
+Target platform: physical device running Android 16 (API 36). Hardware serial number, OEM, model name, and firmware build identifier are withheld in accordance with the project's [physical-device privacy policy](../../../CONTRIBUTING.md#physical-device-testing-and-privacy).
+
+**Review-round note (2026-10-07).** The `AdbDevice` routing and the remaining smoke-harness path corrections were completed in the pull-request review round as a host-only refactor of `scripts/`: the recorded physical-device runs above predate it, the application sources and the APK recorded above are unchanged, and the refactor is covered by the updated host unit suite (103 tests: 40 smoke, 63 qualification), Ruff, and ty rather than by a new device pass.
 
 ---
 
@@ -54,7 +56,7 @@ Result: All 7 configured qualification phases passed with clean exit code 0. Ful
 
 1. **Python Unit Tests**:
    - `python3 -I -m unittest discover -s scripts -p 'test_*.py' -v`
-   - Passed 99 unit tests (40 in `test_device_smoke.py`, 59 in `test_device_qualification.py`).
+   - Passed 99 unit tests (40 in `test_device_smoke.py`, 59 in `test_device_qualification.py`) at the time of this run; the review-round note above records the current suite at 103 tests.
 2. **Static Analysis & Formatting**:
    - `uvx --from ruff==0.16.10 ruff check scripts` (zero errors or warnings).
    - `uvx --from ruff==0.16.10 ruff format --check scripts` (all scripts formatted).

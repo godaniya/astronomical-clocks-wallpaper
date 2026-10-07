@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import device_layer
 import device_qualification as qualification
-import device_smoke as device_smoke_test
+import device_smoke
 from device_test_fixtures import (
     BYTES_PER_PIXEL,
     FRAME_HEIGHT,
@@ -100,7 +100,7 @@ class DeviceQualificationTest(unittest.TestCase):
 
     @patch.object(device_layer, "run_adb", return_value=b"mWakefulness=Awake")
     def test_awake_screen_state_is_detected(self, _run_adb: MagicMock) -> None:
-        self.assertTrue(qualification.read_screen_on("device"))
+        self.assertTrue(device_layer.read_screen_on("device"))
 
     @patch.object(
         device_layer,
@@ -108,7 +108,7 @@ class DeviceQualificationTest(unittest.TestCase):
         side_effect=[b"power state unknown", b"Display State=OFF"],
     )
     def test_display_state_is_used_when_wakefulness_is_unknown(self, _run_adb: MagicMock) -> None:
-        self.assertFalse(qualification.read_screen_on("device"))
+        self.assertFalse(device_layer.read_screen_on("device"))
 
     @patch.object(
         device_layer,
@@ -116,16 +116,43 @@ class DeviceQualificationTest(unittest.TestCase):
         side_effect=[b"power state unknown", b"display state unknown"],
     )
     def test_unknown_screen_state_stays_unknown(self, run_adb: MagicMock) -> None:
-        self.assertIsNone(qualification.read_screen_on("device"))
+        self.assertIsNone(device_layer.read_screen_on("device"))
         self.assertEqual(run_adb.call_count, 2)
 
     @patch.object(device_layer, "run_adb", return_value=b"night mode output changed")
     def test_unknown_night_mode_stays_unknown(self, _run_adb: MagicMock) -> None:
-        self.assertIsNone(qualification.read_night_mode("device"))
+        self.assertIsNone(device_layer.read_night_mode("device"))
 
     @patch.object(device_layer, "run_adb", return_value=b"Night mode: yes\n")
     def test_night_mode_is_parsed(self, _run_adb: MagicMock) -> None:
-        self.assertEqual(qualification.read_night_mode("device"), "yes")
+        self.assertEqual(device_layer.read_night_mode("device"), "yes")
+
+    @patch.object(device_layer, "run_adb", return_value=b"  1234 5678\n")
+    def test_wallpaper_pid_reads_the_first_numeric_token(self, _run_adb: MagicMock) -> None:
+        self.assertEqual(device_layer.get_wallpaper_pid("device"), 1234)
+
+    @patch.object(device_layer, "run_adb", side_effect=subprocess.CalledProcessError(1, ["adb"], stderr=b""))
+    def test_an_absent_wallpaper_process_is_none_not_an_error(self, _run_adb: MagicMock) -> None:
+        self.assertIsNone(device_layer.get_wallpaper_pid("device"))
+
+    @patch.object(
+        device_layer,
+        "run_adb",
+        side_effect=subprocess.CalledProcessError(1, ["adb"], stderr=b"device offline"),
+    )
+    def test_an_offline_pidof_probe_raises_instead_of_masquerading_as_absent(self, _run_adb: MagicMock) -> None:
+        with self.assertRaises(subprocess.CalledProcessError):
+            device_layer.get_wallpaper_pid("device")
+
+    @patch.object(
+        device_layer,
+        "run_adb",
+        side_effect=subprocess.CalledProcessError(1, ["adb"], stderr=b"device offline"),
+    )
+    def test_a_failed_wake_is_reported_not_silently_false(self, _run_adb: MagicMock) -> None:
+        with contextlib.redirect_stderr(io.StringIO()) as error_output:
+            self.assertFalse(device_layer.wake_screen("device"))
+        self.assertIn("screen wake failed", error_output.getvalue())
 
     def test_empty_or_header_only_renderer_log_is_inconclusive(self) -> None:
         self.assertEqual(qualification.matching_renderer_warnings(""), [])
@@ -142,7 +169,7 @@ class DeviceQualificationTest(unittest.TestCase):
     def test_capture_frame_rejects_inconsistent_payload_length(self, run_adb: MagicMock) -> None:
         run_adb.return_value = struct.pack("<IIII", 2, 2, 1, 0) + bytes(15)
         with self.assertRaisesRegex(RuntimeError, "Unexpected screencap payload size"):
-            qualification.capture_frame("device")
+            device_layer.capture_frame("device")
 
     @patch.object(device_layer, "count_service_log_messages", side_effect=[0, 1])
     @patch.object(device_layer, "run_adb")
@@ -150,7 +177,7 @@ class DeviceQualificationTest(unittest.TestCase):
         self, run_adb: MagicMock, _count_logs: MagicMock
     ) -> None:
         self.assertTrue(
-            qualification.send_debug_clock_broadcast(
+            device_layer.send_debug_clock_broadcast(
                 "device",
                 ["--el", "offset_minutes", "30"],
                 "Debug clock offset set to 1800000ms",
@@ -164,7 +191,7 @@ class DeviceQualificationTest(unittest.TestCase):
         self, run_adb: MagicMock, _count_logs: MagicMock
     ) -> None:
         self.assertFalse(
-            qualification.send_debug_clock_broadcast(
+            device_layer.send_debug_clock_broadcast(
                 "device",
                 ["--el", "offset_minutes", "30"],
                 "Debug clock offset set to 1800000ms",
@@ -188,7 +215,9 @@ class DeviceQualificationTest(unittest.TestCase):
         _read_keyguard: MagicMock,
     ) -> None:
         self.assertTrue(
-            qualification.restore_device("device", "720x1280", initial_screen_was_on=False, initial_night_mode="auto")
+            qualification.restore_device(
+                device_layer.AdbDevice("device"), "720x1280", initial_screen_was_on=False, initial_night_mode="auto"
+            )
         )
         run_adb.assert_called()
         read_size.assert_called_once_with("device")
@@ -218,7 +247,9 @@ class DeviceQualificationTest(unittest.TestCase):
         run_adb.side_effect = fail_night_mode_restore
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertFalse(
-                qualification.restore_device("device", None, initial_screen_was_on=True, initial_night_mode="auto")
+                qualification.restore_device(
+                    device_layer.AdbDevice("device"), None, initial_screen_was_on=True, initial_night_mode="auto"
+                )
             )
 
     @patch.object(device_layer, "read_keyguard_locked", return_value=False)
@@ -238,7 +269,9 @@ class DeviceQualificationTest(unittest.TestCase):
     ) -> None:
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertFalse(
-                qualification.restore_device("device", None, initial_screen_was_on=None, initial_night_mode=None)
+                qualification.restore_device(
+                    device_layer.AdbDevice("device"), None, initial_screen_was_on=None, initial_night_mode=None
+                )
             )
         self.assertFalse(
             any(call_args.args[0][:3] == ["shell", "cmd", "uimode"] for call_args in run_adb.call_args_list)
@@ -270,9 +303,10 @@ class DeviceQualificationTest(unittest.TestCase):
             qualification.main()
 
         self.assertEqual(exit_error.exception.code, 1)
-        restore_device.assert_called_once_with(
-            "device", "720x1280", initial_screen_was_on=True, initial_night_mode="auto"
-        )
+        restore_device.assert_called_once()
+        self.assertEqual(restore_device.call_args.args[0].serial, "device")
+        self.assertEqual(restore_device.call_args.args[1], "720x1280")
+        self.assertEqual(restore_device.call_args.kwargs, {"initial_screen_was_on": True, "initial_night_mode": "auto"})
 
     def test_preflight_adb_failure_is_reported_before_mutation(self) -> None:
         with (
@@ -362,12 +396,14 @@ class DeviceQualificationTest(unittest.TestCase):
             contextlib.redirect_stderr(io.StringIO()) as error_output,
         ):
             self.assertFalse(
-                qualification.restore_device("device", None, initial_screen_was_on=True, initial_night_mode="auto")
+                qualification.restore_device(
+                    device_layer.AdbDevice("device"), None, initial_screen_was_on=True, initial_night_mode="auto"
+                )
             )
         self.assertIn("not confirmed unlocked", error_output.getvalue())
 
     def test_an_unconfirmed_environment_reset_skips_phases_1_through_6_but_still_restores(self) -> None:
-        def unconfirmed_setup(_serial: str, failures: list[str]) -> bool:
+        def unconfirmed_setup(_device: device_layer.AdbDevice, failures: list[str]) -> bool:
             failures.append("Environment reset broadcast was not confirmed by the service log")
             return False
 
@@ -424,7 +460,9 @@ class DeviceQualificationTest(unittest.TestCase):
     ) -> None:
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertFalse(
-                qualification.restore_device("device", None, initial_screen_was_on=True, initial_night_mode="auto")
+                qualification.restore_device(
+                    device_layer.AdbDevice("device"), None, initial_screen_was_on=True, initial_night_mode="auto"
+                )
             )
 
     @patch.object(device_layer, "read_keyguard_locked", return_value=False)
@@ -445,7 +483,9 @@ class DeviceQualificationTest(unittest.TestCase):
         # With no override to compare, an unreadable readback collapsed to None == None and passed.
         with contextlib.redirect_stderr(io.StringIO()) as error_output:
             self.assertFalse(
-                qualification.restore_device("device", None, initial_screen_was_on=True, initial_night_mode="auto")
+                qualification.restore_device(
+                    device_layer.AdbDevice("device"), None, initial_screen_was_on=True, initial_night_mode="auto"
+                )
             )
         self.assertIn("could not read the display size after restore", error_output.getvalue())
 
@@ -462,7 +502,9 @@ class RendererLogScanTest(unittest.TestCase):
         results: list[tuple[str, str]] = []
         failures: list[str] = []
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            inconclusive = qualification.phase_renderer_log_scan("device", "10-06 12:00:00.000", results, failures)
+            inconclusive = qualification.phase_renderer_log_scan(
+                device_layer.AdbDevice("device"), "10-06 12:00:00.000", results, failures
+            )
         self.assertFalse(inconclusive)
         self.assertEqual(len(failures), 1)
         self.assertIn("could not be collected", failures[0])
@@ -475,7 +517,9 @@ class RendererLogScanTest(unittest.TestCase):
         results: list[tuple[str, str]] = []
         failures: list[str] = []
         with contextlib.redirect_stdout(io.StringIO()):
-            inconclusive = qualification.phase_renderer_log_scan("device", "10-06 12:00:00.000", results, failures)
+            inconclusive = qualification.phase_renderer_log_scan(
+                device_layer.AdbDevice("device"), "10-06 12:00:00.000", results, failures
+            )
         self.assertTrue(inconclusive)
         self.assertEqual(failures, [])
         self.assertEqual(results[0][0], "renderer log scan")
@@ -539,20 +583,20 @@ class PaletteProbeTest(unittest.TestCase):
         1.254 and the fine muted-gold stroke sits at 1.344.
         """
         scale = 0.43 * min(FRAME_WIDTH, FRAME_HEIGHT) / 1.37
-        points = list(qualification.rim_probe_points(FRAME_WIDTH, FRAME_HEIGHT))
-        self.assertEqual(len(points), len(qualification.RIM_PROBE_BEARINGS_DEG))
+        points = list(device_layer.rim_probe_points(FRAME_WIDTH, FRAME_HEIGHT))
+        self.assertEqual(len(points), len(device_layer.RIM_PROBE_BEARINGS_DEG))
         for x, y in points:
             normalized = math.hypot(x - FRAME_WIDTH / 2.0, y - FRAME_HEIGHT / 2.0) / scale
             self.assertGreater(normalized, NUMERAL_GLYPH_OUTER_RADIUS)
             self.assertLess(normalized, RIM_INSET_STROKE_RADIUS)
 
     def test_dark_rim_annulus_reads_as_dark(self) -> None:
-        pixels = palette_frame(qualification.DARK_RIM_RGB, [])
-        self.assertTrue(qualification.is_dark_palette(FRAME_WIDTH, FRAME_HEIGHT, pixels))
+        pixels = palette_frame(device_layer.DARK_RIM_RGB, [])
+        self.assertTrue(device_layer.is_dark_palette(FRAME_WIDTH, FRAME_HEIGHT, pixels))
 
     def test_light_rim_annulus_reads_as_light(self) -> None:
-        pixels = palette_frame(qualification.LIGHT_RIM_RGB, [])
-        self.assertFalse(qualification.is_dark_palette(FRAME_WIDTH, FRAME_HEIGHT, pixels))
+        pixels = palette_frame(device_layer.LIGHT_RIM_RGB, [])
+        self.assertFalse(device_layer.is_dark_palette(FRAME_WIDTH, FRAME_HEIGHT, pixels))
 
     def test_gold_pixel_at_the_previous_probe_point_does_not_read_as_light(self) -> None:
         """
@@ -566,87 +610,85 @@ class PaletteProbeTest(unittest.TestCase):
             FRAME_WIDTH // 2,
             int(FRAME_HEIGHT / 2 - 0.38 * min(FRAME_WIDTH, FRAME_HEIGHT)),
         )
-        pixels = palette_frame(qualification.DARK_RIM_RGB, [old_probe])
-        self.assertTrue(qualification.is_dark_palette(FRAME_WIDTH, FRAME_HEIGHT, pixels))
+        pixels = palette_frame(device_layer.DARK_RIM_RGB, [old_probe])
+        self.assertTrue(device_layer.is_dark_palette(FRAME_WIDTH, FRAME_HEIGHT, pixels))
 
     def test_modal_sample_ignores_a_single_gold_probe_hit(self) -> None:
         """Keep one intruder over a probe from changing the modal rim colour."""
-        points = list(qualification.rim_probe_points(FRAME_WIDTH, FRAME_HEIGHT))
+        points = list(device_layer.rim_probe_points(FRAME_WIDTH, FRAME_HEIGHT))
         self.assertGreater(len(points), MIN_PROBE_POINTS)
-        pixels = palette_frame(qualification.DARK_RIM_RGB, points[:1])
-        self.assertTrue(qualification.is_dark_palette(FRAME_WIDTH, FRAME_HEIGHT, pixels))
+        pixels = palette_frame(device_layer.DARK_RIM_RGB, points[:1])
+        self.assertTrue(device_layer.is_dark_palette(FRAME_WIDTH, FRAME_HEIGHT, pixels))
 
     def test_nearest_rim_literal_reproduces_both_pinned_tones(self) -> None:
-        self.assertEqual(qualification.nearest_rim_rgb(qualification.DARK_RIM_RGB), qualification.DARK_RIM_RGB)
-        self.assertEqual(qualification.nearest_rim_rgb(qualification.LIGHT_RIM_RGB), qualification.LIGHT_RIM_RGB)
+        self.assertEqual(device_layer.nearest_rim_rgb(device_layer.DARK_RIM_RGB), device_layer.DARK_RIM_RGB)
+        self.assertEqual(device_layer.nearest_rim_rgb(device_layer.LIGHT_RIM_RGB), device_layer.LIGHT_RIM_RGB)
 
     def test_nearest_rim_literal_resolves_an_intermediate_colour(self) -> None:
         # A colour between the two rim tones is classified by distance, not by an RGB-sum threshold:
         # the midpoint of the pair is nearer the dark literal, and a light grey is nearer the light one.
-        dark = qualification.DARK_RIM_RGB
-        light = qualification.LIGHT_RIM_RGB
+        dark = device_layer.DARK_RIM_RGB
+        light = device_layer.LIGHT_RIM_RGB
         midpoint = ((dark[0] + light[0]) // 2, (dark[1] + light[1]) // 2, (dark[2] + light[2]) // 2)
-        self.assertEqual(qualification.nearest_rim_rgb(midpoint), qualification.DARK_RIM_RGB)
-        self.assertEqual(qualification.nearest_rim_rgb((200, 200, 200)), qualification.LIGHT_RIM_RGB)
+        self.assertEqual(device_layer.nearest_rim_rgb(midpoint), device_layer.DARK_RIM_RGB)
+        self.assertEqual(device_layer.nearest_rim_rgb((200, 200, 200)), device_layer.LIGHT_RIM_RGB)
 
     @patch.object(device_layer, "DARK_RIM_RGB", (0, 0, 0))
     @patch.object(device_layer, "LIGHT_RIM_RGB", (2, 2, 2))
     def test_nearest_rim_literal_breaks_a_tie_towards_the_dark_tone(self) -> None:
-        self.assertEqual(qualification.nearest_rim_rgb((1, 1, 1)), (0, 0, 0))
+        self.assertEqual(device_layer.nearest_rim_rgb((1, 1, 1)), (0, 0, 0))
 
 
-class SharedHarnessConstantTest(unittest.TestCase):
-    """The duplicated tunables in the two harnesses must stay identical."""
+class SharedDeviceLayerTest(unittest.TestCase):
+    """The tunables shared by the two harnesses live only in device_layer."""
 
-    def test_every_duplicated_constant_agrees_across_both_harnesses(self) -> None:
+    def test_shared_constants_live_in_the_shared_layer(self) -> None:
         for name in DUPLICATED_CONSTANT_NAMES:
             with self.subTest(constant=name):
-                self.assertTrue(hasattr(qualification, name), f"qualification lacks {name}")
-                self.assertTrue(hasattr(device_smoke_test, name), f"smoke test lacks {name}")
-                self.assertEqual(getattr(qualification, name), getattr(device_smoke_test, name))
+                self.assertTrue(hasattr(device_layer, name), f"device_layer lacks {name}")
 
-    def test_duplicated_probe_points_agree_across_both_harnesses(self) -> None:
-        self.assertEqual(
-            list(qualification.rim_probe_points(FRAME_WIDTH, FRAME_HEIGHT)),
-            list(device_smoke_test.rim_probe_points(FRAME_WIDTH, FRAME_HEIGHT)),
-        )
+    def test_harnesses_do_not_redefine_the_shared_constants(self) -> None:
+        for harness in (qualification, device_smoke):
+            for name in DUPLICATED_CONSTANT_NAMES:
+                with self.subTest(harness=harness.__name__, constant=name):
+                    self.assertFalse(hasattr(harness, name), f"{harness.__name__} shadows {name}")
 
 
 class HandDetectionTest(unittest.TestCase):
     """The hand-ink predicates and the angle estimate they feed."""
 
     def test_hand_ink_predicates_match_their_pinned_literals(self) -> None:
-        self.assertTrue(qualification.is_dark_hand_pixel(*DARK_HAND_RGB))
-        self.assertFalse(qualification.is_dark_hand_pixel(*qualification.DARK_RIM_RGB))
-        self.assertTrue(qualification.is_light_hand_pixel(*LIGHT_HAND_RGB))
-        self.assertFalse(qualification.is_light_hand_pixel(*qualification.LIGHT_RIM_RGB))
+        self.assertTrue(device_layer.is_dark_hand_pixel(*DARK_HAND_RGB))
+        self.assertFalse(device_layer.is_dark_hand_pixel(*device_layer.DARK_RIM_RGB))
+        self.assertTrue(device_layer.is_light_hand_pixel(*LIGHT_HAND_RGB))
+        self.assertFalse(device_layer.is_light_hand_pixel(*device_layer.LIGHT_RIM_RGB))
 
     def test_hand_ink_predicates_enforce_their_direction_guards(self) -> None:
         # Inside the dark bounds, but not warm enough: red minus blue stays below the guard.
-        self.assertFalse(qualification.is_dark_hand_pixel(230, 220, 215))
+        self.assertFalse(device_layer.is_dark_hand_pixel(230, 220, 215))
         # Inside the light bounds, but not red > green > blue.
-        self.assertFalse(qualification.is_light_hand_pixel(78, 78, 27))
+        self.assertFalse(device_layer.is_light_hand_pixel(78, 78, 27))
 
     def test_coarse_angle_picks_the_densest_bin(self) -> None:
-        self.assertAlmostEqual(qualification.coarse_hand_angle([0.0] * 5 + [180.0] * 2), 2.0)
+        self.assertAlmostEqual(device_layer.coarse_hand_angle([0.0] * 5 + [180.0] * 2), 2.0)
 
     def test_refine_angle_requires_the_minimum_sample_count(self) -> None:
-        self.assertIsNone(qualification.refine_hand_angle([0.0] * (qualification.HAND_MIN_SAMPLES - 1), 0.0))
-        refined = qualification.refine_hand_angle([0.0] * qualification.HAND_MIN_SAMPLES, 0.0)
+        self.assertIsNone(device_layer.refine_hand_angle([0.0] * (device_layer.HAND_MIN_SAMPLES - 1), 0.0))
+        refined = device_layer.refine_hand_angle([0.0] * device_layer.HAND_MIN_SAMPLES, 0.0)
         if refined is None:
             self.fail("a full sample set must be refined")
         self.assertAlmostEqual(refined, 0.0)
 
     def test_dark_hand_stroke_is_located_on_a_synthetic_frame(self) -> None:
-        frame = hand_frame(qualification.DARK_RIM_RGB, DARK_HAND_RGB, HAND_UP_BEARING_DEG)
-        angle = qualification.detect_hand_angle(FRAME_WIDTH, FRAME_HEIGHT, frame)
+        frame = hand_frame(device_layer.DARK_RIM_RGB, DARK_HAND_RGB, HAND_UP_BEARING_DEG)
+        angle = device_layer.detect_hand_angle(FRAME_WIDTH, FRAME_HEIGHT, frame)
         if angle is None:
             self.fail("the synthetic dark-ink stroke must be located")
         self.assertAlmostEqual(circular_difference_deg(angle, HAND_UP_BEARING_DEG), 0.0, places=1)
 
     def test_light_hand_stroke_is_located_on_a_synthetic_light_frame(self) -> None:
-        frame = hand_frame(qualification.LIGHT_RIM_RGB, LIGHT_HAND_RGB, HAND_DOWN_BEARING_DEG)
-        angle = qualification.detect_hand_angle(FRAME_WIDTH, FRAME_HEIGHT, frame)
+        frame = hand_frame(device_layer.LIGHT_RIM_RGB, LIGHT_HAND_RGB, HAND_DOWN_BEARING_DEG)
+        angle = device_layer.detect_hand_angle(FRAME_WIDTH, FRAME_HEIGHT, frame)
         if angle is None:
             self.fail("the synthetic light-ink stroke must be located")
         self.assertAlmostEqual(circular_difference_deg(angle, HAND_DOWN_BEARING_DEG), 0.0, places=1)
@@ -654,26 +696,26 @@ class HandDetectionTest(unittest.TestCase):
     def test_the_wrong_theme_leaves_the_hand_unfound(self) -> None:
         # The cream hand ink on a light plate is not hand ink for that palette, so the probe must
         # report no hand rather than measuring the other theme's ink.
-        frame = hand_frame(qualification.LIGHT_RIM_RGB, DARK_HAND_RGB, HAND_UP_BEARING_DEG)
-        self.assertIsNone(qualification.detect_hand_angle(FRAME_WIDTH, FRAME_HEIGHT, frame))
+        frame = hand_frame(device_layer.LIGHT_RIM_RGB, DARK_HAND_RGB, HAND_UP_BEARING_DEG)
+        self.assertIsNone(device_layer.detect_hand_angle(FRAME_WIDTH, FRAME_HEIGHT, frame))
 
     def test_capture_frame_accepts_a_consistent_payload(self) -> None:
         raw = struct.pack("<IIII", 2, 2, 1, 0) + bytes(2 * 2 * BYTES_PER_PIXEL)
         with patch.object(device_layer, "run_adb", return_value=raw):
-            self.assertEqual(qualification.capture_frame("device"), (2, 2, bytes(2 * 2 * BYTES_PER_PIXEL)))
+            self.assertEqual(device_layer.capture_frame("device"), (2, 2, bytes(2 * 2 * BYTES_PER_PIXEL)))
 
     @patch.object(device_layer, "run_adb", return_value=bytes(8))
     def test_capture_frame_rejects_a_truncated_header(self, _run_adb: MagicMock) -> None:
         with self.assertRaisesRegex(RuntimeError, "payload too small"):
-            qualification.capture_frame("device")
+            device_layer.capture_frame("device")
 
 
 class PhaseDecisionTest(unittest.TestCase):
     """Decisions taken inside the extracted phase helpers."""
 
-    @patch.object(qualification, "detect_hand_angle", side_effect=[0.0, 8.1, 180.0])
-    @patch.object(qualification, "capture_frame", return_value=(2, 2, bytes(16)))
-    @patch.object(qualification, "send_debug_clock_broadcast", return_value=True)
+    @patch.object(device_layer, "detect_hand_angle", side_effect=[0.0, 8.1, 180.0])
+    @patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16)))
+    @patch.object(device_layer, "send_debug_clock_broadcast", return_value=True)
     @patch.object(qualification.time, "sleep")
     def test_time_travel_rejects_an_advance_past_the_tolerance(
         self, _sleep: MagicMock, _send: MagicMock, _capture: MagicMock, _angle: MagicMock
@@ -681,14 +723,14 @@ class PhaseDecisionTest(unittest.TestCase):
         results: list[tuple[str, str]] = []
         failures: list[str] = []
         with contextlib.redirect_stdout(io.StringIO()):
-            qualification.phase_time_travel("device", results, failures)
+            qualification.phase_time_travel(device_layer.AdbDevice("device"), results, failures)
         self.assertEqual(len(failures), 1)
         self.assertIn("residuals exceeded tolerance", failures[0])
         self.assertEqual(results, [])
 
-    @patch.object(qualification, "detect_hand_angle", side_effect=[359.0, 6.5, 179.0])
-    @patch.object(qualification, "capture_frame", return_value=(2, 2, bytes(16)))
-    @patch.object(qualification, "send_debug_clock_broadcast", return_value=True)
+    @patch.object(device_layer, "detect_hand_angle", side_effect=[359.0, 6.5, 179.0])
+    @patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16)))
+    @patch.object(device_layer, "send_debug_clock_broadcast", return_value=True)
     @patch.object(qualification.time, "sleep")
     def test_time_travel_measures_across_the_zero_crossing(
         self, _sleep: MagicMock, _send: MagicMock, _capture: MagicMock, _angle: MagicMock
@@ -696,13 +738,13 @@ class PhaseDecisionTest(unittest.TestCase):
         results: list[tuple[str, str]] = []
         failures: list[str] = []
         with contextlib.redirect_stdout(io.StringIO()):
-            qualification.phase_time_travel("device", results, failures)
+            qualification.phase_time_travel(device_layer.AdbDevice("device"), results, failures)
         self.assertEqual(failures, [])
         self.assertEqual(len(results), 1)
 
-    @patch.object(qualification, "detect_hand_angle", side_effect=[0.0, 8.0, 180.0])
-    @patch.object(qualification, "capture_frame", return_value=(2, 2, bytes(16)))
-    @patch.object(qualification, "send_debug_clock_broadcast", return_value=True)
+    @patch.object(device_layer, "detect_hand_angle", side_effect=[0.0, 8.0, 180.0])
+    @patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16)))
+    @patch.object(device_layer, "send_debug_clock_broadcast", return_value=True)
     @patch.object(qualification.time, "sleep")
     def test_time_travel_accepts_a_residual_exactly_on_the_tolerance(
         self, _sleep: MagicMock, _send: MagicMock, _capture: MagicMock, _angle: MagicMock
@@ -710,12 +752,12 @@ class PhaseDecisionTest(unittest.TestCase):
         results: list[tuple[str, str]] = []
         failures: list[str] = []
         with contextlib.redirect_stdout(io.StringIO()):
-            qualification.phase_time_travel("device", results, failures)
+            qualification.phase_time_travel(device_layer.AdbDevice("device"), results, failures)
         self.assertEqual(failures, [])
 
-    @patch.object(qualification, "detect_hand_angle")
-    @patch.object(qualification, "capture_frame")
-    @patch.object(qualification, "send_debug_clock_broadcast", return_value=False)
+    @patch.object(device_layer, "detect_hand_angle")
+    @patch.object(device_layer, "capture_frame")
+    @patch.object(device_layer, "send_debug_clock_broadcast", return_value=False)
     @patch.object(qualification.time, "sleep")
     def test_time_travel_skips_angle_measurement_when_its_own_reset_is_unconfirmed(
         self, _sleep: MagicMock, _send: MagicMock, capture: MagicMock, angle: MagicMock
@@ -723,40 +765,55 @@ class PhaseDecisionTest(unittest.TestCase):
         results: list[tuple[str, str]] = []
         failures: list[str] = []
         with contextlib.redirect_stdout(io.StringIO()):
-            qualification.phase_time_travel("device", results, failures)
+            qualification.phase_time_travel(device_layer.AdbDevice("device"), results, failures)
         self.assertEqual(failures, ["Time-travel baseline reset was not confirmed by the service log"])
         self.assertEqual(results, [])
         capture.assert_not_called()
         angle.assert_not_called()
 
-    @patch.object(qualification, "run_adb", return_value=b"--------- beginning of main\nW/DialRenderer: failed draw\n")
+    @patch.object(device_layer, "run_adb", return_value=b"--------- beginning of main\nW/DialRenderer: failed draw\n")
     def test_a_matching_warning_record_fails_the_log_scan(self, _run_adb: MagicMock) -> None:
         results: list[tuple[str, str]] = []
         failures: list[str] = []
         with contextlib.redirect_stdout(io.StringIO()):
-            inconclusive = qualification.phase_renderer_log_scan("device", "marker", results, failures)
+            inconclusive = qualification.phase_renderer_log_scan(
+                device_layer.AdbDevice("device"), "marker", results, failures
+            )
         self.assertFalse(inconclusive)
         self.assertEqual(failures, ["1 unexpected warning(s) in logcat"])
 
     @patch.object(
-        qualification,
+        device_layer,
         "run_adb",
         return_value=struct.pack("<IIII", 2, 2, 1, 0) + bytes(2 * 2 * BYTES_PER_PIXEL),
     )
     def test_recreate_size_is_chosen_to_differ_from_the_size_in_effect(self, _run_adb: MagicMock) -> None:
-        self.assertEqual(qualification.choose_recreate_size("1080x2000", None), "1080x1800")
-        self.assertEqual(qualification.choose_recreate_size("1080x2408", "1080x2000"), "1080x1800")
-        self.assertEqual(qualification.choose_recreate_size("1080x2000", "1080x1200"), "1080x2000")
+        self.assertEqual(device_layer.choose_recreate_size("1080x2000", None), "1080x1800")
+        self.assertEqual(device_layer.choose_recreate_size("1080x2408", "1080x2000"), "1080x1800")
+        self.assertEqual(device_layer.choose_recreate_size("1080x2000", "1080x1200"), "1080x2000")
 
     def test_size_restore_command_puts_back_an_override_verbatim(self) -> None:
-        self.assertEqual(qualification.size_restore_command("720x1280")[-1], "720x1280")
-        self.assertEqual(qualification.size_restore_command(None)[-1], "reset")
+        self.assertEqual(device_layer.size_restore_command("720x1280")[-1], "720x1280")
+        self.assertEqual(device_layer.size_restore_command(None)[-1], "reset")
 
     def test_restore_commands_place_the_night_mode_only_when_it_was_read(self) -> None:
-        with_night = qualification.restore_commands(None, "auto")
-        self.assertEqual(with_night[2], ["shell", "cmd", "uimode", "night", "auto"])
-        without_night = qualification.restore_commands(None, None)
-        self.assertNotIn("uimode", [part for command in without_night for part in command])
+        self.assertEqual(
+            qualification.restore_commands(None, "auto"),
+            [
+                ["shell", "input", "keyevent", "KEYCODE_WAKEUP"],
+                ["shell", "wm", "size", "reset"],
+                ["shell", "cmd", "uimode", "night", "auto"],
+                ["shell", "input", "keyevent", "KEYCODE_HOME"],
+            ],
+        )
+        self.assertEqual(
+            qualification.restore_commands("720x1280", None),
+            [
+                ["shell", "input", "keyevent", "KEYCODE_WAKEUP"],
+                ["shell", "wm", "size", "720x1280"],
+                ["shell", "input", "keyevent", "KEYCODE_HOME"],
+            ],
+        )
 
 
 class DeviceStateParsingTest(unittest.TestCase):
@@ -777,13 +834,12 @@ class DeviceStateParsingTest(unittest.TestCase):
             ("Physical size: 1080x2408\nPhysical size: 720x1280", (None, None)),
             ("Physical size: 1080x2408\nOverride size: 720x1280\nOverride size: 480x800", (None, None)),
         )
-        for harness in (qualification, device_layer):
-            for output, expected in cases:
-                with (
-                    self.subTest(harness=harness.__name__, output=output),
-                    patch.object(device_layer, "run_adb", return_value=output.encode()),
-                ):
-                    self.assertEqual(harness.read_display_size("device"), expected)
+        for output, expected in cases:
+            with (
+                self.subTest(output=output),
+                patch.object(device_layer, "run_adb", return_value=output.encode()),
+            ):
+                self.assertEqual(device_layer.read_display_size("device"), expected)
 
     def test_keyguard_requires_complete_values_and_all_unlocked_readings(self) -> None:
         cases = (
@@ -801,13 +857,12 @@ class DeviceStateParsingTest(unittest.TestCase):
             ("isKeyguardShowing=false\nisKeyguardShowing=unknown", None),
             ("isKeyguardShowing=unknown\nisKeyguardShowing=false", None),
         )
-        for harness in (qualification, device_layer):
-            for output, expected in cases:
-                with (
-                    self.subTest(harness=harness.__name__, output=output),
-                    patch.object(device_layer, "run_adb", return_value=output.encode()),
-                ):
-                    self.assertIs(harness.read_keyguard_locked("device"), expected)
+        for output, expected in cases:
+            with (
+                self.subTest(output=output),
+                patch.object(device_layer, "run_adb", return_value=output.encode()),
+            ):
+                self.assertIs(device_layer.read_keyguard_locked("device"), expected)
 
 
 class PhasePrerequisiteTest(unittest.TestCase):
@@ -822,7 +877,7 @@ class PhasePrerequisiteTest(unittest.TestCase):
             patch.object(qualification.time, "sleep") as sleep,
             contextlib.redirect_stdout(io.StringIO()),
         ):
-            qualification.phase_total_pss_growth("device", 10, results, failures)
+            qualification.phase_total_pss_growth(device_layer.AdbDevice("device"), 10, results, failures)
         self.assertEqual(failures, ["PSS baseline reset was not confirmed by the service log"])
         self.assertEqual(results, [])
         run_adb.assert_not_called()
@@ -839,33 +894,31 @@ class PhasePrerequisiteTest(unittest.TestCase):
                 patch.object(qualification.time, "sleep"),
                 contextlib.redirect_stdout(io.StringIO()),
             ):
-                qualification.phase_total_pss_growth("device", 10, results, failures)
+                qualification.phase_total_pss_growth(device_layer.AdbDevice("device"), 10, results, failures)
                 self.assertEqual(bool(results), within_budget)
                 self.assertEqual(bool(failures), not within_budget)
 
     def test_surface_phase_verifies_restore_before_capturing(self) -> None:
-        for harness in (qualification,):
-            for original in (None, "720x1280"):
-                for readback in (("1080x2408", original), ("1080x2408", "1080x2000"), (None, None)):
-                    with self.subTest(harness=harness.__name__, original=original, readback=readback):
-                        self.check_surface_restore(harness, original, readback)
+        for original in (None, "720x1280"):
+            for readback in (("1080x2408", original), ("1080x2408", "1080x2000"), (None, None)):
+                with self.subTest(original=original, readback=readback):
+                    self.check_surface_restore(original, readback)
 
     def test_surface_failure_survives_successful_final_cleanup(self) -> None:
-        for module in (qualification,):
-            for readback in (("1080x2408", "1080x2000"), (None, None)):
-                with self.subTest(harness=module.__name__, readback=readback):
-                    self.check_surface_failure_through_main(module, readback)
+        for readback in (("1080x2408", "1080x2000"), (None, None)):
+            with self.subTest(readback=readback):
+                self.check_surface_failure_through_main(qualification, readback)
 
     def check_surface_failure_through_main(self, module: ModuleType, readback: tuple[str | None, str | None]) -> None:
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.object(sys, "argv", ["harness", "--max-pss-growth-kb", "10"]))
-            stack.enter_context(patch.object(module, "run_adb"))
+            stack.enter_context(patch.object(device_layer, "run_adb"))
             stack.enter_context(patch.object(module.time, "sleep"))
             stack.enter_context(
-                patch.object(module, "read_display_size", side_effect=[("1080x2408", "1080x2000"), readback])
+                patch.object(device_layer, "read_display_size", side_effect=[("1080x2408", "1080x2000"), readback])
             )
-            stack.enter_context(patch.object(module, "capture_frame", return_value=(2, 2, bytes(16))))
-            stack.enter_context(patch.object(module, "detect_hand_angle", return_value=1.0))
+            stack.enter_context(patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))))
+            stack.enter_context(patch.object(device_layer, "detect_hand_angle", return_value=1.0))
             restore = stack.enter_context(patch.object(module, "restore_device", return_value=True))
             stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
             error_output = stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
@@ -896,25 +949,25 @@ class PhasePrerequisiteTest(unittest.TestCase):
             self.assertIn("not verified after surface recreation restore", error_output.getvalue())
             restore.assert_called_once()
 
-    def check_surface_restore(
-        self, module: ModuleType, original: str | None, readback: tuple[str | None, str | None]
-    ) -> None:
+    def check_surface_restore(self, original: str | None, readback: tuple[str | None, str | None]) -> None:
         results: list[tuple[str, str]] = []
         failures: list[str] = []
         verified = readback[0] is not None and readback[1] == original
         with (
-            patch.object(module, "read_display_size", side_effect=[("1080x2408", "1080x2000"), readback]),
-            patch.object(module, "run_adb") as run_adb,
-            patch.object(module, "capture_frame", return_value=(2, 2, bytes(16))) as capture,
-            patch.object(module, "detect_hand_angle", return_value=1.0),
-            patch.object(module.time, "sleep"),
+            patch.object(device_layer, "read_display_size", side_effect=[("1080x2408", "1080x2000"), readback]),
+            patch.object(device_layer, "run_adb") as run_adb,
+            patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))) as capture,
+            patch.object(device_layer, "detect_hand_angle", return_value=1.0),
+            patch.object(qualification.time, "sleep"),
             contextlib.redirect_stdout(io.StringIO()),
         ):
-            qualification.phase_surface_recreation("device", original, "1080x2000", results, failures)
+            qualification.phase_surface_recreation(
+                device_layer.AdbDevice("device"), original, "1080x2000", results, failures
+            )
             self.assertEqual(bool(results), verified)
             self.assertEqual(bool(failures), not verified)
             self.assertEqual(capture.call_count, int(verified))
-            self.assertEqual(run_adb.call_args.args[0], module.size_restore_command(original))
+            self.assertEqual(run_adb.call_args.args[0], device_layer.size_restore_command(original))
 
 
 if __name__ == "__main__":
