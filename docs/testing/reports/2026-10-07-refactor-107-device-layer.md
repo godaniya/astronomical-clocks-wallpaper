@@ -8,7 +8,7 @@ Test build: local debug `app-debug.apk` built from this branch at revision `0585
 
 Target platform: physical device running Android 16 (API 36). Hardware serial number, OEM, model name, and firmware build identifier are withheld in accordance with the project's [physical-device privacy policy](../../../CONTRIBUTING.md#physical-device-testing-and-privacy).
 
-**Review-round note (2026-10-07).** The `AdbDevice` routing, the remaining smoke-harness path corrections, and the confirmed-wake/sleep gates on both harnesses' setup steps were completed in the pull-request review round as a host-only refactor of `scripts/`: the recorded physical-device runs above predate it, the application sources and the APK recorded above are unchanged, and the refactor is covered by the updated host unit suite (107 tests: 41 smoke, 66 qualification), Ruff, and ty rather than by a new device pass.
+**Review-round note (2026-10-07).** The `AdbDevice` routing, the remaining smoke-harness path corrections, and the confirmed-wake/sleep gates on both harnesses' setup steps were completed in the pull-request review round as a host-only refactor of `scripts/`: the recorded physical-device runs above predate it, the application sources and the APK recorded above are unchanged, and the refactor was covered by the updated host unit suite (107 tests: 41 smoke, 66 qualification), Ruff, and ty at that revision; the final harnesses' own physical-device pass is recorded in [2026-10-07-refactor-107-final-device-pass.md](2026-10-07-refactor-107-final-device-pass.md).
 
 ---
 
