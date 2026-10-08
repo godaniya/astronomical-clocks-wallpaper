@@ -39,7 +39,7 @@ internal class DialRenderer {
     private val undersizedDialLog =
         RepeatedFailureLog(
             tag = TAG,
-            message = "skipping dial: radius below minimum",
+            message = "skipping dial: viewport cannot fit the dial",
             level = Log.WARN,
         )
 
@@ -230,7 +230,7 @@ internal class DialRenderer {
         canvas.drawCircle(0f, 0f, HUB_INNER_RADIUS, paint)
     }
 
-    private companion object {
+    internal companion object {
         const val CENTER_DIVISOR = 2f
         const val FULL_BRIGHTNESS = 100
         const val MAX_ALPHA = 255f

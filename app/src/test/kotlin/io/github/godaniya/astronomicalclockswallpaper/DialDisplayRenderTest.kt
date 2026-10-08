@@ -47,7 +47,7 @@ class DialDisplayRenderTest {
                 assertEquals(pinned.radius, placement.radius, PLACEMENT_TOLERANCE)
                 for (palette in listOf(DialStyle.DARK_PALETTE, DialStyle.LIGHT_PALETTE)) {
                     val bitmap = render(settings, palette, viewport)
-                    val skyRadius = placement.radius / DialViewport.OUTER_RADIUS
+                    val skyRadius = placement.radius / DialRenderer.OUTER_RADIUS
                     assertEquals(palette.rim, bitmap.getPixel(placement.centerX.toInt(), placement.centerY.toInt()))
                     assertEquals(
                         palette.rim,

@@ -4,10 +4,9 @@ package io.github.godaniya.astronomicalclockswallpaper
 internal data class DialViewport(val left: Float, val top: Float, val right: Float, val bottom: Float) {
     companion object {
         const val RADIUS_FRACTION = 0.43f
-        const val OUTER_RADIUS = 1.37f
 
-        // Includes half the outer 0.008 stroke, in sky-radius units.
-        const val STROKED_EXTENT = 1f + 0.004f / OUTER_RADIUS
+        // Includes half the outer rim stroke, in sky-radius units.
+        const val STROKED_EXTENT = 1f + DialRenderer.RIM_WIDTH / 2f / DialRenderer.OUTER_RADIUS
         const val MIN_RADIUS = 16f
         const val PERCENT = 100f
 
