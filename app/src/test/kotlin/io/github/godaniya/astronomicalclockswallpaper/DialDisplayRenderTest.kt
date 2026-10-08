@@ -27,6 +27,9 @@ class DialDisplayRenderTest {
     fun nativeCornerPlacement() {
         val viewport = DialViewport(left = 23f, top = 41f, right = 600f, bottom = 720f)
         for (size in listOf(50, 100, 115)) {
+            val centred = requireNotNull(viewport.resolve(DialDisplaySettings(size = size)))
+            assertEquals((viewport.left + viewport.right) / 2f, centred.centerX, PLACEMENT_TOLERANCE)
+            assertEquals((viewport.top + viewport.bottom) / 2f, centred.centerY, PLACEMENT_TOLERANCE)
             for (position in listOf(0 to 0, 0 to 100, 100 to 0, 100 to 100)) {
                 val settings = DialDisplaySettings(size = size, horizontal = position.first, vertical = position.second)
                 val placement = requireNotNull(viewport.resolve(settings))
@@ -35,6 +38,13 @@ class DialDisplayRenderTest {
                 assertTrue(placement.centerY - extent >= viewport.top - 0.001f)
                 assertTrue(placement.centerX + extent <= viewport.right + 0.001f)
                 assertTrue(placement.centerY + extent <= viewport.bottom + 0.001f)
+                // Rebuilt from the viewport instead of read back off the placement, so this pins the dial
+                // flush against the requested edge. resolve's own centre formula would still satisfy a
+                // position-blind implementation, so it is deliberately not reused here.
+                val pinned = pinnedPlacement(viewport, settings)
+                assertEquals(pinned.centerX, placement.centerX, PLACEMENT_TOLERANCE)
+                assertEquals(pinned.centerY, placement.centerY, PLACEMENT_TOLERANCE)
+                assertEquals(pinned.radius, placement.radius, PLACEMENT_TOLERANCE)
                 for (palette in listOf(DialStyle.DARK_PALETTE, DialStyle.LIGHT_PALETTE)) {
                     val bitmap = render(settings, palette, viewport)
                     val skyRadius = placement.radius / DialViewport.OUTER_RADIUS
@@ -121,6 +131,9 @@ class DialDisplayRenderTest {
                 landscape
                     .resolve(DialDisplaySettings(size = 50, horizontal = 100, vertical = 0)),
             )
+        val pinned = pinnedPlacement(landscape, DialDisplaySettings(size = 50, horizontal = 100, vertical = 0))
+        assertEquals(pinned.centerX, horizontalPlacement.centerX, PLACEMENT_TOLERANCE)
+        assertEquals(pinned.centerY, horizontalPlacement.centerY, PLACEMENT_TOLERANCE)
         assertEquals(
             DialStyle.DARK_PALETTE.rim,
             horizontalFrame
@@ -129,6 +142,21 @@ class DialDisplayRenderTest {
         horizontalFrame.recycle()
         assertNull(DialViewport.full(width = 0, height = 100).resolve(DialDisplaySettings()))
         assertNull(DialViewport.full(width = 30, height = 30).resolve(DialDisplaySettings(size = 50)))
+    }
+
+    private fun strokedExtent(viewport: DialViewport, size: Int): Float =
+        minOf(a = viewport.right - viewport.left, b = viewport.bottom - viewport.top) *
+            DialViewport.RADIUS_FRACTION *
+            (size / DialViewport.PERCENT) *
+            DialViewport.STROKED_EXTENT
+
+    private fun pinnedPlacement(viewport: DialViewport, settings: DialDisplaySettings): DialPlacement {
+        val extent = strokedExtent(viewport, settings.size)
+        return DialPlacement(
+            centerX = if (settings.horizontal == 0) viewport.left + extent else viewport.right - extent,
+            centerY = if (settings.vertical == 0) viewport.top + extent else viewport.bottom - extent,
+            radius = extent / DialViewport.STROKED_EXTENT,
+        )
     }
 
     private fun insets(rect: Rect): WindowInsets {
@@ -163,5 +191,6 @@ class DialDisplayRenderTest {
     private companion object {
         const val WIDTH = 640
         const val HEIGHT = 760
+        const val PLACEMENT_TOLERANCE = 0.01f
     }
 }
