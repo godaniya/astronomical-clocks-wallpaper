@@ -779,7 +779,10 @@ class HandDetectionTest(unittest.TestCase):
 
     def test_capture_frame_accepts_a_consistent_payload(self) -> None:
         raw = struct.pack("<IIII", 2, 2, 1, 0) + bytes(2 * 2 * BYTES_PER_PIXEL)
-        with patch.object(device_layer, "run_adb", return_value=raw):
+        with (
+            patch.object(device_layer, "run_adb", return_value=raw),
+            patch.object(device_layer, "read_dial_layout", return_value=device_layer.DialLayout(1, 1, 0.5)),
+        ):
             self.assertEqual(device_layer.capture_frame("device"), (2, 2, bytes(2 * 2 * BYTES_PER_PIXEL)))
 
     @patch.object(device_layer, "run_adb", return_value=bytes(8))
