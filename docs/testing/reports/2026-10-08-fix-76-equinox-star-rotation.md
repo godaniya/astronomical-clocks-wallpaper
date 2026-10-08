@@ -23,8 +23,9 @@ Firmware build: withheld (embeds the model identifier).
 On the historical instrument the 0° Aries star is fixed to the zodiac ring, so it turns as the ring
 turns; #76 reports that this implementation drew it upright wherever the ring carried it. The fix is
 a single `Canvas.rotate` of the star path by the equinox radius-vector angle, which the host tests
-check on a 160 px render magnified 2000-fold. This pass asks the different question of whether the
-rotation survives on the real surface, at the size the wallpaper actually draws.
+check on a 160 px render of a 0.08 sky-radius field of view, about six times the native surface's
+linear scale. This pass asks the different question of whether the rotation survives on the real
+surface, at the size the wallpaper actually draws.
 
 The star is a five-pointed polygon, so its gold silhouette is five-fold symmetric and its
 orientation is defined **modulo 72°**. The measurement is therefore the star's tip direction reduced
@@ -36,17 +37,19 @@ equatorial graticule, which have lower angular order.
 
 The 0° Aries divider is a gold bar running straight through the equinox, and a straight bar through
 the disc centre cancels in the fifth harmonic only to the accuracy of the assumed centre. Measured
-on the host renders at the 1x scale, omitting it moves the recovered tip by −21.1°, −20.3°, +10.0°,
-and +10.6° at S = 0°, 90°, 180°, and 270°, which is far larger than the star's own contribution.
-Pixels within `DIVIDER_WIDTH/2` of the predicted divider bearing are therefore excluded, which
-leaves residuals of +3.1°, −1.1°, +0.0°, and −1.8° on the same frames. Because the star and the
-divider are both fixed to the ring, that exclusion removes a *constant* offset rather than a varying
-one, and the per-capture steps below are unaffected by whatever residual bias remains.
+on the host renders at the 1x scale, leaving it in the probe disc gives tip residuals of −21.1°,
+−20.3°, +10.0°, and +10.6° at S = 0°, 90°, 180°, and 270°, up to 21° of error and far larger than
+the star's own contribution. Pixels within `DIVIDER_WIDTH/2` of the predicted divider bearing are
+therefore excluded, which reduces those residuals to +3.1°, −1.1°, +0.0°, and −1.8°. Because the
+star and the divider are both fixed to the ring, that exclusion removes a *constant* offset rather
+than a varying one, and the per-capture steps below are unaffected by whatever residual bias
+remains.
 
 The frame is validated before it is measured. The predicted equinox pixel and the predicted tip
 bearing come from independent geometry, not from the renderer: `R = tan(45° - eps/2)` with
 `eps = 23.4372°`, `E = R*(sin S, -cos S)`, `S = GMST + 14.42°` from the Meeus/IAU 2006 Greenwich mean
-sidereal angle at the frozen instant, and the predicted tip direction `180° + eps + S`. The GMST
+sidereal angle at the frozen instant plus the site's east-positive longitude, and the predicted tip
+direction `180° + eps + S`. The GMST
 implementation agrees with the repository's ERFA/SOFA `gast06a` fixture column to within 0.0023° at
 all four of the fixture instants, which is the mean-versus-apparent difference and far below the
 measurement resolution. On every capture the predicted equinox then landed on the drawn star, and
@@ -56,8 +59,8 @@ validates the frame before the numbers are read.
 Two surface sizes were captured. The native 1080×2408 surface gives a sky radius of 338.98 px and a
 star 13.6 px across, about 15 fully saturated gold pixels inside the probe disc. The display-size
 override `wm size 2160x4816` doubles that to a 27 px star and about 100 gold pixels, and is the
-measurement reported as the primary one; it was reset afterwards. The probe disc was 22 px at 2x and
-12 px at 1x in both cases, staying inside the 0.0375 sky radii at which the band's gold rim begins
+measurement reported as the primary one; it was reset afterwards. The probe disc radius was 22 px at
+2x and 12 px at 1x, each staying inside the 0.0375 sky radii at which the band's gold rim begins
 (25.4 px and 12.7 px respectively).
 
 The virtual clock was frozen with `DEBUG_SET_TIME --es instant` rather than an offset, so a capture
