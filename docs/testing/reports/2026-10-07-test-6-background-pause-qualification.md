@@ -1,19 +1,28 @@
-# Screen-off sleep and background pause qualification (#6)
+# Screen-off visibility and wake qualification (#6)
 
 ## Overview
 
-Physical-device qualification run for [#6](https://github.com/godaniya/astronomical-clocks-wallpaper/issues/6) verifying screen-off sleep and background pause behavior, addressing the first acceptance criterion of #6:
+Physical-device qualification run for [#6](https://github.com/godaniya/astronomical-clocks-wallpaper/issues/6) observing reported screen-off visibility and wake behavior. The first acceptance criterion of #6 remains unverified:
 > *"Instrument or otherwise demonstrate zero rendering while hidden and while the screen is off; hidden engine instances do not keep recurring calculation/render work alive."*
 
-Prior qualification reports noted *"rendering while asleep was not measured"* during Phase 1. This run instruments Phase 1 in `scripts/device_qualification.py` via `read_wallpaper_visible()` to query `dumpsys activity service`, confirming that Android's WallpaperManager reports the engine hidden (`mVisible=false`) during sleep and that render/tick passes remain halted, followed by confirmed screen wake and hand detection within 1 second.
+Prior qualification reports noted *"rendering while asleep was not measured"* during Phase 1. This run instruments Phase 1 in `scripts/device_qualification.py` via `read_wallpaper_visible()` to query `dumpsys activity service`, observing that Android's WallpaperManager reports the engine hidden (`mVisible=false`) during sleep, followed by confirmed screen wake and hand detection within 1 second. This visibility sample does not measure frames or recurring render/tick work.
 
-Harness revision under test: branch `test/6-background-pause-qualification` based on `91f2348b64e56570c9c7f698a9c2bc52c3dbfecb`.
+Tested source and harness revision: `21976c3e42e9d1f082ab5b435992e6d4e3f53763`, as identified by the original PR #111 metadata (branch `test/6-background-pause-qualification`, based on `91f2348b64e56570c9c7f698a9c2bc52c3dbfecb`).
 
-Test APK: local debug `app-debug.apk` built from this branch (APK SHA-256 `ac69905fe32b91c3c87bc04f892a0025cd86a389b366707aa5be5783b67a50a5`), verified with `scripts/verify-apk.sh` and confirmed on-device via `sha256sum`.
+Test APK: local debug `app-debug.apk` at that tested source revision (APK SHA-256 `ac69905fe32b91c3c87bc04f892a0025cd86a389b366707aa5be5783b67a50a5`), verified with `scripts/verify-apk.sh` and confirmed on-device via `sha256sum`.
 
 Target platform: physical device running Android 16 (API 36), locale `de-DE`, timezone `Europe/Prague`. Hardware serial number, OEM, model name, and firmware build identifier are withheld in accordance with the project's [physical-device privacy policy](../../../CONTRIBUTING.md#physical-device-testing-and-privacy). Run date: 2026-10-07.
 
 ---
+
+## Editorial correction (2026-10-08)
+
+The original inference that `mVisible=false` proved halted rendering or ticks is withdrawn.
+No producer trace, frame counter, or tick trace was collected, so zero rendering while
+hidden or screen-off remains unverified. The original recorded output below is preserved
+verbatim, including its unsupported "rendering halted" wording; that wording is not evidence
+of halted rendering. Dates, measurements, exit status, and APK hash remain unchanged.
+This correction adds no new hardware verification.
 
 ## 1. Automated Smoke Verification (`device_smoke.py`)
 
@@ -56,4 +65,4 @@ Result: All 7 configured qualification phases passed with clean exit code 0. Tea
 
 ## 3. Not covered
 
-Date rollover, battery and CPU consumption benchmarks (the PSS sample is not battery or CPU evidence), the lit lock-screen scenario, and cold reboot persistence remain unverified.
+Zero hidden/screen-off rendering and recurring render/tick inactivity require producer/frame/tick evidence and remain unverified. Date rollover, battery and CPU consumption benchmarks (the PSS sample is not battery or CPU evidence), the lit lock-screen scenario, and cold reboot persistence remain unverified.

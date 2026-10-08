@@ -99,8 +99,8 @@ passes. A smoke run only measures the hand; it does not exercise lifecycle, rebo
 Run `python3 scripts/device_qualification.py --max-pss-growth-kb <agreed-limit> [--serial <device>]`
 with the wallpaper applied and the keyguard already unlocked. Agree the PSS limit before the run.
 The harness requires readable display, screen, keyguard, and night-mode state before mutation.
-It checks the baseline hand, screen-off/wake navigation (verifying that the wallpaper engine reports
-`mVisible=false` and halts rendering while the display is off), preview navigation, a temporary surface
+It checks the baseline hand, screen-off/wake navigation (sampling the wallpaper engine's reported
+visibility while the display is off and detecting the hand after wake), preview navigation, a temporary surface
 resize, non-stopping SIGKILL/rebind, +30m/+12h hand advances, and a short total-PSS sample.
 Each dependent phase requires its own confirmed clock prerequisite. Final cleanup restores and
 verifies the original override, screen state, night mode, and unlocked keyguard; the virtual clock

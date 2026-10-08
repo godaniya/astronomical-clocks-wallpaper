@@ -189,7 +189,9 @@ def phase_screen_off_wake(device: device_layer.AdbDevice, results: list[tuple[st
         return
     time.sleep(4.0)
     screen_went_off = device.read_screen_on() is False
-    wallpaper_hidden = device.read_wallpaper_visible() is False
+    wallpaper_visible = device.read_wallpaper_visible()
+    if screen_went_off and wallpaper_visible is True:
+        failures.append("Wallpaper reported visible (mVisible=true) while the screen was confirmed off")
 
     # Wake device back up
     if not device.wake_screen():
@@ -206,10 +208,13 @@ def phase_screen_off_wake(device: device_layer.AdbDevice, results: list[tuple[st
     if screen_went_off and screen_is_on and angle_wake is not None:
         print(f"Screen-off state observed; hand visible within 1s of wake at {angle_wake:.3f}°.")
         observation = "device reported screen off for 4s"
-        if wallpaper_hidden:
-            observation += "; wallpaper reported hidden (mVisible=false, rendering halted)"
+        if wallpaper_visible is False:
+            observation += "; wallpaper reported hidden (mVisible=false)"
+        elif wallpaper_visible is True:
+            observation += "; wallpaper reported visible (mVisible=true)"
         else:
-            observation += "; rendering while asleep was not measured"
+            observation += "; wallpaper visibility was unreadable"
+        observation += "; rendering while asleep was not measured"
         observation += f"; hand visible within 1s of wake at {angle_wake:.3f}°"
         results.append(("screen-off / wake navigation", observation))
     else:
