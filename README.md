@@ -10,10 +10,12 @@ Prague Orloj dial first, built with Kotlin, Canvas, and `WallpaperService`.
 
 ## Overview and visual identity
 
-Astronomical Clock Wallpaper connects the passage of civil time to observable
-celestial motion directly on your Android device. Rooted in the rich tradition of
-monumental public horology, the wallpaper renders a mechanical, mathematically
-rigorous astronomical dial as an active background.
+Astronomical Clock Wallpaper brings the Prague Orloj experience beyond Staroměstské
+náměstí (Old Town Square): helping people who were amazed by the monumental medieval
+astronomical clock enjoy and understand its intricate celestial mechanics on their personal
+Android devices every day. Rooted in the rich tradition of monumental public horology, the
+wallpaper renders a mechanical, mathematically rigorous astronomical dial as an active
+background, connecting the passage of civil time to observable celestial motion.
 
 Prague Orloj provides the visual and projection reference for the initial dial,
 adapting its astrolabe stereographic projection to your chosen observing site.
