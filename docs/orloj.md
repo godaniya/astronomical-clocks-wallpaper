@@ -200,10 +200,10 @@ considered. In accordance with historical Orloj fidelity and visual minimalism, 
 added by default**. The radiant golden Sun marker riding the ecliptic ring already provides an unambiguous
 bearing against the outer Roman numeral scale, and an extra arm would clutter the dial face.
 
-Each engine listens for location and layer changes, maintains one immutable settings snapshot,
-and draws each frame from one instant. Updates take effect on the next visible tick. Hidden
-engines do not start rendering, and destroyed engines unregister both preference listeners.
-Rendering stays at one frame per second while visible.
+Each engine listens for location, layer, appearance and display-composition changes, maintains one
+immutable settings snapshot, and draws each frame from one instant. Updates take effect on the next
+visible tick. Hidden engines do not start rendering, and destroyed engines unregister all four
+preference listeners. Rendering stays at one frame per second while visible.
 
 ## Palette contrast
 
@@ -346,8 +346,11 @@ The outer rim is at 1.37 sky-radius units and its stroke is 0.008 units wide.
 The safe extent is therefore `radius × (1 + 0.004 / 1.37)`. Each position slider
 interpolates from the near edge plus this extent to the far edge minus it.
 Defaults are exactly centered and retain previous zero-inset/full-brightness output.
-The reported usable rectangle is the visible surface crop minus system insets.
-Invalid/nonfinite rectangles and radii below 16 pixels are logged and skipped.
+The usable rectangle is `min(surface, display metrics)` shifted by the engine's
+offsets and trimmed by the system insets, then clamped to the surface; the platform
+reports no wallpaper crop, so those clamps are the whole of it. Non-finite bounds, a
+dial radius below 16 pixels and a stroked extent wider than the shortest side are
+logged and skipped.
 
 After restoring the dial transform, one source-over black overlay covers the whole
 Canvas at alpha `floor((100 − brightness) × 255 / 100)`. The full-brightness path
