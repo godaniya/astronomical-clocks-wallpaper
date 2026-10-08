@@ -58,6 +58,41 @@ Agents must observe the project's quality, stability, and release boundaries:
 - Keep changes small and readable. Add meaningful tests for behavior changes;
   documentation-only work needs appropriate content and link checks.
 
+## Product feature gate
+
+Before opening an issue, writing code, or opening a PR for a new feature or
+architecture proposal, answer these six questions concretely:
+
+1. Who is the target user?
+2. What real problem or friction does this solve?
+3. Can a user understand its presence in under 10 seconds?
+4. Does it improve visual aesthetics, celestial comprehension, or battery retention?
+5. Who complains if it is omitted?
+6. Is this grounded in real user/device feedback rather than hypothetical future support?
+
+Record all six answers in the proposal issue before implementation. A PR may link
+those answers, but must update any answer affected by its scope. Identify specific
+users and problems, and reference available user or device feedback. Explicitly
+label anticipated benefits, assumptions, and missing evidence; do not present them
+as measured outcomes or invent complaints.
+
+When supporting evidence is missing, defer implementation. An evidence-gathering
+issue may proceed only if it records all six answers, identifies the unknowns,
+and defines a bounded validation step and completion criterion. Implementation
+waits for supporting user or device feedback; completing the validation step alone
+does not establish support for the proposal.
+
+For internal architecture proposals, explain the user outcome they enable. If
+direct visibility is inapplicable, explain why rather than inventing a user-facing
+presence. Apply this gate to new proposals and newly expanded feature or
+architecture scope; do not retroactively rewrite existing issues. Routine fixes,
+maintenance, documentation, and tests that introduce neither new feature nor
+architecture scope remain governed by existing standards.
+
+Follow [the contributor product feature gate](CONTRIBUTING.md#product-feature-gate)
+and [test scope and proportionality](CONTRIBUTING.md#test-scope-and-proportionality).
+This gate requires no new per-test forms or reports.
+
 ## Architecture and product constraints
 
 The product contract is defined authoritatively in [docs/design.md](docs/design.md),
