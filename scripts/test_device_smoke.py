@@ -619,6 +619,26 @@ class DisplayDiagnosticTest(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(device_layer.ScreencapError):
                 device_layer.parse_dial_layout(invalid, "probe", FRAME_WIDTH, FRAME_HEIGHT)
 
+    def test_reports_reject_a_clipped_outer_stroke(self) -> None:
+        extent = 464.4 * device_layer.STROKED_EXTENT
+        report = (
+            f"{device_layer.DISPLAY_LOG_TAG}: DialLayout token=probe engine=1 preview=false "
+            f"cx={extent} cy={FRAME_HEIGHT / 2} radius=464.4 brightness=100 dark=true "
+            f"width={FRAME_WIDTH} height={FRAME_HEIGHT}"
+        )
+        device_layer.parse_dial_layout(report, "probe", FRAME_WIDTH, FRAME_HEIGHT)
+        # The device's own Size 115% / Horizontal 0% endpoint report, where the rim is flush: this is
+        # what the tolerance exists to keep passing, because the extent recomputed from the printed
+        # radius exceeds the printed centre by a fraction of a pixel.
+        endpoint = report.replace(f"cx={extent}", "cx=535.61926").replace("radius=464.4", "radius=534.06")
+        device_layer.parse_dial_layout(endpoint, "probe", FRAME_WIDTH, FRAME_HEIGHT)
+        for clipped in (
+            report.replace(f"cx={extent}", "cx=464.4"),
+            report.replace(f"cy={FRAME_HEIGHT / 2}", f"cy={FRAME_HEIGHT - 464.4}"),
+        ):
+            with self.subTest(clipped=clipped), self.assertRaises(device_layer.ScreencapError):
+                device_layer.parse_dial_layout(clipped, "probe", FRAME_WIDTH, FRAME_HEIGHT)
+
     def test_capture_rejects_layout_changes(self) -> None:
         raw = struct.pack("<IIII", 2, 2, 1, 0) + bytes(16)
         layouts = [device_layer.DialLayout(1, 1, 0.5), device_layer.DialLayout(1, 1, 0.6)]

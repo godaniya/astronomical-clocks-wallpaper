@@ -59,6 +59,19 @@ LIGHT_RIM_RGB: Final = (0xE8, 0xE2, 0xD2)
 RIM_PROBE_RADIUS_FRACTION: Final = 0.40
 RIM_PROBE_BEARINGS_DEG: Final = tuple(range(15, 360, 30))
 
+# DialViewport.STROKED_EXTENT in the Kotlin source: the outer rim is stroked half a RIM_WIDTH beyond
+# the reported dial radius, so the drawn disc reaches radius * STROKED_EXTENT, not radius. A report
+# can satisfy cx - radius >= 0 while that half stroke is clipped - about 1.6 px at Size 115% on a
+# 1080 px display.
+RIM_WIDTH: Final = 0.008
+OUTER_RADIUS: Final = 1.37
+STROKED_EXTENT: Final = 1 + RIM_WIDTH / 2 / OUTER_RADIUS
+
+# The diagnostic prints Float values, so an extent recomputed from the printed radius and the printed
+# centre differ by a few hundred-thousandths of a pixel. This absorbs that without hiding the
+# stroke-sized clipping the extent check exists to catch.
+EXTENT_TOLERANCE_PX: Final = 0.01
+
 HAND_SCAN_OUTER_FRACTION: Final = 0.43
 HAND_SCAN_INNER_FRACTION: Final = 0.08
 HAND_SCAN_STEP_PX: Final = 2
@@ -210,15 +223,16 @@ def parse_dial_layout(output: str, token: str, width: int, height: int) -> DialL
     except (KeyError, ValueError) as error:
         message = "Unreadable or unusable dial layout"
         raise ScreencapError(message) from error
+    extent = layout.radius * STROKED_EXTENT
     if (
         reported_size != (width, height)
         or not all(math.isfinite(value) for value in (layout.cx, layout.cy, layout.radius))
         or layout.radius <= 0
         or not MIN_BRIGHTNESS <= layout.brightness <= MAX_BRIGHTNESS
-        or layout.cx - layout.radius < 0
-        or layout.cy - layout.radius < 0
-        or layout.cx + layout.radius > width
-        or layout.cy + layout.radius > height
+        or layout.cx - extent < -EXTENT_TOLERANCE_PX
+        or layout.cy - extent < -EXTENT_TOLERANCE_PX
+        or layout.cx + extent > width + EXTENT_TOLERANCE_PX
+        or layout.cy + extent > height + EXTENT_TOLERANCE_PX
     ):
         message = "Dial layout does not fit the captured screen"
         raise ScreencapError(message)
