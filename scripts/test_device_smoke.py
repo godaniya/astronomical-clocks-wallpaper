@@ -598,10 +598,6 @@ class SmokeRendererLogTest(unittest.TestCase):
         return output.getvalue(), errors.getvalue()
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class DisplayDiagnosticTest(unittest.TestCase):
     """Device captures require explicit layout and retain analysis at control extremes."""
 
@@ -649,3 +645,7 @@ class DisplayDiagnosticTest(unittest.TestCase):
         if angle is None:
             self.fail("No hand found with resolved display diagnostics")
         self.assertAlmostEqual(angle, 90.0, delta=device_layer.ANGLE_TOLERANCE_DEG)
+
+
+if __name__ == "__main__":
+    unittest.main()
