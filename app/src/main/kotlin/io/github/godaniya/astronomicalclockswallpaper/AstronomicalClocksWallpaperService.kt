@@ -492,10 +492,12 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
                     "DialLayout token=$diagnosticToken engine=${System.identityHashCode(
                         this,
                     )} preview=$isPreviewEngine " +
-                        // The engine draws in surface coordinates and the framework shows a surface no
-                        // larger than the display unscrolled, so the drawn centre is the screen centre.
-                        // Re-adding the offset here reported a point the renderer never drew to.
-                        "cx=${placement.centerX} cy=${placement.centerY} " +
+                        // The engine draws in surface coordinates; the framework scrolls the surface so
+                        // the clamped window origin resolved for this frame lands at screen 0. The
+                        // harnesses probe captured screen pixels, so subtract that origin - the scroll,
+                        // not the raw reported offset, and not the inset-adjusted usable rectangle.
+                        "cx=${placement.centerX - viewport.windowOriginX} " +
+                        "cy=${placement.centerY - viewport.windowOriginY} " +
                         "radius=${placement.radius} brightness=${display.brightness} " +
                         "dark=${palette == DialStyle.DARK_PALETTE} " +
                         "width=${engineResources.displayMetrics.widthPixels} height=${engineResources.displayMetrics.heightPixels}"

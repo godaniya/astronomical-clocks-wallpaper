@@ -71,24 +71,29 @@ class DialDisplayRenderTest {
             DialViewport.full(width = 1080, height = 2408),
             unscrollable.resolve(surfaceWidth = 1080, surfaceHeight = 2408, displayWidth = 1080, displayHeight = 2408),
         )
+        assertEquals(0f, unscrollable.windowOriginX, PLACEMENT_TOLERANCE)
         val wide = WallpaperViewport()
         wide.offsets(xPixels = -500, yPixels = 0)
         assertEquals(
             DialViewport(left = 500f, top = 0f, right = 1580f, bottom = 1000f),
             wide.resolve(surfaceWidth = 2000, surfaceHeight = 1000, displayWidth = 1080, displayHeight = 1000),
         )
+        assertEquals(500f, wide.windowOriginX, PLACEMENT_TOLERANCE)
         val pastTheEnd = WallpaperViewport()
         pastTheEnd.offsets(xPixels = -900, yPixels = 0)
         assertEquals(
             DialViewport(left = 420f, top = 0f, right = 1500f, bottom = 1000f),
             pastTheEnd.resolve(surfaceWidth = 1500, surfaceHeight = 1000, displayWidth = 1080, displayHeight = 1000),
         )
+        // The origin is the scroll the framework can actually perform, so it stops at the slack.
+        assertEquals(420f, pastTheEnd.windowOriginX, PLACEMENT_TOLERANCE)
         val backwards = WallpaperViewport()
         backwards.offsets(xPixels = 250, yPixels = 0)
         assertEquals(
             DialViewport.full(width = 1080, height = 1000),
             backwards.resolve(surfaceWidth = 2000, surfaceHeight = 1000, displayWidth = 1080, displayHeight = 1000),
         )
+        assertEquals(0f, backwards.windowOriginX, PLACEMENT_TOLERANCE)
     }
 
     @Test
@@ -137,6 +142,9 @@ class DialDisplayRenderTest {
         )
         cropped.recycle()
         crop.insets(insets(Rect(23, 41, 11, 17)))
+        // Insets shrink the usable rectangle without moving the scroll, so the origin is unchanged.
+        assertEquals(160f, crop.windowOriginX, PLACEMENT_TOLERANCE)
+        assertEquals(80f, crop.windowOriginY, PLACEMENT_TOLERANCE)
         assertEquals(
             DialViewport(left = 183f, top = 121f, right = 789f, bottom = 823f),
             crop.resolve(surfaceWidth = 1000, surfaceHeight = 1000, displayWidth = 640, displayHeight = 760),

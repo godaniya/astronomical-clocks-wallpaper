@@ -14,6 +14,15 @@ internal class WallpaperViewport {
     var offsetY: Int = 0
         private set
 
+    // The visible window's origin inside the surface, in surface coordinates, as of the last resolve.
+    // The framework scrolls the surface so this point lands at screen 0, so subtracting it from a drawn
+    // surface point gives the screen point a capture shows. Pre-inset: reported insets move the usable
+    // rectangle, not the scroll.
+    var windowOriginX: Float = 0f
+        private set
+    var windowOriginY: Float = 0f
+        private set
+
     fun offsets(xPixels: Int, yPixels: Int) {
         offsetX = xPixels
         offsetY = yPixels
@@ -51,6 +60,8 @@ internal class WallpaperViewport {
         val height = minOf(a = surfaceHeight, b = displayHeight)
         val left = windowStart(offset = offsetX, slack = surfaceWidth - width)
         val top = windowStart(offset = offsetY, slack = surfaceHeight - height)
+        windowOriginX = left
+        windowOriginY = top
         return DialViewport(
             left = maxOf(a = 0f, b = left + leftInset),
             top = maxOf(a = 0f, b = top + topInset),
