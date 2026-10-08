@@ -9,6 +9,12 @@ Read [README.md](README.md) for public project context and
 
 ## Working defaults
 
+- **Never work on the primary clone**: The primary clone at
+  `astronomical-clocks-wallpaper` must remain clean on `main`. Agents must never edit,
+  create, or stage code or documentation changes directly on the primary clone. Always
+  create or switch to an issue-linked branch in a native-filesystem sibling worktree
+  named `astronomical-clocks-wallpaper-<issue-number>-<short-description>` (following
+  [CONTRIBUTING.md](CONTRIBUTING.md#workflow-and-pull-requests)) before making any changes.
 - Preserve unrelated working-tree changes and existing signed commits. Follow
   current user instructions and repository configuration and CI requirements.
   Do not rewrite existing commits or live PRs solely to apply metadata policy.

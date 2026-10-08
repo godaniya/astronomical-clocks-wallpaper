@@ -16,14 +16,32 @@ android {
         applicationId = "io.github.godaniya.astronomicalclockswallpaper"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
+    }
+
+    signingConfigs {
+        create("release") {
+            val keystorePath = System.getenv("RELEASE_KEYSTORE_PATH")
+            if (!keystorePath.isNullOrBlank() && file(keystorePath).exists()) {
+                val storePass = System.getenv("RELEASE_KEYSTORE_PASSWORD")
+                storeFile = file(keystorePath)
+                storePassword = storePass
+                keyAlias = System.getenv("RELEASE_KEY_ALIAS")
+                keyPassword = System.getenv("RELEASE_KEY_PASSWORD").takeUnless { it.isNullOrBlank() } ?: storePass
+            }
+        }
     }
 
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+        }
+        release {
+            isMinifyEnabled = false
+            isShrinkResources = false
+            signingConfig = signingConfigs.getByName("release").takeIf { it.storeFile?.exists() == true }
         }
     }
 

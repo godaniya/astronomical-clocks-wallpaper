@@ -18,6 +18,7 @@ graph TD
     DocsHub --> Testing
 
     Design --> D1["design.md<br/>Observing-site contract"]
+    Design --> D2["installation.md<br/>Installation & updates"]
 
     Astronomy --> A1["astronomy/README.md<br/>Astronomy reference hub"]
     Astronomy --> A2["orloj.md<br/>Dial geometry & projection"]
@@ -37,6 +38,8 @@ Documents defining the product contract, requirements, and domain invariants:
 
 - [**Product Design & Observing-Site Contract**](design.md) (`design.md`):
   Authoritative product scope, offline autonomy principles, and the single-instant / observing-site contract (one geographic site anchoring both civil time and sky projections).
+- [**Installation and Upgrades Guide**](installation.md) (`installation.md`):
+  Supported installation pathways, Obtainium one-click deep link, automated background updates, direct APK sideloading, SHA-256 verification, and cryptographic signature continuity.
 
 ---
 
