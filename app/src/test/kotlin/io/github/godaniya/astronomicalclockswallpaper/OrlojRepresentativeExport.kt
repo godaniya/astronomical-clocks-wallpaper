@@ -145,7 +145,7 @@ class OrlojRepresentativeExport {
         val EXPORT_INSTANT: Instant = Instant.parse("2026-10-04T15:15:36Z")
 
         // Named rather than positional: the exported file stems assert which sites these are, so a
-        // renamed or reordered entry must fail here instead of silently exporting another site.
+        // renamed entry fails here, and a reordered one can no longer silently export another site.
         val EQUINOX_SITE_NAMES = listOf("prague", "sydney")
 
         val APPEARANCES =

@@ -13,7 +13,7 @@ internal object EquinoxStarDetail {
     /** Side of the rendered field of view in sky radii; the star's 0.04-wide span fills half of it. */
     const val FIELD_OF_VIEW_SKY_RADII = 0.08
 
-    /** Sky radii per bitmap pixel for a square bitmap [sizePx] pixels on a side. */
+    /** Pixels per sky radius for a square bitmap [sizePx] pixels on a side. */
     fun scaleFor(sizePx: Int): Float = (sizePx / FIELD_OF_VIEW_SKY_RADII).toFloat()
 
     /** Renders the zodiac ring, dividers, and equinox star centred on the equinox point. */
