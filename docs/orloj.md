@@ -5,7 +5,9 @@ the Prague Orloj. This is the foundation for #5. It includes the civil clock, zo
 equator, tropics, horizon, and astronomical-night boundary. Sun rendering is implemented in #27;
 Moon position and illuminated phase are implemented in #28. Display size, position and whole-wallpaper brightness controls extend this foundation under #5.
 Other astronomy layers, calendar artwork, apostles, historical hour systems and mechanical
-approximations remain deferred. Physical-device acceptance of #5 remains pending.
+approximations remain deferred. Physical-device acceptance of #5 is recorded in
+[`testing/reports/2026-10-08-feat-5-display-controls.md`](testing/reports/2026-10-08-feat-5-display-controls.md);
+the coverage that pass could not exercise on the available hardware is tracked in #122.
 
 ## Astronomical frame
 

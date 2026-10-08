@@ -84,6 +84,9 @@ engine's [display context](https://developer.android.com/reference/android/servi
 so preview/active displays can have different resources. Cropping/insets unreported
 by a launcher cannot be inferred; physical acceptance remains required.
 
-#5 and v0.2 remain open until the later combined physical-device pass succeeds
-and the owner merges the relevant PRs. Full battery qualification and the signed
-personal release remain v0.3 work; this change creates no release or tag.
+#5 and v0.2 remain open until the owner merges the relevant PRs; the combined
+physical-device pass is recorded in
+[`testing/reports/2026-10-08-feat-5-display-controls.md`](testing/reports/2026-10-08-feat-5-display-controls.md),
+with the coverage it could not exercise tracked in #122. Full battery qualification
+and the signed personal release remain v0.3 work; this change creates no release or
+tag.

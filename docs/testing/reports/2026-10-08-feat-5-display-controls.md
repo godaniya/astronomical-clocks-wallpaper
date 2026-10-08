@@ -4,7 +4,8 @@ Test build: local debug `app-debug.apk` built from this branch's tree with
 `./gradlew clean :app:assembleDebug`, APK SHA-256
 `1176e96612b3ab608107652bd49ca1bc814de8dec8ff29219d9922889c61c300`. The `app/src/main` and
 `app/src/test` trees it compiles are byte-identical to `16a2353`, so that revision identifies the
-application and test sources under test; the branch head carrying this report adds this file only.
+application and test sources under test. The commits after it on this branch touch `scripts/`, the
+guides and this report, and leave those trees unchanged, so the artifact still describes them.
 The artifact was installed in place with `adb install -r` and the existing home-screen wallpaper
 binding survived, rendering under a new PID.
 
