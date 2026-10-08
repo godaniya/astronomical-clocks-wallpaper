@@ -144,21 +144,54 @@ class DeviceQualificationTest(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             device_layer.get_wallpaper_pid("device")
 
-    @patch.object(device_layer, "run_adb", return_value=b"  mVisible=true mReportedVisible=true\n")
-    def test_wallpaper_visible_is_parsed_as_true(self, _run_adb: MagicMock) -> None:
-        self.assertTrue(device_layer.read_wallpaper_visible("device"))
+    @patch.object(device_layer, "run_adb")
+    def test_wallpaper_visibility_aggregates_complete_fields(self, run_adb: MagicMock) -> None:
+        cases = (
+            (b"mVisible=false\nmVisible=true", True),
+            (b"mVisible=true\nmVisible=false", True),
+            (b"mVisible=false\nmVisible=false", False),
+            (b"mVisible=true\nmVisible=true", True),
+            (b"mVisible=false mVisible=true mReportedVisible=false", True),
+            (b"mVisible=false mVisible=false", False),
+            (b"mVisible=trueish", None),
+            (b"mVisible=false-ish", None),
+            (b"mVisible=false=broken", None),
+            (b"mVisible=true\xef\xbf\xbd", None),
+            (b"mVisible=", None),
+            (b"mVisible=\nmVisible=false", None),
+            (b"mVisible=false mVisible=unknown", None),
+            (b"mVisible=false mVisible=", None),
+            (b"mVisible=true mVisible=unknown", True),
+            (b"mVisible=unknown mVisible=true", True),
+            (b"mReportedVisible=true other_mVisible=false", None),
+            (b"mVisible=false mReportedVisible=true", False),
+            (b"mVisible=false; mVisible=false}", False),
+            (b"mVisible= mVisible=true", True),
+            (b"mVisible= mVisible=false", None),
+            (b"no matching pattern", None),
+            (b"", None),
+        )
+        for output, expected in cases:
+            with self.subTest(output=output):
+                run_adb.return_value = output
+                self.assertIs(device_layer.read_wallpaper_visible("device"), expected)
+        run_adb.assert_called_with(
+            ["shell", "dumpsys", "activity", "service", device_layer.SERVICE_NAME], serial="device"
+        )
 
-    @patch.object(device_layer, "run_adb", return_value=b"  mVisible=false mReportedVisible=false\n")
-    def test_wallpaper_visible_is_parsed_as_false(self, _run_adb: MagicMock) -> None:
-        self.assertFalse(device_layer.read_wallpaper_visible("device"))
-
-    @patch.object(device_layer, "run_adb", return_value=b"no matching pattern\n")
-    def test_unknown_wallpaper_visible_stays_none(self, _run_adb: MagicMock) -> None:
-        self.assertIsNone(device_layer.read_wallpaper_visible("device"))
-
-    @patch.object(device_layer, "run_adb", side_effect=subprocess.SubprocessError("transport down"))
-    def test_failed_wallpaper_visible_probe_stays_none(self, _run_adb: MagicMock) -> None:
-        self.assertIsNone(device_layer.read_wallpaper_visible("device"))
+    @patch.object(device_layer, "run_adb")
+    def test_failed_wallpaper_visible_probe_stays_none(self, run_adb: MagicMock) -> None:
+        errors = (
+            subprocess.CalledProcessError(1, ["adb"], stderr=b"device offline"),
+            subprocess.TimeoutExpired(["adb"], 10, stderr=b"transport timeout"),
+            OSError("adb transport closed"),
+        )
+        for error in errors:
+            with self.subTest(error=error), contextlib.redirect_stderr(io.StringIO()) as error_output:
+                run_adb.side_effect = error
+                self.assertIsNone(device_layer.read_wallpaper_visible("device"))
+            self.assertIn("wallpaper visibility probe failed", error_output.getvalue())
+            self.assertIn(device_layer.error_detail(error), error_output.getvalue())
 
     @patch.object(
         device_layer,
@@ -1043,7 +1076,7 @@ class PhasePrerequisiteTest(unittest.TestCase):
                 patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))),
                 patch.object(device_layer, "detect_hand_angle", return_value=123.456),
                 patch.object(qualification.time, "sleep"),
-                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stdout(io.StringIO()) as output,
             ):
                 qualification.phase_screen_off_wake(device_layer.AdbDevice("device"), results, failures)
             if visible is True:
@@ -1059,8 +1092,11 @@ class PhasePrerequisiteTest(unittest.TestCase):
             self.assertEqual(results[0][0], "screen-off / wake navigation")
             self.assertIn(diagnostic, results[0][1])
             self.assertIn("rendering while asleep was not measured", results[0][1])
-            self.assertIn("hand visible within 1s of wake at 123.456°", results[0][1])
-            self.assertNotIn("halted", results[0][1])
+            self.assertIn("hand detected after wake at 123.456°", results[0][1])
+            self.assertIn("screen off after the 4s sleep interval", results[0][1])
+            for unsupported in ("halted", "within 1s", "off for 4s"):
+                self.assertNotIn(unsupported, results[0][1])
+                self.assertNotIn(unsupported, output.getvalue())
 
     def test_visible_while_off_failure_survives_wake_recovery_and_cleanup(self) -> None:
         """The violation fails the run even after recovery or a later wake failure."""
@@ -1090,7 +1126,9 @@ class PhasePrerequisiteTest(unittest.TestCase):
                     stack.enter_context(patch.object(qualification, phase))
                 stack.enter_context(patch.object(device_layer, "sleep_screen", return_value=True))
                 stack.enter_context(patch.object(device_layer, "read_screen_on", side_effect=[False, True]))
-                stack.enter_context(patch.object(device_layer, "read_wallpaper_visible", return_value=True))
+                stack.enter_context(
+                    patch.object(device_layer, "run_adb", return_value=b"mVisible=false\nmVisible=true")
+                )
                 wake = stack.enter_context(
                     patch.object(device_layer, "wake_screen", return_value=wake_ok, side_effect=wake_error)
                 )

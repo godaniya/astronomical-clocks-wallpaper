@@ -5,7 +5,7 @@
 Physical-device qualification run for [#6](https://github.com/godaniya/astronomical-clocks-wallpaper/issues/6) observing reported screen-off visibility and wake behavior. The first acceptance criterion of #6 remains unverified:
 > *"Instrument or otherwise demonstrate zero rendering while hidden and while the screen is off; hidden engine instances do not keep recurring calculation/render work alive."*
 
-Prior qualification reports noted *"rendering while asleep was not measured"* during Phase 1. This run instruments Phase 1 in `scripts/device_qualification.py` via `read_wallpaper_visible()` to query `dumpsys activity service`, observing that Android's WallpaperManager reports the engine hidden (`mVisible=false`) during sleep, followed by confirmed screen wake and hand detection within 1 second. This visibility sample does not measure frames or recurring render/tick work.
+Prior qualification reports noted *"rendering while asleep was not measured"* during Phase 1. This run instruments Phase 1 in `scripts/device_qualification.py` via `read_wallpaper_visible()` to query `dumpsys activity service`, observing that Android's WallpaperManager reports the engine hidden (`mVisible=false`) during sleep, followed by confirmed screen wake and hand detection after wake. This visibility sample does not measure frames or recurring render/tick work.
 
 Tested source and harness revision: `21976c3e42e9d1f082ab5b435992e6d4e3f53763`, as identified by the original PR #111 metadata (branch `test/6-background-pause-qualification`, based on `91f2348b64e56570c9c7f698a9c2bc52c3dbfecb`).
 
@@ -22,6 +22,11 @@ No producer trace, frame counter, or tick trace was collected, so zero rendering
 hidden or screen-off remains unverified. The original recorded output below is preserved
 verbatim, including its unsupported "rendering halted" wording; that wording is not evidence
 of halted rendering. Dates, measurements, exit status, and APK hash remain unchanged.
+The recorded base SHA above is incorrect: the tested commit's actual parent is
+`91f2348f07c997ec2eff02aeb763fc2be7b85fb0`, verified from its Git commit object.
+The original output also claims a continuous 4s screen-off duration and hand detection
+within 1s of wake. The harness sampled screen state after its sleep interval and detected
+the hand after wake; it measured neither continuous screen-off duration nor wake latency.
 This correction adds no new hardware verification.
 
 ## 1. Automated Smoke Verification (`device_smoke.py`)

@@ -47,7 +47,7 @@ OVERRIDE_SIZE_PATTERN: Final = re.compile(r"^Override size:\s*(\d+x\d+)$")
 WAKE_READ_PATTERN: Final = re.compile(r"mWakefulness=(\w+)")
 DISPLAY_STATE_PATTERN: Final = re.compile(r"Display State=(ON|OFF)")
 KEYGUARD_SHOWING_PATTERN: Final = re.compile(r"\bisKeyguardShowing[ \t]*=[ \t]*([^\s,;}]*)")
-WALLPAPER_VISIBLE_PATTERN: Final = re.compile(r"\bmVisible=(true|false)\b")
+WALLPAPER_VISIBLE_PATTERN: Final = re.compile(r"\bmVisible=([^\s,;}]*)")
 
 # DialStyle.kt pins the two civil-scale tones: RIM is 0x1C2C39 (dark) and LIGHT_RIM is 0xE8E2D2 (light).
 DARK_RIM_RGB: Final = (0x1C, 0x2C, 0x39)
@@ -369,18 +369,20 @@ def get_wallpaper_pid(serial: str) -> int | None:
 
 
 def read_wallpaper_visible(serial: str) -> bool | None:
-    """Read whether the wallpaper engine is reported visible in `dumpsys activity service`."""
+    """Return any visible engine, all explicitly hidden engines, or an uncertain dump as True/False/None."""
     try:
         output = run_adb(
             ["shell", "dumpsys", "activity", "service", SERVICE_NAME],
             serial=serial,
         ).decode("utf-8", errors="replace")
-    except (subprocess.SubprocessError, OSError):
+    except (subprocess.SubprocessError, OSError) as error:
+        print(f"WARNING: wallpaper visibility probe failed: {error_detail(error)}", file=sys.stderr)
         return None
-    for line in output.splitlines():
-        match = WALLPAPER_VISIBLE_PATTERN.search(line)
-        if match:
-            return captured_text(match, 1) == "true"
+    values = [captured_text(match, 1) for match in WALLPAPER_VISIBLE_PATTERN.finditer(output)]
+    if "true" in values:
+        return True
+    if values and all(value == "false" for value in values):
+        return False
     return None
 
 
