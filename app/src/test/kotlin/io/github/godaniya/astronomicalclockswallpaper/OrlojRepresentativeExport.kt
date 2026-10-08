@@ -49,7 +49,8 @@ class OrlojRepresentativeExport {
             exportNoLocation(appearanceName, palette)
         }
         exportPraguePlus30m(calculator)
-        exportEquinoxOrientations(calculator, sites.take(2))
+        val sitesByName = sites.toMap()
+        exportEquinoxOrientations(calculator, EQUINOX_SITE_NAMES.map { name -> name to sitesByName.getValue(name) })
     }
 
     private fun exportSite(
@@ -121,17 +122,7 @@ class OrlojRepresentativeExport {
                 )
                 val stem = "$name-equinox-$angle-api${Build.VERSION.SDK_INT}"
                 savePng(bitmap, "$stem.png")
-
-                val projection = OrlojProjection(geometry)
-                val point = projection.eclipticPoint(0.0)
-                val detail = Bitmap.createBitmap(STAR_DETAIL_SIZE, STAR_DETAIL_SIZE, Bitmap.Config.ARGB_8888)
-                val canvas = Canvas(detail)
-                canvas.drawColor(DialStyle.BACKGROUND)
-                canvas.translate(STAR_DETAIL_SIZE / 2f, STAR_DETAIL_SIZE / 2f)
-                canvas.scale(STAR_DETAIL_SCALE, STAR_DETAIL_SCALE)
-                canvas.translate(-point.x.toFloat(), -point.y.toFloat())
-                ZodiacRenderer().draw(canvas, projection)
-                savePng(detail, "$stem-detail.png")
+                savePng(EquinoxStarDetail.render(geometry, STAR_DETAIL_SIZE), "$stem-detail.png")
             }
         }
     }
@@ -149,10 +140,13 @@ class OrlojRepresentativeExport {
         const val IMAGE_WIDTH = 1080
         const val IMAGE_HEIGHT = 1600
         const val STAR_DETAIL_SIZE = 320
-        const val STAR_DETAIL_SCALE = 4000f
         const val THIRTY_MINUTES = 30L
         val REPORT_DIRECTORY = File("build/reports/orloj")
         val EXPORT_INSTANT: Instant = Instant.parse("2026-10-04T15:15:36Z")
+
+        // Named rather than positional: the exported file stems assert which sites these are, so a
+        // renamed or reordered entry must fail here instead of silently exporting another site.
+        val EQUINOX_SITE_NAMES = listOf("prague", "sydney")
 
         val APPEARANCES =
             listOf(

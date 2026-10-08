@@ -188,7 +188,10 @@ class DialRendererTest {
             assertEquals(expectedEquinox.y, projection.eclipticPoint(0.0).y, 1e-9)
             // A 4 px box stays within the band, clear of the rim. The divider alone adds
             // 9 gold pixels; the star must add further area beyond the 13-pixel threshold.
-            assertTrue(zodiacGoldAdded(site, expectedEquinox) > STAR_GOLD_PIXELS)
+            assertTrue(
+                "latitude=${site.latitudeDeg}: star must add GOLD area at the sidereal-0 equinox",
+                zodiacGoldAdded(site, expectedEquinox) > STAR_GOLD_PIXELS,
+            )
             val bitmap = render(time = LocalTime.MIDNIGHT, geometry = site)
             val rotatedSite = site.copy(localSiderealAngleDeg = 90.0)
             val rotatedProjection = OrlojProjection(rotatedSite)
@@ -201,7 +204,10 @@ class DialRendererTest {
                 goldAreaNear(bitmap, expectedEquinox, radius = STAR_PROBE_RADIUS) -
                     goldAreaNear(rotated, expectedEquinox, radius = STAR_PROBE_RADIUS) > STAR_GOLD_PIXELS,
             )
-            assertTrue(zodiacGoldAdded(rotatedSite, expectedRotatedEquinox) > STAR_GOLD_PIXELS)
+            assertTrue(
+                "latitude=${site.latitudeDeg}: star must arrive at the sidereal-90 equinox",
+                zodiacGoldAdded(rotatedSite, expectedRotatedEquinox) > STAR_GOLD_PIXELS,
+            )
         }
     }
 
@@ -210,14 +216,7 @@ class DialRendererTest {
         for (latitude in listOf(50.08, -33.87)) {
             for (siderealAngle in listOf(0.0, 90.0, 180.0, 270.0)) {
                 val geometry = prague.copy(latitudeDeg = latitude, localSiderealAngleDeg = siderealAngle)
-                val projection = OrlojProjection(geometry)
-                val point = projection.eclipticPoint(0.0)
-                val bitmap = Bitmap.createBitmap(STAR_DETAIL_SIZE, STAR_DETAIL_SIZE, Bitmap.Config.ARGB_8888)
-                val canvas = Canvas(bitmap)
-                canvas.translate(STAR_DETAIL_SIZE / 2f, STAR_DETAIL_SIZE / 2f)
-                canvas.scale(STAR_DETAIL_SCALE, STAR_DETAIL_SCALE)
-                canvas.translate(-point.x.toFloat(), -point.y.toFloat())
-                ZodiacRenderer().draw(canvas, projection)
+                val bitmap = EquinoxStarDetail.render(geometry, STAR_DETAIL_SIZE)
 
                 // Differentiate the documented stereographic equations at longitude 0, where
                 // (X, Y, Z) = (1, 0, 0) and d(X, Y, Z)/dλ = (0, cos ε, sin ε).
@@ -239,9 +238,12 @@ class DialRendererTest {
     }
 
     private fun assertStarTip(bitmap: Bitmap, tangent: DialPoint, context: String) {
+        // The probe offsets are sky-radius fractions, so they scale by the detail render's own
+        // pixels per sky radius rather than by a figure repeated here.
+        val scale = EquinoxStarDetail.scaleFor(STAR_DETAIL_SIZE)
         for (direction in listOf(1, -1)) {
-            val x = (STAR_DETAIL_SIZE / 2 + direction * tangent.x * STAR_TIP_OFFSET * STAR_DETAIL_SCALE).roundToInt()
-            val y = (STAR_DETAIL_SIZE / 2 + direction * tangent.y * STAR_TIP_OFFSET * STAR_DETAIL_SCALE).roundToInt()
+            val x = (STAR_DETAIL_SIZE / 2 + direction * tangent.x * STAR_TIP_OFFSET * scale).roundToInt()
+            val y = (STAR_DETAIL_SIZE / 2 + direction * tangent.y * STAR_TIP_OFFSET * scale).roundToInt()
             for (dx in -1..1) {
                 for (dy in -1..1) {
                     val isGold = bitmap.getPixel(x + dx, y + dy) == DialStyle.GOLD
@@ -735,7 +737,6 @@ class DialRendererTest {
         const val DIVIDER_SAMPLE_RADIUS = 1
         const val DIVIDER_GOLD_SAMPLES = 4
         const val STAR_DETAIL_SIZE = 160
-        const val STAR_DETAIL_SCALE = 2000f
         const val STAR_TIP_OFFSET = 0.014
         const val STAR_PROBE_RADIUS = 4
         const val STAR_GOLD_PIXELS = 13
