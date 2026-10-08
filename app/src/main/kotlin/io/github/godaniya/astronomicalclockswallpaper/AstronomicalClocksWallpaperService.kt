@@ -492,7 +492,10 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
                     "DialLayout token=$diagnosticToken engine=${System.identityHashCode(
                         this,
                     )} preview=$isPreviewEngine " +
-                        "cx=${placement.centerX + viewport.offsetX} cy=${placement.centerY + viewport.offsetY} " +
+                        // The engine draws in surface coordinates and the framework shows a surface no
+                        // larger than the display unscrolled, so the drawn centre is the screen centre.
+                        // Re-adding the offset here reported a point the renderer never drew to.
+                        "cx=${placement.centerX} cy=${placement.centerY} " +
                         "radius=${placement.radius} brightness=${display.brightness} " +
                         "dark=${palette == DialStyle.DARK_PALETTE} " +
                         "width=${engineResources.displayMetrics.widthPixels} height=${engineResources.displayMetrics.heightPixels}"

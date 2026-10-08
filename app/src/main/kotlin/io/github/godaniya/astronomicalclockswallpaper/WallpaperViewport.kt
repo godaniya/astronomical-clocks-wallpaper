@@ -49,8 +49,8 @@ internal class WallpaperViewport {
     fun resolve(surfaceWidth: Int, surfaceHeight: Int, displayWidth: Int, displayHeight: Int): DialViewport {
         val width = minOf(a = surfaceWidth, b = displayWidth)
         val height = minOf(a = surfaceHeight, b = displayHeight)
-        val left = -offsetX.toFloat()
-        val top = -offsetY.toFloat()
+        val left = windowStart(offset = offsetX, slack = surfaceWidth - width)
+        val top = windowStart(offset = offsetY, slack = surfaceHeight - height)
         return DialViewport(
             left = maxOf(a = 0f, b = left + leftInset),
             top = maxOf(a = 0f, b = top + topInset),
@@ -58,4 +58,10 @@ internal class WallpaperViewport {
             bottom = minOf(a = surfaceHeight.toFloat(), b = top + height - bottomInset),
         )
     }
+
+    // Offsets pan the visible window inside the surface. A window already as wide as the surface has
+    // nothing to pan over, so it must stay put: clamping the start, rather than the end, keeps such a
+    // window its full size instead of truncating it to the slack left beyond the reported scroll.
+    private fun windowStart(offset: Int, slack: Int): Float =
+        (-offset.toFloat()).coerceIn(minimumValue = 0f, maximumValue = slack.toFloat())
 }

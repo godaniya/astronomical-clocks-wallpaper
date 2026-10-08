@@ -348,9 +348,10 @@ interpolates from the near edge plus this extent to the far edge minus it.
 Defaults are exactly centered and retain previous zero-inset/full-brightness output.
 The usable rectangle is `min(surface, display metrics)` shifted by the engine's
 offsets and trimmed by the system insets, then clamped to the surface; the platform
-reports no wallpaper crop, so those clamps are the whole of it. Non-finite bounds, a
-dial radius below 16 pixels and a stroked extent wider than the shortest side are
-logged and skipped.
+reports no wallpaper crop, so those clamps are the whole of it. The offsets pan that
+window only as far as the surface has slack beyond it, so a surface no larger than
+the display leaves the default centred. Non-finite bounds, a dial radius below 16
+pixels and a stroked extent wider than the shortest side are logged and skipped.
 
 After restoring the dial transform, one source-over black overlay covers the whole
 Canvas at alpha `floor((100 − brightness) × 255 / 100)`. The full-brightness path

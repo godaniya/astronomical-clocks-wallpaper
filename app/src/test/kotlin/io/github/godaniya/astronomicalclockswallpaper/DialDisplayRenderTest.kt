@@ -62,6 +62,36 @@ class DialDisplayRenderTest {
     }
 
     @Test
+    fun offsetsStayWithinTheSurface() {
+        // A launcher that hands over a surface no larger than the display cannot scroll it, so its
+        // reported offset must not shrink the window: the dial would leave the centre and lose size.
+        val unscrollable = WallpaperViewport()
+        unscrollable.offsets(xPixels = -664, yPixels = 0)
+        assertEquals(
+            DialViewport.full(width = 1080, height = 2408),
+            unscrollable.resolve(surfaceWidth = 1080, surfaceHeight = 2408, displayWidth = 1080, displayHeight = 2408),
+        )
+        val wide = WallpaperViewport()
+        wide.offsets(xPixels = -500, yPixels = 0)
+        assertEquals(
+            DialViewport(left = 500f, top = 0f, right = 1580f, bottom = 1000f),
+            wide.resolve(surfaceWidth = 2000, surfaceHeight = 1000, displayWidth = 1080, displayHeight = 1000),
+        )
+        val pastTheEnd = WallpaperViewport()
+        pastTheEnd.offsets(xPixels = -900, yPixels = 0)
+        assertEquals(
+            DialViewport(left = 420f, top = 0f, right = 1500f, bottom = 1000f),
+            pastTheEnd.resolve(surfaceWidth = 1500, surfaceHeight = 1000, displayWidth = 1080, displayHeight = 1000),
+        )
+        val backwards = WallpaperViewport()
+        backwards.offsets(xPixels = 250, yPixels = 0)
+        assertEquals(
+            DialViewport.full(width = 1080, height = 1000),
+            backwards.resolve(surfaceWidth = 2000, surfaceHeight = 1000, displayWidth = 1080, displayHeight = 1000),
+        )
+    }
+
+    @Test
     fun wholeWallpaperDimming() {
         val viewport = DialViewport.full(width = WIDTH, height = HEIGHT)
         for (palette in listOf(DialStyle.DARK_PALETTE, DialStyle.LIGHT_PALETTE)) {

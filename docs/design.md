@@ -75,9 +75,12 @@ shared controls until destruction; changes appear on its next visible tick.
 Hidden, destroyed or surface-less engines perform no rendering.
 
 Resolve the actual Canvas size, engine display resources, reported pixel offsets
-and system insets; never force a wallpaper surface size. Recompute on each visible
-frame after surface/orientation changes. A viewport too small for safe geometry is
-logged and skipped. API 29+ uses the engine's [display context](https://developer.android.com/reference/android/service/wallpaper/WallpaperService.Engine#getDisplayContext())
+and system insets; never force a wallpaper surface size. Offsets pan the visible
+window only across the slack the surface has beyond it, so a launcher that reports
+a scroll for a surface no larger than the display still leaves the default centred
+and full-size. Recompute on each visible frame after surface/orientation changes. A
+viewport too small for safe geometry is logged and skipped. API 29+ uses the
+engine's [display context](https://developer.android.com/reference/android/service/wallpaper/WallpaperService.Engine#getDisplayContext())
 so preview/active displays can have different resources. Cropping/insets unreported
 by a launcher cannot be inferred; physical acceptance remains required.
 
