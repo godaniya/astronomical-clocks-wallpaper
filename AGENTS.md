@@ -39,7 +39,8 @@ edit existing issues solely to apply this policy. Human-only issues omit attribu
 
 Agents must perform the [contributor product feature gate](CONTRIBUTING.md#product-feature-gate)
 before new feature or architecture proposals, following its scope and evidence
-requirements. Follow [test scope and proportionality](CONTRIBUTING.md#test-scope-and-proportionality).
+requirements. Follow [test scope and proportionality](CONTRIBUTING.md#test-scope-and-proportionality)
+and keep [factual documentation claims supportable](CONTRIBUTING.md#documentation-claims-and-supportability).
 
 ## Architecture and product constraints
 

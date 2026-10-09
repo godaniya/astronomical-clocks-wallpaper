@@ -12,7 +12,7 @@
 
 <!-- Replace with checks actually performed. Keep unrun checks unchecked and explain.
      Assess new tests against CONTRIBUTING.md's "Test scope and proportionality" guidance;
-     no per-test paperwork is required. -->
+     ensure factual documentation claims are supportable and fresh; no per-test paperwork is required. -->
 - [ ] Relevant automated/build checks: <!-- commands and results, or not run and why -->
 - [ ] Manual/device checks: <!-- public report: Android/API and APK/source revision; keep OEM/model/firmware in private evidence; or not run and why. See [device privacy guidance](../CONTRIBUTING.md#physical-device-testing-and-privacy). -->
 - [ ] Documentation, issue acceptance criteria, and dependency links reviewed.

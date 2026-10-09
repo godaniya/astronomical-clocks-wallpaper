@@ -186,6 +186,32 @@ meaningful tests over sheer volume or coverage quotas:
 - Remove obsolete or redundant tests when modifying behavior, ensuring unique
   assertions remain covered.
 
+## Documentation claims and supportability
+
+Documentation preserves architectural clarity, developer reputation, and factual
+integrity across concurrent worktrees. Just as tests protect code from regression,
+documentation guidance protects claims from drifting into fiction:
+
+- **Ground factual claims in verifiable evidence**: Factual assertions in
+  documentation—describing hardware behavior, lifecycle recovery, astronomy
+  models, or command workflows—should be backed by verified code, test results,
+  linked reports, or other authoritative references (such as upstream
+  specifications, platform documentation, or decisions recorded in issues and
+  PRs). Policy statements, explanations, and forward-looking prose need not
+  carry per-claim evidence; where a fact is unverified, state it as an
+  assumption or intent rather than asserting it as established.
+- **Keep documentation synchronized with code changes**: When modifying production
+  logic, CLI flags, build configurations, or engineering contracts, update the
+  corresponding documentation within the same PR. Do not defer documentation updates
+  to speculative future passes.
+- **Retire stale claims during review**: Identify and update or prune documentation
+  claims rendered obsolete by code changes or resolved issues. If an accepted limitation
+  or temporary workaround is eliminated, update the living docs to reflect the new state.
+- **Lightweight upkeep without bureaucratic overhead**: This discipline requires no
+  per-test paperwork, scheduled audits, or separate compliance forms. Upkeep occurs
+  naturally during standard authoring and PR review: verify that claims in the diff
+  are honest, supportable, and free of speculative creep.
+
 ## Development quick start
 
 The project uses a pinned, reproducible toolchain. Review
