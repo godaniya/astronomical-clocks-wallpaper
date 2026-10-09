@@ -192,11 +192,14 @@ Documentation preserves architectural clarity, developer reputation, and factual
 integrity across concurrent worktrees. Just as tests protect code from regression,
 documentation guidance protects claims from drifting into fiction:
 
-- **Ground claims in observable evidence**: Every assertion in documentation—whether
-  describing hardware behavior, lifecycle recovery, astronomy models, or command
-  workflows—must be backed by verified code, test results, or linked reports.
-  Explicitly distinguish verified facts from unverified assumptions or forward-looking
-  intent.
+- **Ground factual claims in verifiable evidence**: Factual assertions in
+  documentation—describing hardware behavior, lifecycle recovery, astronomy
+  models, or command workflows—should be backed by verified code, test results,
+  linked reports, or other authoritative references (such as upstream
+  specifications, platform documentation, or decisions recorded in issues and
+  PRs). Policy statements, explanations, and forward-looking prose need not
+  carry per-claim evidence; where a fact is unverified, state it as an
+  assumption or intent rather than asserting it as established.
 - **Keep documentation synchronized with code changes**: When modifying production
   logic, CLI flags, build configurations, or engineering contracts, update the
   corresponding documentation within the same PR. Do not defer documentation updates
