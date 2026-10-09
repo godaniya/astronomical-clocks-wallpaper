@@ -40,10 +40,11 @@ requirements. Routine documentation fixes do not expand that gate’s scope.
 Other clock traditions and calendar representations could offer further ways to
 explore the same sky: see the [clock-family roadmap](https://github.com/godaniya/astronomical-clocks-wallpaper/issues/41)
 and [solar-term proposal](https://github.com/godaniya/astronomical-clocks-wallpaper/issues/66).
-Configurable Gregorian months, 農曆 dates, and 節令／中氣 displays are future
-possibilities, not current capabilities. Keep astronomical calculations distinct
-from cultural interpretations and calendar conventions; each proposal remains
-subject to the existing feature gate before implementation.
+Configurable 節令／中氣 displays remain a future possibility, not a current capability.
+Keep astronomical calculations distinct from cultural interpretations and calendar
+conventions. New feature or architecture proposals must record the six product
+feature gate answers before a proposal PR or implementation; existing roadmap
+references do not establish approval or supporting evidence.
 
 ## One observing site and one instant
 
