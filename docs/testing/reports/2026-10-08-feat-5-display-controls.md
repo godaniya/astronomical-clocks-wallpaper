@@ -3,9 +3,11 @@
 Test build: local debug `app-debug.apk` built from this branch's tree with
 `./gradlew clean :app:assembleDebug`, APK SHA-256
 `1176e96612b3ab608107652bd49ca1bc814de8dec8ff29219d9922889c61c300`. The `app/src/main` and
-`app/src/test` trees it compiles are byte-identical to `16a2353`, so that revision identifies the
-application and test sources under test. The commits after it on this branch touch `scripts/`, the
-guides and this report, and leave those trees unchanged, so the artifact still describes them.
+`app/src/test` trees it compiles were byte-identical to `16a2353` when the artifact was built and
+exercised, so that revision identifies the application and test sources under test. The commits after
+`16a2353` otherwise touch `scripts/`, the guides and this report. One later editorial correction
+changes a single assertion in `WallpaperLayoutDiagnosticTest` and nothing in `app/src/main`, so the
+APK and its hash still identify the artifact while the test tree now differs in that one file.
 The artifact was installed in place with `adb install -r` and the existing home-screen wallpaper
 binding survived, rendering under a new PID.
 
@@ -36,8 +38,9 @@ Two independent measurements were taken for every state. The first is the debug-
 report, requested with the `DEBUG_SET_TIME` diagnostics broadcast and read back from logcat, which
 carries the engine's own centre, radius, brightness and palette together with the display metrics it
 resolved; `scripts/device_layer.py` rejects a report unless exactly one visible engine answers and
-the reported centre and radius fit the captured frame. The second is a pixel measurement straight off
-`screencap`: the bounding box of the dark palette's gold `#D8B66A`, which is drawn as a stroked circle
+the reported centre and its stroked extent (`radius * STROKED_EXTENT`) fit the captured frame. The
+second is a pixel measurement straight off `screencap`: the bounding box of the dark palette's gold
+`#D8B66A`, which is drawn as a stroked circle
 at the dial's outer radius. Agreement between a number the engine computes and a number read off the
 framebuffer is what separates a diagnostic that lies from one that works. In the first run the two
 disagreed by 664 px; in the second they agree to about a pixel.
@@ -96,16 +99,16 @@ surface.
 computed it, and `diagnoseLayout` subtracts it. The render path is unchanged; the framework does the
 scrolling. `WallpaperLayoutDiagnosticTest` builds a 2000x1000 surface on a 1080x1000 display, scrolls
 it by -500, and asserts both the exact screen-space centre and the property the device layer enforces,
-that `cx +/- radius` stays inside the captured frame; the assertion fails against a deliberately
-un-subtracted centre on both configured SDK levels. The device pass below cannot exercise this path -
-this launcher reports an offset on a surface no larger than the display, so the origin is 0 - and the
-rule is host-tested only.
+that `cx +/- radius * STROKED_EXTENT` stays inside the captured frame; the assertion fails against a
+deliberately un-subtracted centre on both configured SDK levels. The device pass below cannot exercise
+this path - this launcher reports an offset on a surface no larger than the display, so the origin is
+0 - and the rule is host-tested only.
 
 ## Observed results, combined acceptance pass
 
 | Date | Check | Observed |
 | --- | --- | --- |
-| 2026-10-08 | build, verify, install | `./gradlew qualityGate :app:assembleDebug` passed at 593 tests per debug/release variant with detekt, ktlint and Android Lint clean; `scripts/verify-apk.sh`, codespell 2.4.3, Ruff 0.16.10 check and format, ty 0.0.84, `python3 -I -m unittest discover -s scripts -p 'test_*.py'` (45 tests) and `git diff --check` passed; `adb install -r` replaced the previous build in place and the home-screen binding re-rendered without being reapplied |
+| 2026-10-08 | build, verify, install | `./gradlew qualityGate :app:assembleDebug` passed at 593 tests per debug/release variant with detekt, ktlint and Android Lint clean; `scripts/verify-apk.sh`, codespell 2.4.3, Ruff 0.16.10 check and format, ty 0.0.84, `python3 -I -m unittest discover -s scripts -p 'test_*.py'` (122 tests: 46 in `test_device_smoke.py`, 76 in `test_device_qualification.py`) and `git diff --check` passed; `adb install -r` replaced the previous build in place and the home-screen binding re-rendered without being reapplied |
 | 2026-10-09 | home defaults | reported `cx=540.0 cy=1217.0 radius=464.4 brightness=100 dark=true`; measured gold rim bbox centre (539.5, 1216.5), half-width 464.5 |
 | 2026-10-09 | Size 50%, low endpoint | label `Size: 50%`, `dial_display` `size=50`; reported `radius=232.2`, exactly half of 464.4; measured rim bbox centre (539.0, 1216.5), half-width 232.0 |
 | 2026-10-09 | Size 115%, high endpoint | label `Size: 115%`, `dial_display` `size=115`; reported `radius=534.06 = 1080 x 0.43 x 1.15`, the arithmetic the contract states. The earlier run stopped at 114% because a tap one step short landed there; dragging the thumb to the end of the track reaches 115 exactly |
@@ -122,10 +125,10 @@ rule is host-tested only.
 | 2026-10-09 | site, southern | site seeded to `-33.8688, 151.2093, Australia/Sydney` and read back from `observing_location.xml`. The dial drew the southern plate, with the night region on the opposite side from the northern render and the civil hand at the site's local time; the southern mirror, which the earlier passes recorded as host-tested only, is now exercised on hardware |
 | 2026-10-09 | site, polar | site seeded to `-77.85, 166.67, Antarctica/McMurdo`, header read `-77.8500, 166.6700 (manual)` / `Timezone: Antarctica/McMurdo`, and the dial redrew with the hand at the site's local hour |
 | 2026-10-09 | no-site | with `observing_location.xml` removed and the process restarted the file was not recreated, the header read `No observing location set.`, and the dial drew the bare 24-hour civil clock only - no zodiac ring, no sky, no Sun or Moon. The Prague reference was then restored |
-| 2026-10-09 | site timezone independent of the phone | with the phone timezone moved to `Europe/London` while the site stayed `Europe/Prague`, the frozen instant `2026-10-25T00:30:00Z` drew the hand at 217.729 deg against the 217.5 deg that Prague's UTC+2 civil time of 02:30 predicts. Had the phone zone driven the dial it would have read 187.5 deg. The phone timezone was restored to `Europe/Prague` |
+| 2026-10-09 | site timezone independent of the phone | with the phone timezone moved to `Europe/London` while the site stayed `Europe/Prague`, the frozen instant `2026-10-25T00:30:00Z` drew the hand at 217.729 deg against the 217.5 deg that Prague's UTC+2 civil time of 02:30 predicts. Had the phone zone driven the dial it would have read 202.5 deg at 01:30 BST; London's fall-back at 01:00 UTC that day leaves the second frozen instant also at 01:30 local. The phone timezone was restored to `Europe/Prague` |
 | 2026-10-09 | site zone DST transition | the two frozen instants `2026-10-25T00:30:00Z` and `2026-10-25T01:30:00Z` straddle Prague's CEST -> CET change and are both 02:30 local. Measured hand 217.729 deg and 217.701 deg, a step of -0.028 deg for a one-hour step of UTC: the civil clock follows the site zone's DST rule, not UTC |
 | 2026-10-09 | preview engine | the live picker's preview reported `cx=540.0 cy=1217.0 radius=464.4 brightness=100` and drew the dial in the preview area; it resolves its own viewport with no reported offsets |
-| 2026-10-09 | lit lock screen | the lock slot was bound to the platform `ImageWallpaper` before this pass. Applying the wallpaper from the picker with "Sperrbildschirm" rebound that slot to this service. No keyguard exists on this device (`locksettings get-disabled` is true, `isKeyguardShowing=false` across a screen-off/screen-on cycle and across the reboot), so no lock surface ever renders either wallpaper and the criterion could not be exercised. See the residual issue; the slot was not restored |
+| 2026-10-09 | lit lock screen | the lock slot was bound to the platform `ImageWallpaper` before this pass. Applying the wallpaper from the picker with "Sperrbildschirm" rebound that slot to this service. No keyguard exists on this device (`locksettings get-disabled` is true, `isKeyguardShowing=false` across a screen-off/screen-on cycle and across the reboot), so no lock surface ever renders either wallpaper and the criterion could not be exercised. See #122; the slot was not restored |
 | 2026-10-09 | insets | the usable rectangle's insets are 68 px at the top and 42 px at the bottom, read independently from the drawn rim's extreme pixels at the vertical endpoints as well as from the endpoint centres. The display cutout is a 66 px top inset, so the system bar, not the cutout, sets the top |
 | 2026-10-09 | cropping and offsets | the launcher delivers `xPixelOffset = -664` on a surface exactly as large as the display, so the window has no slack, the clamped origin is 0, and the offset is inert: the default dial reports the exact screen centre while the offset is non-zero. A genuinely panned surface is not reachable on this launcher and is host-tested only |
 | 2026-10-09 | orientation | `settings put system user_rotation 1` with `accelerometer_rotation 0` left the display at rotation 0 and 1080x2408 throughout: the home screen is portrait-locked, so the landscape path and the wider-than-display surface were not reproduced. Both settings were restored |
@@ -133,8 +136,9 @@ rule is host-tested only.
 | 2026-10-09 | dimming preserves geometry | the measured rim bbox centre (539.5, 1216.5) and half-width 464.5 were identical at Brightness 80, 90 and 100, and the engine reported `radius=464.4` at each |
 | 2026-10-09 | equinox rotation, default composition | two surfaces: the native 1080x2408 and, for resolution, the `wm size 2160x4816` override, both at the default composition. Four instants 5 h 59 min 1 s apart - 89.9999 deg of sidereal rotation, so a rigidly attached star must step exactly 18.000 deg after the 72 deg fold. On the 2x surface the measured tips were 55.621, 2.070, 18.385 and 38.012 deg against predictions 54.993, 0.993, 18.993 and 36.993 deg, residuals +0.628, +1.077, -0.608 and +1.019 deg, with steps +18.449, +16.314 and +19.627 deg. The predicted equinox landed on the drawn star in every capture, confirmed on magnified crops |
 | 2026-10-09 | equinox rotation, Size 115% | the same four instants at the Size extreme, on the 2x surface: tips 56.544, 2.130, 18.652 and 38.689 deg, residuals +1.551, +1.137, -0.340 and +1.696 deg, steps +17.586, +16.522 and +20.037 deg. The star tracks the ring at the extreme composition as well as at the default |
-| 2026-10-09 | equinox probe calibration | the probe disc radius was set to 0.737 of the star's own outer radius - 10.0 px of the star's 13.6 px at 2x and default size - so the disc stays inside the silhouette. A 22 px disc, matching the earlier report's stated radius, admitted the zodiac band's gold rims: it collected 123 px instead of 44 and scattered the same residuals to between -20 deg and +12 deg. The measured step is unchanged in sign and rough size but the residuals are this pass's own, not a reproduction of the earlier report's |
+| 2026-10-09 | equinox probe calibration | the probe disc radius was set to 10.0 px, a ratio of 0.74 to the star's 13.6 px outer radius at 2x and default size, so the disc stays inside the silhouette. A 22 px disc, matching the earlier report's stated radius, admitted the zodiac band's gold rims: it collected 123 px instead of 44 and scattered the same residuals to between -20 deg and +12 deg. The measured step is unchanged in sign and rough size but the residuals are this pass's own, not a reproduction of the earlier report's |
 | 2026-10-09 | `scripts/device_smoke.py` | passed: baseline hand 175.483 deg, at +30 m 183.042 deg, advance 7.559 deg against 7.500 deg expected, residual +0.059 deg; surface recreation `wm size 1080x2000` then reset, hand drawn afterwards |
+| 2026-10-09 | `scripts/device_smoke.py`, tightened parser | re-run after `21233a7` to cover the parser's new stroked-extent check, which postdates this pass: passed, advance 7.572 deg against 7.500 deg expected, residual +0.072 deg; surface recreation OK; the renderer log scan was inconclusive |
 | 2026-10-09 | `scripts/device_qualification.py` | passed at `--max-pss-growth-kb 6144`: baseline hand 175.663 deg; screen-off observed with `mVisible=false` and the hand detected after wake at 175.719 deg; preview navigation returned at 175.766 deg; surface recreation at 175.793 deg; process rebind pid 19959 -> 21455; +30 m advance 7.558 deg (residual +0.058) and +12 h 179.822 deg (residual -0.178); total PSS 26697 -> 27689 kB over 10 s, growth +992 kB against the 6144 kB budget |
 | 2026-10-09 | renderer log scan | Inconclusive: the `AstronomicalClocksWallpaperService:W` and `DialRenderer:W` filter matched no record over either harness run, so it neither passed nor reported a warning |
 | 2026-10-09 | device state restored | `wm size` and `wm density` read back as physical with no override, `persist.sys.timezone=Europe/Prague` with `auto_time_zone=1`, `screen_off_pocket=1`, `proximity_sensor=null`, `user_rotation=0`, `accelerometer_rotation=1`, `cmd uimode night auto`, `stay_on_while_plugged_in` deleted back to null, and the home binding still this service. The app's own state was left at the defaults the pass started from: `dial_display` at 100/50/50/100, `appearance_settings` `SYSTEM`, all three layers enabled, and the Prague site. The lock-slot binding is the one setting this pass changed and did not restore |
@@ -145,8 +149,7 @@ Landscape and any surface wider than the display remain unmeasured on hardware. 
 this device is portrait-locked, so `user_rotation=1` left the display at 1080x2408 in rotation 0, and
 its launcher hands over a surface exactly as large as the display while reporting
 `xPixelOffset = -664`. Both the orientation path and a genuinely panned, cropped surface are therefore
-host-tested only, including the screen-space `DialLayout` rule this pass fixed; the residual issue
-linked from #5 records them.
+host-tested only, including the screen-space `DialLayout` rule this pass fixed; #122 records them.
 
 The lit lock screen was not exercised twice over: no keyguard exists on this device, so no lock
 surface renders, and the lock slot now bound to this service was not returned to the platform

@@ -59,10 +59,11 @@ LIGHT_RIM_RGB: Final = (0xE8, 0xE2, 0xD2)
 RIM_PROBE_RADIUS_FRACTION: Final = 0.40
 RIM_PROBE_BEARINGS_DEG: Final = tuple(range(15, 360, 30))
 
-# DialViewport.STROKED_EXTENT in the Kotlin source: the outer rim is stroked half a RIM_WIDTH beyond
-# the reported dial radius, so the drawn disc reaches radius * STROKED_EXTENT, not radius. A report
-# can satisfy cx - radius >= 0 while that half stroke is clipped - about 1.6 px at Size 115% on a
-# 1080 px display.
+# Mirror of DialRenderer.kt, the source of truth: that file's RIM_WIDTH (0.008f) and OUTER_RADIUS
+# (1.37f) give DialViewport.STROKED_EXTENT = 1 + RIM_WIDTH / 2 / OUTER_RADIUS. The outer rim is
+# stroked half a RIM_WIDTH beyond the reported dial radius, so the drawn disc reaches
+# radius * STROKED_EXTENT, not radius. A report can satisfy cx - radius >= 0 while that half stroke is
+# clipped - about 1.6 px at Size 115% on a 1080 px display.
 RIM_WIDTH: Final = 0.008
 OUTER_RADIUS: Final = 1.37
 STROKED_EXTENT: Final = 1 + RIM_WIDTH / 2 / OUTER_RADIUS
