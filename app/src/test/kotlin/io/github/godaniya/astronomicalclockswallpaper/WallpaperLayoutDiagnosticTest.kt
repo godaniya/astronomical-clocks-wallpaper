@@ -56,11 +56,16 @@ class WallpaperLayoutDiagnosticTest {
             val radius = fields.getValue("radius").toFloat()
             assertEquals(DISPLAY_WIDTH / 2f, cx, TOLERANCE)
             assertEquals(DISPLAY_HEIGHT / 2f, cy, TOLERANCE)
-            // The exact property: scripts/device_layer.py rejects a report whose disc leaves the frame.
-            assertTrue(cx - radius >= 0f)
-            assertTrue(cy - radius >= 0f)
-            assertTrue(cx + radius <= DISPLAY_WIDTH)
-            assertTrue(cy + radius <= DISPLAY_HEIGHT)
+            // Mirror the parser's own fit check: scripts/device_layer.py rejects a report whose drawn
+            // disc, radius * STROKED_EXTENT, leaves the frame. This fixture sits about 68 px clear of
+            // the frame, so it shows acceptance, not the boundary. The boundary is pinned by
+            // scripts/test_device_smoke.py::test_reports_reject_a_clipped_outer_stroke and by
+            // DialDisplayRenderTest.nativeCornerPlacement, which already uses STROKED_EXTENT.
+            val extent = radius * DialViewport.STROKED_EXTENT
+            assertTrue(cx - extent >= -EXTENT_TOLERANCE_PX)
+            assertTrue(cy - extent >= -EXTENT_TOLERANCE_PX)
+            assertTrue(cx + extent <= DISPLAY_WIDTH + EXTENT_TOLERANCE_PX)
+            assertTrue(cy + extent <= DISPLAY_HEIGHT + EXTENT_TOLERANCE_PX)
         } finally {
             engine.onDestroy()
             holder.release()
@@ -76,6 +81,11 @@ class WallpaperLayoutDiagnosticTest {
         const val DISPLAY_HEIGHT = 1000
         const val WINDOW_ORIGIN = 500
         const val TOLERANCE = 0.01f
+
+        // Matches device_layer.EXTENT_TOLERANCE_PX: the acceptance slack the parser allows around the
+        // stroked extent. Equal to TOLERANCE but kept separate, because it absorbs the float rounding
+        // of the printed radius rather than a placement difference.
+        const val EXTENT_TOLERANCE_PX = 0.01f
         val FIELDS = Regex("""(\w+)=([^ ]+)""")
 
         fun reportFields(line: String): Map<String, String> {
