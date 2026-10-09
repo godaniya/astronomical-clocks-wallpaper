@@ -4,6 +4,7 @@
 import argparse
 import contextlib
 import io
+import json
 import math
 import struct
 import subprocess
@@ -12,6 +13,8 @@ import unittest
 from types import ModuleType
 from typing import Final
 from unittest.mock import MagicMock, patch
+from xml.sax.saxutils import escape as xml_escape
+from zoneinfo import ZoneInfo
 
 import device_layer
 import device_qualification as qualification
@@ -35,12 +38,49 @@ FIXTURE_START_PID: Final = 111
 
 FIXTURE_REBOUND_PID: Final = 222
 
-FIXTURE_HAND_ANGLES: Final = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 7.5, 180.0]
+FIXTURE_HAND_ANGLES: Final = [0.0, 0.0, 0.0, 0.0, 0.0, 7.5, 180.0, 168.75, 179.958, 180.042, 191.25]
+
+# A realistic observing_location.xml dump: SharedPreferences XML-escapes the quotes in the stored
+# JSON record, and LocationStore.kt writes the zone as a full IANA id.
+VALID_PREFS_XML: Final = (
+    "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n"
+    "<map>\n"
+    '    <string name="location">'
+    "{&quot;version&quot;:1,&quot;latitude&quot;:50.08,&quot;longitude&quot;:14.42,"
+    "&quot;source&quot;:&quot;MANUAL&quot;,&quot;zoneId&quot;:&quot;Europe\\/Prague&quot;}"
+    "</string>\n"
+    "</map>\n"
+)
+
+# One record LocationStore.load() accepts: integral version 1, in-range coordinates, a known source,
+# and a real IANA zone. Tests derive rejected variants from it field by field.
+VALID_LOCATION_RECORD: Final = {
+    "version": 1,
+    "latitude": 50.08,
+    "longitude": 14.42,
+    "source": "MANUAL",
+    "zoneId": "Europe/Prague",
+}
+
+
+def prefs_xml(record: object) -> str:
+    """Wrap a stored record in the shared_prefs XML envelope, escaping quotes as LocationStore does."""
+    text = record if isinstance(record, str) else json.dumps(record)
+    escaped = xml_escape(text, {'"': "&quot;"})
+    return (
+        "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n"
+        "<map>\n"
+        f'    <string name="location">{escaped}</string>\n'
+        "</map>\n"
+    )
+
 
 DUPLICATED_CONSTANT_NAMES: Final = (
     "ADB_TIMEOUT_SECONDS",
     "ADB_RESTORE_TIMEOUT_SECONDS",
     "ANGLE_TOLERANCE_DEG",
+    "CIVIL_MIDNIGHT_ANGLE_DEG",
+    "CIVIL_SECONDS_PER_DEGREE",
     "COARSE_BIN_COUNT",
     "COARSE_BIN_WIDTH_DEG",
     "DARK_HAND_MIN_RED_MINUS_BLUE",
@@ -195,6 +235,187 @@ class DeviceQualificationTest(unittest.TestCase):
                 self.assertIsNone(device_layer.read_wallpaper_visible("device"))
             self.assertIn("wallpaper visibility probe failed", error_output.getvalue())
             self.assertIn(device_layer.error_detail(error), error_output.getvalue())
+
+    @patch.object(device_layer, "run_adb")
+    def test_process_cpu_ticks_reads_utime_and_stime(self, run_adb: MagicMock) -> None:
+        stat_line = b"123 (wallpaper.service) S 1 2 3 4 5 6 7 8 9 10 42 18 0 0\n"
+        run_adb.return_value = stat_line
+        self.assertEqual(device_layer.read_process_cpu_ticks("device", 123), 60)
+        run_adb.assert_called_with(["shell", "cat", "/proc/123/stat"], serial="device")
+
+    @patch.object(device_layer, "run_adb")
+    def test_process_cpu_ticks_returns_none_for_malformed_stat(self, run_adb: MagicMock) -> None:
+        cases = (b"invalid", b"123 (comm)", b"123 (comm) S 1 2", b"123 no_parens")
+        for output in cases:
+            with self.subTest(output=output):
+                run_adb.return_value = output
+                self.assertIsNone(device_layer.read_process_cpu_ticks("device", 123))
+
+    @patch.object(device_layer, "run_adb")
+    def test_process_cpu_ticks_handles_probe_failure(self, run_adb: MagicMock) -> None:
+        run_adb.side_effect = subprocess.CalledProcessError(1, ["adb"], stderr=b"no such process")
+        with contextlib.redirect_stderr(io.StringIO()) as error_output:
+            self.assertIsNone(device_layer.read_process_cpu_ticks("device", 123))
+        self.assertIn("process CPU stat probe failed", error_output.getvalue())
+
+    def test_saved_site_zone_parser_reads_the_stored_zone(self) -> None:
+        self.assertEqual(device_layer.parse_saved_site_zone(VALID_PREFS_XML), "Europe/Prague")
+
+    def test_saved_site_zone_parser_returns_none_for_unusable_prefs(self) -> None:
+        cases = (
+            "",
+            "<map></map>",
+            '<map><string name="latitude">50.08</string></map>',
+            "<map><string",
+            prefs_xml("not json"),
+            prefs_xml(""),
+            prefs_xml("[1, 2]"),
+            prefs_xml("5"),
+            prefs_xml('{"version": 1} trailing'),
+        )
+        for xml in cases:
+            with self.subTest(xml=xml):
+                self.assertIsNone(device_layer.parse_saved_site_zone(xml))
+
+    def test_saved_site_zone_parser_mirrors_the_store_record_validation(self) -> None:
+        """Only a record LocationStore.load() accepts yields its zone; rejected records fall back."""
+        accepted = (
+            VALID_LOCATION_RECORD,
+            {**VALID_LOCATION_RECORD, "latitude": 90, "longitude": 180},
+            {**VALID_LOCATION_RECORD, "latitude": -90, "longitude": -180},
+            {**VALID_LOCATION_RECORD, "source": "CURRENT_COARSE"},
+        )
+        for record in accepted:
+            with self.subTest(record=record):
+                self.assertEqual(device_layer.parse_saved_site_zone(prefs_xml(record)), "Europe/Prague")
+
+        def without(key: str) -> dict[str, object]:
+            return {name: value for name, value in VALID_LOCATION_RECORD.items() if name != key}
+
+        rejected = (
+            without("version"),
+            {**VALID_LOCATION_RECORD, "version": "1"},
+            {**VALID_LOCATION_RECORD, "version": 1.0},
+            {**VALID_LOCATION_RECORD, "version": True},
+            {**VALID_LOCATION_RECORD, "version": 2},
+            without("latitude"),
+            {**VALID_LOCATION_RECORD, "latitude": "50.08"},
+            {**VALID_LOCATION_RECORD, "latitude": True},
+            {**VALID_LOCATION_RECORD, "latitude": None},
+            {**VALID_LOCATION_RECORD, "latitude": 90.0001},
+            {**VALID_LOCATION_RECORD, "latitude": -90.0001},
+            {**VALID_LOCATION_RECORD, "latitude": float("nan")},
+            without("longitude"),
+            {**VALID_LOCATION_RECORD, "longitude": "14.42"},
+            {**VALID_LOCATION_RECORD, "longitude": 180.0001},
+            without("source"),
+            {**VALID_LOCATION_RECORD, "source": "manual"},
+            {**VALID_LOCATION_RECORD, "source": "GPS"},
+            {**VALID_LOCATION_RECORD, "source": 5},
+            {**VALID_LOCATION_RECORD, "source": ["MANUAL"]},
+            without("zoneId"),
+            {**VALID_LOCATION_RECORD, "zoneId": 5},
+            {**VALID_LOCATION_RECORD, "zoneId": None},
+            {**VALID_LOCATION_RECORD, "zoneId": ""},
+        )
+        for record in rejected:
+            with self.subTest(record=record):
+                self.assertIsNone(device_layer.parse_saved_site_zone(prefs_xml(record)))
+
+    def test_a_present_but_unbuildable_zone_is_returned_for_the_phase_to_reject(self) -> None:
+        """A stored zone the harness cannot build must not be read as "use the device zone"."""
+        record = {**VALID_LOCATION_RECORD, "zoneId": "Invalid/Zone"}
+        self.assertEqual(device_layer.parse_saved_site_zone(prefs_xml(record)), "Invalid/Zone")
+
+    @patch.object(device_layer, "run_adb", return_value=VALID_PREFS_XML.encode())
+    def test_saved_site_zone_reads_the_shared_prefs_file(self, run_adb: MagicMock) -> None:
+        self.assertEqual(device_layer.read_saved_site_zone_id("device"), "Europe/Prague")
+        run_adb.assert_called_once_with(
+            ["shell", "run-as", device_layer.PACKAGE_NAME, "cat", device_layer.LOCATION_PREFS_PATH],
+            serial="device",
+        )
+
+    @patch.object(
+        device_layer,
+        "run_adb",
+        side_effect=subprocess.CalledProcessError(
+            1,
+            ["adb"],
+            stderr=b"cat: " + device_layer.LOCATION_PREFS_PATH.encode() + b": No such file or directory",
+        ),
+    )
+    def test_a_missing_saved_site_prefs_file_reads_as_absent(self, _run_adb: MagicMock) -> None:
+        """A prefs file never written is the store's "no saved site", not a probe error."""
+        self.assertIsNone(device_layer.read_saved_site_zone_id("device"))
+
+    @patch.object(device_layer, "run_adb", return_value=prefs_xml({"version": 2}).encode())
+    def test_a_readable_prefs_file_with_no_loadable_record_reads_as_absent(self, _run_adb: MagicMock) -> None:
+        """A successful read whose record the store rejects still means "no saved site", not an error."""
+        self.assertIsNone(device_layer.read_saved_site_zone_id("device"))
+
+    @patch.object(
+        device_layer,
+        "run_adb",
+        side_effect=subprocess.CalledProcessError(1, ["adb"], stderr=b"package not debuggable"),
+    )
+    def test_a_saved_site_probe_failure_raises_instead_of_reading_as_absent(self, _run_adb: MagicMock) -> None:
+        """A failed read must not be read as "no saved site"; that would fall back to the device zone."""
+        with self.assertRaises(device_layer.ProbeError) as raised:
+            device_layer.read_saved_site_zone_id("device")
+        self.assertIn("saved-site prefs probe failed", str(raised.exception))
+        self.assertIn("package not debuggable", str(raised.exception))
+
+    @patch.object(device_layer, "run_adb", side_effect=OSError("adb transport closed"))
+    def test_a_saved_site_probe_oserror_raises(self, _run_adb: MagicMock) -> None:
+        with self.assertRaises(device_layer.ProbeError):
+            device_layer.read_saved_site_zone_id("device")
+
+    @patch.object(
+        device_layer,
+        "run_adb",
+        side_effect=subprocess.TimeoutExpired(cmd="adb", timeout=device_layer.ADB_TIMEOUT_SECONDS),
+    )
+    def test_a_saved_site_probe_timeout_raises_instead_of_aborting_the_run(self, _run_adb: MagicMock) -> None:
+        """A stalled transport must fail this phase through ProbeError, not escape to main()."""
+        with self.assertRaises(device_layer.ProbeError):
+            device_layer.read_saved_site_zone_id("device")
+
+    @patch.object(
+        device_layer,
+        "run_adb",
+        side_effect=subprocess.CalledProcessError(
+            1, ["adb"], stderr=b"cat: /data/local/tmp/nope.xml: No such file or directory"
+        ),
+    )
+    def test_an_absent_marker_naming_another_path_is_not_a_saved_site_absence(self, _run_adb: MagicMock) -> None:
+        """An ENOENT about some other path is a probe error, not the store's "no saved site"."""
+        with self.assertRaises(device_layer.ProbeError):
+            device_layer.read_saved_site_zone_id("device")
+
+    @patch.object(device_layer, "run_adb", return_value=b"100\n")
+    def test_clock_tick_rate_is_parsed(self, _run_adb: MagicMock) -> None:
+        self.assertEqual(device_layer.read_process_cpu_clock_ticks("device"), 100)
+
+    @patch.object(device_layer, "run_adb")
+    def test_clock_tick_rate_rejects_unusable_output(self, run_adb: MagicMock) -> None:
+        for output in (b"", b"not a number\n", b"0\n", b"-5\n"):
+            with self.subTest(output=output):
+                run_adb.return_value = output
+                self.assertIsNone(device_layer.read_process_cpu_clock_ticks("device"))
+
+    @patch.object(device_layer, "run_adb", side_effect=OSError("adb transport closed"))
+    def test_clock_tick_rate_probe_failure_is_reported(self, _run_adb: MagicMock) -> None:
+        with contextlib.redirect_stderr(io.StringIO()) as error_output:
+            self.assertIsNone(device_layer.read_process_cpu_clock_ticks("device"))
+        self.assertIn("clock-tick rate probe failed", error_output.getvalue())
+
+    @patch.object(device_layer, "run_adb", return_value=b"Europe/Prague\n")
+    def test_device_timezone_is_parsed(self, _run_adb: MagicMock) -> None:
+        self.assertEqual(device_layer.read_device_timezone("device"), "Europe/Prague")
+
+    @patch.object(device_layer, "run_adb", return_value=b"\n")
+    def test_an_empty_device_timezone_is_none(self, _run_adb: MagicMock) -> None:
+        self.assertIsNone(device_layer.read_device_timezone("device"))
 
     @patch.object(
         device_layer,
@@ -504,6 +725,7 @@ class DeviceQualificationTest(unittest.TestCase):
             "phase_surface_recreation",
             "phase_process_rebind",
             "phase_time_travel",
+            "phase_midnight_rollover",
             "phase_total_pss_growth",
         )
         with contextlib.ExitStack() as stack:
@@ -632,10 +854,17 @@ class RendererLogScanTest(unittest.TestCase):
             patch.object(device_layer, "read_screen_on", return_value=True),
             patch.object(device_layer, "read_night_mode", return_value="auto"),
             patch.object(device_layer, "read_keyguard_locked", return_value=False),
+            patch.object(device_layer, "read_saved_site_zone_id", return_value="Europe/Prague"),
             patch.object(
                 device_layer,
                 "get_wallpaper_pid",
-                side_effect=[FIXTURE_START_PID, FIXTURE_START_PID, FIXTURE_START_PID, FIXTURE_REBOUND_PID],
+                side_effect=[
+                    FIXTURE_START_PID,
+                    FIXTURE_START_PID,
+                    FIXTURE_START_PID,
+                    FIXTURE_START_PID,
+                    FIXTURE_REBOUND_PID,
+                ],
             ),
             patch.object(device_layer, "send_debug_clock_broadcast", return_value=True),
             patch.object(qualification, "restore_device", return_value=True),
@@ -759,6 +988,25 @@ class HandDetectionTest(unittest.TestCase):
         if refined is None:
             self.fail("a full sample set must be refined")
         self.assertAlmostEqual(refined, 0.0)
+
+    def test_civil_hand_angle_matches_the_pinned_clock_state_anchors(self) -> None:
+        """Mirror ClockStateTest.kt: noon is up, midnight down, 06:00 270°, 18:00 90°."""
+        anchors = ((0, 180.0), (6 * 3600, 270.0), (12 * 3600, 0.0), (18 * 3600, 90.0), (3 * 3600 + 15 * 60, 228.75))
+        for seconds, want in anchors:
+            with self.subTest(seconds=seconds):
+                self.assertAlmostEqual(device_layer.civil_hand_angle_deg(seconds), want, places=6)
+
+    def test_civil_hand_angle_wraps_across_noon(self) -> None:
+        self.assertAlmostEqual(device_layer.civil_hand_angle_deg(11 * 3600 + 59 * 60 + 59), 359.995833, places=5)
+        self.assertAlmostEqual(device_layer.civil_hand_angle_deg(12 * 3600 + 1), 0.004167, places=5)
+
+    def test_signed_circular_difference_wraps_across_zero(self) -> None:
+        self.assertAlmostEqual(device_layer.signed_circular_difference_deg(1.0, 359.0), 2.0)
+        self.assertAlmostEqual(device_layer.signed_circular_difference_deg(359.0, 1.0), -2.0)
+        self.assertAlmostEqual(device_layer.signed_circular_difference_deg(198.75, 168.75), 30.0)
+        # A half turn resolves to -180, so the documented range is the half-open [-180, 180).
+        self.assertAlmostEqual(device_layer.signed_circular_difference_deg(0.0, 180.0), -180.0)
+        self.assertAlmostEqual(device_layer.signed_circular_difference_deg(180.0, 0.0), -180.0)
 
     def test_dark_hand_stroke_is_located_on_a_synthetic_frame(self) -> None:
         frame = hand_frame(device_layer.DARK_RIM_RGB, DARK_HAND_RGB, HAND_UP_BEARING_DEG)
@@ -952,6 +1200,324 @@ class PhaseDecisionTest(unittest.TestCase):
         capture.assert_not_called()
         angle.assert_not_called()
 
+    @patch.object(qualification, "ensure_screen_on", return_value=True)
+    @patch.object(device_layer, "read_saved_site_zone_id", return_value="Europe/Prague")
+    @patch.object(device_layer, "detect_hand_angle", side_effect=[168.75, 179.958, 180.042, 191.25])
+    @patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16)))
+    @patch.object(device_layer, "send_debug_clock_broadcast", return_value=True)
+    @patch.object(qualification.time, "sleep")
+    def test_midnight_rollover_brackets_the_saved_site_civil_midnight(
+        self,
+        _sleep: MagicMock,
+        send: MagicMock,
+        _capture: MagicMock,
+        _angle: MagicMock,
+        _zone: MagicMock,
+        _ensure: MagicMock,
+    ) -> None:
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            qualification.phase_midnight_rollover(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(failures, [])
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0][0], "midnight date rollover")
+        self.assertIn("Europe/Prague", results[0][1])
+        self.assertIn("saved site", results[0][1])
+        self.assertIn("2026-06-20T21:15:00Z", results[0][1])
+        self.assertIn("absolute civil-hand angle", results[0][1])
+        self.assertIn("bracketed within 10s, not resolved", results[0][1])
+        self.assertEqual(send.call_count, 5)
+
+    def test_expected_rollover_angles_are_the_absolute_civil_angles(self) -> None:
+        """The four Europe/Prague probe instants map to the absolute civil-hand angles 168.75 to 191.25°."""
+        zone = ZoneInfo("Europe/Prague")
+        instants = qualification.rollover_instants(zone)
+        expected = qualification.expected_rollover_angles_deg(zone, instants)
+        wants = [168.75, 179.958333, 180.041667, 191.25]
+        for value, want in zip(expected, wants, strict=True):
+            self.assertAlmostEqual(value, want, places=4)
+        # The expected angles depend on the zone: interpreting the same instants in another zone
+        # shifts them, so a probe that resolved the wrong zone lands far outside the tolerance.
+        tokyo = qualification.expected_rollover_angles_deg(ZoneInfo("Asia/Tokyo"), instants)
+        self.assertNotEqual([round(value, 3) for value in expected], [round(value, 3) for value in tokyo])
+
+    def test_evaluate_rollover_flags_a_hand_that_jumps_backwards(self) -> None:
+        """A backward step across a discriminable gap is reported even though residuals also fail."""
+        zone = ZoneInfo("Europe/Prague")
+        instants = qualification.rollover_instants(zone)
+        measured = [168.75, 179.958, 180.042, 180.0]
+        _, _, problems = qualification.evaluate_rollover(zone, instants, measured, "Europe/Prague")
+        self.assertTrue(any("did not advance monotonically" in problem for problem in problems))
+
+    def test_evaluate_rollover_accepts_the_exact_tolerance_boundary(self) -> None:
+        """A residual of exactly the 0.5° tolerance passes, matching the time-travel boundary."""
+        zone = ZoneInfo("Europe/Prague")
+        instants = qualification.rollover_instants(zone)
+        measured = [168.75, 179.958, 180.042, 191.75]
+        _, residuals, problems = qualification.evaluate_rollover(zone, instants, measured, "Europe/Prague")
+        self.assertAlmostEqual(residuals[-1], 0.5)
+        self.assertEqual(problems, [])
+
+    @patch.object(qualification, "ensure_screen_on", return_value=True)
+    @patch.object(device_layer, "read_saved_site_zone_id", return_value="Europe/Prague")
+    @patch.object(device_layer, "detect_hand_angle", side_effect=[198.75, 209.958, 210.042, 221.25])
+    @patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16)))
+    @patch.object(device_layer, "send_debug_clock_broadcast", return_value=True)
+    @patch.object(qualification.time, "sleep")
+    def test_midnight_rollover_rejects_a_constant_angular_shift(
+        self,
+        _sleep: MagicMock,
+        _send: MagicMock,
+        _capture: MagicMock,
+        _angle: MagicMock,
+        _zone: MagicMock,
+        _ensure: MagicMock,
+    ) -> None:
+        """The relative check accepted a fixed +30° error on every sample; the absolute one rejects it."""
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            qualification.phase_midnight_rollover(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(results, [])
+        self.assertEqual(len(failures), 4)
+        for failure in failures:
+            self.assertIn("residual +30.000°", failure)
+            self.assertIn("exceeds the 0.5° tolerance", failure)
+
+    @patch.object(qualification, "ensure_screen_on", return_value=True)
+    @patch.object(device_layer, "read_device_timezone")
+    @patch.object(
+        device_layer,
+        "read_saved_site_zone_id",
+        side_effect=device_layer.ProbeError("saved-site prefs probe failed: package not debuggable"),
+    )
+    @patch.object(device_layer, "send_debug_clock_broadcast")
+    @patch.object(device_layer, "capture_frame")
+    @patch.object(qualification.time, "sleep")
+    def test_midnight_rollover_fails_loudly_when_the_saved_site_probe_fails(
+        self,
+        _sleep: MagicMock,
+        capture: MagicMock,
+        send: MagicMock,
+        _saved: MagicMock,
+        device_zone: MagicMock,
+        _ensure: MagicMock,
+    ) -> None:
+        """A failed saved-site read must fail the phase, not fall back to the device timezone."""
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            qualification.phase_midnight_rollover(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(results, [])
+        self.assertEqual(len(failures), 1)
+        self.assertIn("the saved-site preference probe failed", failures[0])
+        self.assertIn("package not debuggable", failures[0])
+        device_zone.assert_not_called()
+        send.assert_not_called()
+        capture.assert_not_called()
+
+    @patch.object(qualification, "ensure_screen_on", return_value=True)
+    @patch.object(device_layer, "read_device_timezone", return_value="Europe/Prague")
+    @patch.object(device_layer, "read_saved_site_zone_id", return_value=None)
+    @patch.object(device_layer, "detect_hand_angle", side_effect=[168.75, 179.958, 180.042, 191.25])
+    @patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16)))
+    @patch.object(device_layer, "send_debug_clock_broadcast", return_value=True)
+    @patch.object(qualification.time, "sleep")
+    def test_midnight_rollover_falls_back_to_the_device_timezone(
+        self,
+        _sleep: MagicMock,
+        _send: MagicMock,
+        _capture: MagicMock,
+        _angle: MagicMock,
+        _saved: MagicMock,
+        _device_zone: MagicMock,
+        _ensure: MagicMock,
+    ) -> None:
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            qualification.phase_midnight_rollover(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(failures, [])
+        self.assertEqual(len(results), 1)
+        self.assertIn("device timezone", results[0][1])
+        self.assertIn("Europe/Prague", results[0][1])
+
+    @patch.object(qualification, "ensure_screen_on", return_value=True)
+    @patch.object(device_layer, "read_device_timezone", return_value=None)
+    @patch.object(device_layer, "read_saved_site_zone_id", return_value=None)
+    @patch.object(device_layer, "send_debug_clock_broadcast")
+    @patch.object(device_layer, "capture_frame")
+    @patch.object(qualification.time, "sleep")
+    def test_midnight_rollover_fails_without_a_readable_zone(
+        self,
+        _sleep: MagicMock,
+        capture: MagicMock,
+        send: MagicMock,
+        _saved: MagicMock,
+        _device_zone: MagicMock,
+        _ensure: MagicMock,
+    ) -> None:
+        """An unresolvable zone must fail loudly rather than pass without verifying anything."""
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            qualification.phase_midnight_rollover(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(
+            failures,
+            [
+                (
+                    "Midnight rollover could not be verified: neither the saved site zone nor the device "
+                    "timezone was readable"
+                )
+            ],
+        )
+        self.assertEqual(results, [])
+        send.assert_not_called()
+        capture.assert_not_called()
+
+    @patch.object(qualification, "ensure_screen_on", return_value=True)
+    @patch.object(device_layer, "read_device_timezone", return_value=None)
+    @patch.object(device_layer, "read_saved_site_zone_id", return_value="Invalid/Zone")
+    @patch.object(device_layer, "send_debug_clock_broadcast")
+    @patch.object(device_layer, "capture_frame")
+    @patch.object(qualification.time, "sleep")
+    def test_midnight_rollover_fails_on_an_unrecognized_zone(
+        self,
+        _sleep: MagicMock,
+        capture: MagicMock,
+        send: MagicMock,
+        _saved: MagicMock,
+        _device_zone: MagicMock,
+        _ensure: MagicMock,
+    ) -> None:
+        """A zone the harness cannot build fails loudly; it must not probe the device zone instead."""
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            qualification.phase_midnight_rollover(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(
+            failures,
+            [
+                (
+                    "Midnight rollover could not be verified: the rendered zone 'Invalid/Zone' (saved site) "
+                    "does not resolve to a timezone this harness can construct"
+                )
+            ],
+        )
+        self.assertEqual(results, [])
+        send.assert_not_called()
+        capture.assert_not_called()
+
+    @patch.object(qualification, "ensure_screen_on", return_value=True)
+    @patch.object(device_layer, "read_saved_site_zone_id", return_value="Europe/Prague")
+    @patch.object(device_layer, "detect_hand_angle", side_effect=[168.75, 179.958, 180.042, 180.042])
+    @patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16)))
+    @patch.object(device_layer, "send_debug_clock_broadcast", return_value=True)
+    @patch.object(qualification.time, "sleep")
+    def test_midnight_rollover_fails_when_the_hand_is_frozen(
+        self,
+        _sleep: MagicMock,
+        _send: MagicMock,
+        _capture: MagicMock,
+        _angle: MagicMock,
+        _zone: MagicMock,
+        _ensure: MagicMock,
+    ) -> None:
+        """A hand frozen through midnight advances 0°, so the residuals must reject it."""
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            qualification.phase_midnight_rollover(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(results, [])
+        self.assertNotEqual(failures, [])
+        self.assertTrue(all("exceeds the 0.5° tolerance" in failure for failure in failures))
+
+    @patch.object(qualification, "ensure_screen_on", return_value=True)
+    @patch.object(device_layer, "read_saved_site_zone_id", return_value="Europe/Prague")
+    @patch.object(device_layer, "detect_hand_angle", side_effect=[168.75, 179.958, 180.042, 195.0])
+    @patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16)))
+    @patch.object(device_layer, "send_debug_clock_broadcast", return_value=True)
+    @patch.object(qualification.time, "sleep")
+    def test_midnight_rollover_fails_when_a_sample_residual_exceeds_tolerance(
+        self,
+        _sleep: MagicMock,
+        _send: MagicMock,
+        _capture: MagicMock,
+        _angle: MagicMock,
+        _zone: MagicMock,
+        _ensure: MagicMock,
+    ) -> None:
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            qualification.phase_midnight_rollover(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("2026-06-20T22:45:00Z", failures[0])
+        self.assertIn("residual +3.750°", failures[0])
+        self.assertEqual(results, [])
+
+    @patch.object(qualification, "ensure_screen_on", return_value=True)
+    @patch.object(device_layer, "read_saved_site_zone_id", return_value="Europe/Prague")
+    @patch.object(device_layer, "detect_hand_angle", side_effect=[168.75, 168.75, 168.75, 168.75])
+    @patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16)))
+    @patch.object(device_layer, "send_debug_clock_broadcast", return_value=True)
+    @patch.object(qualification.time, "sleep")
+    def test_midnight_rollover_fails_when_every_sample_is_frozen(
+        self,
+        _sleep: MagicMock,
+        _send: MagicMock,
+        _capture: MagicMock,
+        _angle: MagicMock,
+        _zone: MagicMock,
+        _ensure: MagicMock,
+    ) -> None:
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            qualification.phase_midnight_rollover(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(results, [])
+        self.assertEqual(len(failures), 3)
+
+    @patch.object(qualification, "ensure_screen_on", return_value=True)
+    @patch.object(device_layer, "read_saved_site_zone_id", return_value="Europe/Prague")
+    @patch.object(device_layer, "detect_hand_angle")
+    @patch.object(device_layer, "capture_frame")
+    @patch.object(device_layer, "send_debug_clock_broadcast", return_value=False)
+    @patch.object(qualification.time, "sleep")
+    def test_midnight_rollover_skips_when_instant_broadcast_fails(
+        self,
+        _sleep: MagicMock,
+        _send: MagicMock,
+        capture: MagicMock,
+        angle: MagicMock,
+        _zone: MagicMock,
+        _ensure: MagicMock,
+    ) -> None:
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            qualification.phase_midnight_rollover(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("was not confirmed or hand not detected", failures[0])
+        self.assertEqual(results, [])
+        capture.assert_not_called()
+        angle.assert_not_called()
+
+    def test_midnight_rollover_skips_when_screen_not_confirmed(self) -> None:
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with (
+            patch.object(qualification, "ensure_screen_on", return_value=False),
+            patch.object(device_layer, "send_debug_clock_broadcast") as broadcast,
+            patch.object(device_layer, "capture_frame") as capture,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            qualification.phase_midnight_rollover(device_layer.AdbDevice("device"), results, failures)
+        broadcast.assert_not_called()
+        capture.assert_not_called()
+        self.assertEqual(results, [])
+
     @patch.object(device_layer, "run_adb", return_value=b"--------- beginning of main\nW/DialRenderer: failed draw\n")
     def test_a_matching_warning_record_fails_the_log_scan(self, _run_adb: MagicMock) -> None:
         results: list[tuple[str, str]] = []
@@ -1138,6 +1704,9 @@ class PhasePrerequisiteTest(unittest.TestCase):
             patch.object(device_layer, "sleep_screen", return_value=True),
             patch.object(device_layer, "read_screen_on", return_value=False) as read_screen,
             patch.object(device_layer, "read_wallpaper_visible", return_value=None),
+            patch.object(device_layer, "get_wallpaper_pid", return_value=123),
+            patch.object(device_layer, "read_process_cpu_ticks", return_value=100),
+            patch.object(device_layer, "read_process_cpu_clock_ticks", return_value=100),
             patch.object(device_layer, "wake_screen", return_value=False) as wake,
             patch.object(device_layer.AdbDevice, "dismiss_keyguard") as dismiss,
             patch.object(device_layer.AdbDevice, "show_home") as home,
@@ -1146,7 +1715,7 @@ class PhasePrerequisiteTest(unittest.TestCase):
             contextlib.redirect_stdout(io.StringIO()),
         ):
             qualification.phase_screen_off_wake(device_layer.AdbDevice("device"), results, failures)
-        read_screen.assert_called_once_with("device")
+        self.assertEqual(read_screen.call_count, 2)
         wake.assert_called_once_with("device")
         dismiss.assert_not_called()
         home.assert_not_called()
@@ -1167,8 +1736,12 @@ class PhasePrerequisiteTest(unittest.TestCase):
             with (
                 self.subTest(visible=visible),
                 patch.object(device_layer, "sleep_screen", return_value=True),
-                patch.object(device_layer, "read_screen_on", side_effect=[False, True]),
+                patch.object(device_layer, "read_screen_on", side_effect=[False, False, True]),
                 patch.object(device_layer, "read_wallpaper_visible", return_value=visible),
+                patch.object(device_layer, "get_wallpaper_pid", return_value=123),
+                patch.object(device_layer, "read_process_cpu_ticks", side_effect=[100, 100]),
+                patch.object(device_layer, "read_process_cpu_clock_ticks", return_value=100),
+                patch.object(qualification.time, "monotonic", side_effect=[10.0, 14.0]),
                 patch.object(device_layer, "wake_screen", return_value=True) as wake,
                 patch.object(device_layer.AdbDevice, "dismiss_keyguard") as dismiss,
                 patch.object(device_layer.AdbDevice, "show_home") as home,
@@ -1190,12 +1763,252 @@ class PhasePrerequisiteTest(unittest.TestCase):
             self.assertEqual(len(results), 1)
             self.assertEqual(results[0][0], "screen-off / wake navigation")
             self.assertIn(diagnostic, results[0][1])
-            self.assertIn("rendering while asleep was not measured", results[0][1])
+            self.assertIn("0 CPU ticks over the measured 4.00s screen-off window at 100 ticks/s", results[0][1])
+            self.assertIn("<0.010s CPU", results[0][1])
+            self.assertIn("budget 0.05s", results[0][1])
             self.assertIn("hand detected after wake at 123.456°", results[0][1])
-            self.assertIn("screen off after the 4s sleep interval", results[0][1])
-            for unsupported in ("halted", "within 1s", "off for 4s"):
+            for unsupported in ("0.0%", "dormancy", "halted", "within 1s", "off for 4s", "sleep interval"):
                 self.assertNotIn(unsupported, results[0][1])
                 self.assertNotIn(unsupported, output.getvalue())
+
+    def test_screen_off_wake_reports_a_measured_cpu_time_for_a_nonzero_sample(self) -> None:
+        """A nonzero sample inside the budget is reported as measured CPU time, never a bare rate."""
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with (
+            patch.object(device_layer, "sleep_screen", return_value=True),
+            patch.object(device_layer, "read_screen_on", side_effect=[False, False, True]),
+            patch.object(device_layer, "read_wallpaper_visible", return_value=False),
+            patch.object(device_layer, "get_wallpaper_pid", return_value=123),
+            patch.object(device_layer, "read_process_cpu_ticks", side_effect=[100, 105]),
+            patch.object(device_layer, "read_process_cpu_clock_ticks", return_value=100),
+            patch.object(qualification.time, "monotonic", side_effect=[10.0, 14.2]),
+            patch.object(device_layer, "wake_screen", return_value=True),
+            patch.object(device_layer.AdbDevice, "dismiss_keyguard"),
+            patch.object(device_layer.AdbDevice, "show_home"),
+            patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))),
+            patch.object(device_layer, "detect_hand_angle", return_value=123.456),
+            patch.object(qualification.time, "sleep"),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            qualification.phase_screen_off_wake(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(failures, [])
+        self.assertEqual(len(results), 1)
+        self.assertIn("5 CPU ticks over the measured 4.20s screen-off window at 100 ticks/s", results[0][1])
+        self.assertIn("0.050s CPU", results[0][1])
+
+    def test_screen_off_wake_fails_when_cpu_ticks_cannot_be_read(self) -> None:
+        """When CPU ticks cannot be read during screen-off, the phase must append a failure."""
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with (
+            patch.object(device_layer, "sleep_screen", return_value=True),
+            patch.object(device_layer, "read_screen_on", side_effect=[False, False, True]),
+            patch.object(device_layer, "read_wallpaper_visible", return_value=False),
+            patch.object(device_layer, "get_wallpaper_pid", return_value=123),
+            patch.object(device_layer, "read_process_cpu_ticks", return_value=None),
+            patch.object(device_layer, "read_process_cpu_clock_ticks", return_value=100),
+            patch.object(qualification.time, "monotonic", side_effect=[10.0, 14.0]),
+            patch.object(device_layer, "wake_screen", return_value=True),
+            patch.object(device_layer.AdbDevice, "dismiss_keyguard"),
+            patch.object(device_layer.AdbDevice, "show_home"),
+            patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))),
+            patch.object(device_layer, "detect_hand_angle", return_value=123.456),
+            patch.object(qualification.time, "sleep"),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            qualification.phase_screen_off_wake(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(failures, ["Failed to sample wallpaper CPU ticks during confirmed screen-off state"])
+        self.assertEqual(len(results), 1)
+        self.assertIn("rendering while asleep was not measured", results[0][1])
+
+    def test_screen_off_wake_fails_when_cpu_ticks_exceed_the_seconds_budget(self) -> None:
+        """Six ticks at 100 Hz is 0.060 s, over the 0.050 s budget, so the phase must fail."""
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with (
+            patch.object(device_layer, "sleep_screen", return_value=True),
+            patch.object(device_layer, "read_screen_on", side_effect=[False, False, True]),
+            patch.object(device_layer, "read_wallpaper_visible", return_value=False),
+            patch.object(device_layer, "get_wallpaper_pid", return_value=123),
+            patch.object(device_layer, "read_process_cpu_ticks", side_effect=[100, 106]),
+            patch.object(device_layer, "read_process_cpu_clock_ticks", return_value=100),
+            patch.object(qualification.time, "monotonic", side_effect=[10.0, 14.0]),
+            patch.object(device_layer, "wake_screen", return_value=True),
+            patch.object(device_layer.AdbDevice, "dismiss_keyguard"),
+            patch.object(device_layer.AdbDevice, "show_home"),
+            patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))),
+            patch.object(device_layer, "detect_hand_angle", return_value=123.456),
+            patch.object(qualification.time, "sleep"),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            qualification.phase_screen_off_wake(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(
+            failures,
+            [
+                (
+                    "Wallpaper process used 0.060s CPU while screen off "
+                    "(6 ticks over the measured 4.00s window at 100 ticks/s); budget 0.05s"
+                )
+            ],
+        )
+        self.assertEqual(len(results), 1)
+
+    def test_screen_off_wake_fails_when_the_clock_tick_rate_is_unreadable(self) -> None:
+        """Without CLK_TCK the tick count has no CPU-time meaning, so the phase must fail."""
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with (
+            patch.object(device_layer, "sleep_screen", return_value=True),
+            patch.object(device_layer, "read_screen_on", side_effect=[False, False, True]),
+            patch.object(device_layer, "read_wallpaper_visible", return_value=False),
+            patch.object(device_layer, "get_wallpaper_pid", return_value=123),
+            patch.object(device_layer, "read_process_cpu_ticks", side_effect=[100, 100]),
+            patch.object(device_layer, "read_process_cpu_clock_ticks", return_value=None),
+            patch.object(qualification.time, "monotonic", side_effect=[10.0, 14.0]),
+            patch.object(device_layer, "wake_screen", return_value=True),
+            patch.object(device_layer.AdbDevice, "dismiss_keyguard"),
+            patch.object(device_layer.AdbDevice, "show_home"),
+            patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))),
+            patch.object(device_layer, "detect_hand_angle", return_value=123.456),
+            patch.object(qualification.time, "sleep"),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            qualification.phase_screen_off_wake(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(
+            failures,
+            ["Could not read the device clock-tick rate (getconf CLK_TCK); CPU time is unbounded"],
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("rendering while asleep was not measured", results[0][1])
+
+    def test_screen_off_wake_fails_when_cpu_ticks_go_backward(self) -> None:
+        """If CPU tick counter decreases, it indicates PID recycling or stat corruption."""
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with (
+            patch.object(device_layer, "sleep_screen", return_value=True),
+            patch.object(device_layer, "read_screen_on", side_effect=[False, False, True]),
+            patch.object(device_layer, "read_wallpaper_visible", return_value=False),
+            patch.object(device_layer, "get_wallpaper_pid", return_value=123),
+            patch.object(device_layer, "read_process_cpu_ticks", side_effect=[100, 90]),
+            patch.object(device_layer, "read_process_cpu_clock_ticks", return_value=100),
+            patch.object(qualification.time, "monotonic", side_effect=[10.0, 14.0]),
+            patch.object(device_layer, "wake_screen", return_value=True),
+            patch.object(device_layer.AdbDevice, "dismiss_keyguard"),
+            patch.object(device_layer.AdbDevice, "show_home"),
+            patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))),
+            patch.object(device_layer, "detect_hand_angle", return_value=123.456),
+            patch.object(qualification.time, "sleep"),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            qualification.phase_screen_off_wake(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(failures, ["CPU ticks went backward during screen-off: 100 -> 90"])
+        self.assertEqual(len(results), 1)
+
+    def test_screen_off_wake_fails_when_the_screen_wakes_mid_window(self) -> None:
+        """A display that turns on inside the sample window voids the quiescence claim."""
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with (
+            patch.object(device_layer, "sleep_screen", return_value=True),
+            patch.object(device_layer, "read_screen_on", side_effect=[False, True, True]),
+            patch.object(device_layer, "read_wallpaper_visible", return_value=False),
+            patch.object(device_layer, "get_wallpaper_pid", return_value=123),
+            patch.object(device_layer, "read_process_cpu_ticks", side_effect=[100, 100]),
+            patch.object(device_layer, "read_process_cpu_clock_ticks", return_value=100),
+            patch.object(qualification.time, "monotonic", side_effect=[10.0, 14.0]),
+            patch.object(device_layer, "wake_screen", return_value=True),
+            patch.object(device_layer.AdbDevice, "dismiss_keyguard"),
+            patch.object(device_layer.AdbDevice, "show_home"),
+            patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))),
+            patch.object(device_layer, "detect_hand_angle", return_value=123.456),
+            patch.object(qualification.time, "sleep"),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            qualification.phase_screen_off_wake(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(failures, ["Display was not confirmed off at the end of the CPU sample window"])
+        self.assertEqual(len(results), 1)
+
+    def test_screen_off_wake_fails_when_the_process_changes_mid_window(self) -> None:
+        """A PID that rebounds by the window's end means the closing ticks belong to another process."""
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with (
+            patch.object(device_layer, "sleep_screen", return_value=True),
+            patch.object(device_layer, "read_screen_on", side_effect=[False, False, True]),
+            patch.object(device_layer, "read_wallpaper_visible", return_value=False),
+            patch.object(device_layer, "get_wallpaper_pid", side_effect=[123, 123, 124]),
+            patch.object(device_layer, "read_process_cpu_ticks", side_effect=[100, 100]),
+            patch.object(device_layer, "read_process_cpu_clock_ticks", return_value=100),
+            patch.object(qualification.time, "monotonic", side_effect=[10.0, 14.0]),
+            patch.object(device_layer, "wake_screen", return_value=True),
+            patch.object(device_layer.AdbDevice, "dismiss_keyguard"),
+            patch.object(device_layer.AdbDevice, "show_home"),
+            patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))),
+            patch.object(device_layer, "detect_hand_angle", return_value=123.456),
+            patch.object(qualification.time, "sleep"),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            qualification.phase_screen_off_wake(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(
+            failures,
+            [
+                (
+                    "Wallpaper PID was not confirmed unchanged across the CPU sample window "
+                    "(before=123, after=124); the CPU sample is not attributable"
+                )
+            ],
+        )
+        self.assertEqual(len(results), 1)
+
+    def test_screen_off_wake_fails_when_the_process_changes_across_the_sleep_transition(self) -> None:
+        """A rebound between the two settling reads is rejected before the window even opens."""
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with (
+            patch.object(device_layer, "sleep_screen", return_value=True),
+            patch.object(device_layer, "read_screen_on", side_effect=[False, False, True]),
+            patch.object(device_layer, "read_wallpaper_visible", return_value=False),
+            patch.object(device_layer, "get_wallpaper_pid", side_effect=[123, 124, 124]),
+            patch.object(device_layer, "read_process_cpu_ticks", side_effect=[100, 100]),
+            patch.object(device_layer, "read_process_cpu_clock_ticks", return_value=100),
+            patch.object(qualification.time, "monotonic", side_effect=[10.0, 14.0]),
+            patch.object(device_layer, "wake_screen", return_value=True),
+            patch.object(device_layer.AdbDevice, "dismiss_keyguard"),
+            patch.object(device_layer.AdbDevice, "show_home"),
+            patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))),
+            patch.object(device_layer, "detect_hand_angle", return_value=123.456),
+            patch.object(qualification.time, "sleep"),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            qualification.phase_screen_off_wake(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(
+            failures,
+            [
+                (
+                    "Wallpaper PID was not confirmed unchanged across the screen-off transition "
+                    "(before=123, after=124); the CPU sample is not attributable"
+                )
+            ],
+        )
+        self.assertEqual(len(results), 1)
+
+    def test_screen_off_wake_fails_when_screen_not_confirmed_off(self) -> None:
+        """If the screen never turns off after sleep command, the phase must fail and halt."""
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with (
+            patch.object(device_layer, "sleep_screen", return_value=True),
+            patch.object(device_layer, "read_screen_on", return_value=True),
+            patch.object(device_layer, "wake_screen") as wake,
+            patch.object(qualification.time, "sleep"),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            qualification.phase_screen_off_wake(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(failures, ["Display was not confirmed off after sleep request"])
+        self.assertEqual(results, [])
+        wake.assert_not_called()
 
     def test_visible_while_off_failure_survives_wake_recovery_and_cleanup(self) -> None:
         """The violation fails the run even after recovery or a later wake failure."""
@@ -1220,14 +2033,19 @@ class PhasePrerequisiteTest(unittest.TestCase):
                     "phase_surface_recreation",
                     "phase_process_rebind",
                     "phase_time_travel",
+                    "phase_midnight_rollover",
                     "phase_total_pss_growth",
                 ):
                     stack.enter_context(patch.object(qualification, phase))
                 stack.enter_context(patch.object(device_layer, "sleep_screen", return_value=True))
-                stack.enter_context(patch.object(device_layer, "read_screen_on", side_effect=[False, True]))
+                stack.enter_context(patch.object(device_layer, "read_screen_on", side_effect=[False, False, True]))
                 stack.enter_context(
                     patch.object(device_layer, "run_adb", return_value=b"mVisible=false\nmVisible=true")
                 )
+                stack.enter_context(patch.object(device_layer, "get_wallpaper_pid", return_value=123))
+                stack.enter_context(patch.object(device_layer, "read_process_cpu_ticks", side_effect=[100, 100]))
+                stack.enter_context(patch.object(device_layer, "read_process_cpu_clock_ticks", return_value=100))
+                stack.enter_context(patch.object(qualification.time, "monotonic", side_effect=[10.0, 14.0]))
                 wake = stack.enter_context(
                     patch.object(device_layer, "wake_screen", return_value=wake_ok, side_effect=wake_error)
                 )
@@ -1348,6 +2166,7 @@ class PhasePrerequisiteTest(unittest.TestCase):
                 "phase_preview_navigation",
                 "phase_process_rebind",
                 "phase_time_travel",
+                "phase_midnight_rollover",
                 "phase_total_pss_growth",
             ):
                 stack.enter_context(patch.object(module, phase))
