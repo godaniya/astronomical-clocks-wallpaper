@@ -32,6 +32,11 @@ graph TD
 
 ---
 
+## Installation
+
+- [Installation and upgrades](installation.md): Development APKs available now;
+  future published-release setup, checksums, certificate trust, and Obtainium.
+
 ## 1. Product & Architecture
 
 Documents defining the product contract, requirements, and domain invariants:
@@ -60,6 +65,8 @@ Environment configuration, pinned toolchain versions, and dependency governance:
 
 - [**Development Setup, Checking Policy & Artifacts**](development.md) (`development.md`):
   Pinned toolchain (JDK, Gradle, AGP, Kotlin, Android SDK), strict checking policy (`allWarningsAsErrors = true`, detekt, ktlint, Android Lint), justified rule exceptions, and APK verification.
+- [Release preparation and owner publication](releasing.md): Protected signing,
+  private backup, drafts, and qualification before publication.
 - [**Dependency Hygiene, Licenses & Provenance**](dependencies.md) (`dependencies.md`):
   Complete provenance and licensing records for external dependencies (Astronomy Engine), license compatibility requirements, and dependency hygiene rules.
 

@@ -1,109 +1,85 @@
-# Installation and Upgrades
+# Installation and upgrades
 
-Astronomical Clock Wallpaper is an independent, 100% offline Android live wallpaper. It requests no internet permissions (`android.permission.INTERNET` is not included in the application manifest) and contains zero third-party telemetry, trackers, or advertising SDKs.
+## Available now: development APKs
 
-This guide outlines recommended installation and upgrade procedures across supported channels.
+No public GitHub Releases exist yet. Release tooling creates private drafts for owner
+qualification and publication; ordinary Obtainium users cannot see or install drafts.
+This preparation does not complete [#6](https://github.com/godaniya/astronomical-clocks-wallpaper/issues/6),
+[#7](https://github.com/godaniya/astronomical-clocks-wallpaper/issues/7), or
+[#71](https://github.com/godaniya/astronomical-clocks-wallpaper/issues/71).
 
----
-
-## Supported Methods
-
-| Method | Best For | Automatic Updates | Store Intermediary |
-| :--- | :--- | :--- | :--- |
-| **[Obtainium](#method-1-obtainium-recommended)** | Friends, testers, and power users | Yes (background check & one-tap) | None (Direct from GitHub) |
-| **[Direct APK](#method-2-direct-apk-download)** | One-off manual installation | No (manual download) | None (Direct from GitHub) |
-| **[ADB](#method-3-developer-installation-adb)** | Developers and local testing | Via CLI | None (Local host) |
-
----
-
-## Method 1: Obtainium (Recommended)
-
-[Obtainium](https://obtainium.imranr.dev/) is an open-source, privacy-respecting Android application manager that allows you to install and update apps directly from their release source (GitHub Releases) without third-party app stores or account registration.
-
-### One-Click Setup
-
-If you already have Obtainium installed on your Android device:
-
-[![Add to Obtainium](https://raw.githubusercontent.com/ImranR98/Obtainium/main/assets/graphics/badge_small.png)](obtainium://app/add/https://github.com/godaniya/astronomical-clocks-wallpaper)
-
-Or tap this link on your device:  
-👉 [`obtainium://app/add/https://github.com/godaniya/astronomical-clocks-wallpaper`](obtainium://app/add/https://github.com/godaniya/astronomical-clocks-wallpaper)
-
-### Step-by-Step Instructions
-
-1. **Install Obtainium**: Download and install Obtainium on your Android phone from [obtainium.imranr.dev](https://obtainium.imranr.dev/) or [GitHub](https://github.com/ImranR98/Obtainium/releases/latest).
-2. **Add Repository**:
-   - Tap the **Add to Obtainium** button above in your mobile browser, **or**:
-   - Open Obtainium, tap **Add App**, and paste the repository URL:
-     ```
-     https://github.com/godaniya/astronomical-clocks-wallpaper
-     ```
-3. **Prerelease Configuration**:
-   - Milestone releases prior to v1.0 are flagged as pre-releases on GitHub.
-   - In the app configuration screen, enable **Include Prereleases**.
-4. **Install**:
-   - Tap **Add**. Obtainium will query the repository, fetch the latest signed release APK, and prompt you to install.
-   - Future updates will be checked automatically in the background according to your Obtainium schedule.
-
----
-
-## Method 2: Direct APK Download
-
-You can download and install signed release APKs directly from GitHub Releases.
-
-1. Open the [GitHub Releases page](https://github.com/godaniya/astronomical-clocks-wallpaper/releases).
-2. Under the latest release, download the release APK:
-   `AstronomicalClocksWallpaper-vX.Y.Z.apk`
-3. *(Optional but recommended)* Download `AstronomicalClocksWallpaper-vX.Y.Z-sha256sums.txt` and verify the cryptographic checksum:
-   ```sh
-   shasum -a 256 -c AstronomicalClocksWallpaper-vX.Y.Z-sha256sums.txt
-   ```
-4. On your Android device, open the downloaded file and confirm installation when prompted by Android's package installer. If prompted, allow your browser or file manager permission to *"Install unknown apps"*.
-
----
-
-## Method 3: Developer Installation (ADB)
-
-For developers connected to an Android device or emulator via `adb`:
+Download `debug-apk-<source revision>` from a successful
+[Android quality gate run](https://github.com/godaniya/astronomical-clocks-wallpaper/actions/workflows/build.yml)
+(GitHub sign-in may be required), extract `app-debug.apk`, or
+[build locally](development.md#local-setup). Install it through Android's package
+installer, allowing **Install unknown apps** for the source app when prompted, or:
 
 ```sh
-adb install -r AstronomicalClocksWallpaper-vX.Y.Z.apk
+adb install -r app-debug.apk
 ```
 
-To set the wallpaper active and open its configuration:
+Open **Astro Clocks**, set the observing site, and tap **Open wallpaper preview**.
+Follow [device installation and launch](device-testing.md#install-and-launch).
+Debug keys are disposable: an update signed by a different debug key may require
+uninstalling the old debug app, which removes its settings.
+
+## After owner publication: Obtainium
+
+[Obtainium](https://obtainium.imranr.dev/) tracks published release assets directly
+from their source. This setup becomes usable only after an owner publishes a qualified
+release with its APK. It has not been tested for this application.
+
+1. Install Obtainium using its official instructions.
+2. Open **Add App** and paste
+   `https://github.com/godaniya/astronomical-clocks-wallpaper`.
+3. Enable **Include prereleases** for `v0.*` milestones and suffixed versions such as
+   `v1.0.0-beta.1`; this workflow marks those releases as prereleases.
+4. Add the app and follow Obtainium's installation prompt.
+
+On a device with Obtainium installed, the documented shortcut is
+[Add this repository](obtainium://add/https://github.com/godaniya/astronomical-clocks-wallpaper).
+See [Obtainium's URL documentation](https://wiki.obtainium.imranr.dev/deep_links/).
+Scheduled background checks and update notifications do not guarantee unattended
+installation. Installation behavior depends on Android, installer permissions, and
+Obtainium settings; follow its prompts.
+
+## After owner publication: direct download and verification
+
+From the [Releases page](https://github.com/godaniya/astronomical-clocks-wallpaper/releases),
+download the matching three assets (replace `X.Y.Z` with the full version):
+
+- `AstronomicalClocksWallpaper-vX.Y.Z.apk`
+- `AstronomicalClocksWallpaper-vX.Y.Z-sha256sums.txt`
+- `AstronomicalClocksWallpaper-vX.Y.Z-signing-cert-sha256.txt`
+
+In the download directory:
+
 ```sh
-adb shell am start -a android.service.wallpaper.LIVE_WALLPAPER_CHOOSER
+shasum -a 256 -c AstronomicalClocksWallpaper-vX.Y.Z-sha256sums.txt
+"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs \
+  AstronomicalClocksWallpaper-vX.Y.Z.apk
 ```
 
----
+Compare the reported signer certificate SHA-256 with a previously trusted owner
+fingerprint and the certificate asset. The checksum detects changes to APK bytes;
+a checksum downloaded alongside an APK does not independently establish publisher
+identity. The certificate asset exposes key continuity, but initial trust requires
+an independently trusted fingerprint. Then install with Android's package installer
+or `adb install -r AstronomicalClocksWallpaper-vX.Y.Z.apk`.
 
-## Cryptographic Identity and Upgrade Guarantees
+## Identities and upgrades
 
-### Signature Continuity
-All official release APKs share the durable application ID:
-```
-io.github.godaniya.astronomicalclockswallpaper
-```
-Release builds are signed with a retained, durable release key. Android enforces cryptographic signature continuity during updates:
-* Installing an update with the same application ID and the same signing certificate preserves all saved user preferences, including observing location, custom coordinates, and dial layer choices.
-* Version codes (`versionCode`) monotonically increase across releases to ensure clean forward upgrades.
+Release uses `io.github.godaniya.astronomicalclockswallpaper`; debug uses
+`io.github.godaniya.astronomicalclockswallpaper.debug`. These are separate apps and
+can coexist. Installing release requires no debug uninstall and does not migrate
+debug preferences; configure the release app separately.
 
-### Debug vs. Release Builds
-Development and CI quality-gate builds use the distinct debug identity:
-```
-io.github.godaniya.astronomicalclockswallpaper.debug
-```
-Debug builds are signed with disposable debug keys and run with `debuggable = true`. Because debug and release builds use different cryptographic keys and distinct application IDs:
-* Debug and release variants can coexist on the same device as separate installations.
-* You cannot in-place upgrade a debug APK to a release APK (Android will report `INSTALL_FAILED_UPDATE_INCOMPATIBLE`). If migrating from a debug build, uninstall the debug app first.
+Android updates an existing release app when application ID and signing identity
+match and the version code permits the upgrade. Version codes must increase.
+Settings preservation still requires the actual same-key upgrade qualification in
+#7, including location, layers, size, position, and brightness; it is not established
+by successful signature verification alone.
 
----
-
-## Ecosystem Distribution Roadmap
-
-In accordance with [Issue #71](https://github.com/godaniya/astronomical-clocks-wallpaper/issues/71), the project evaluates privacy-focused and open-source distribution channels:
-
-* **Obtainium (Active)**: Fully supported via standardized GitHub Release artifacts and deep links.
-* **IzzyOnDroid (Planned)**: Tagged release APKs following standard SemVer and asset naming are staged for submission to the IzzyOnDroid F-Droid-compatible repository.
-* **F-Droid (Milestone Goal)**: Inclusion in the official F-Droid catalog from source builds is planned following physical-device hardware qualification ([Issue #8](https://github.com/godaniya/astronomical-clocks-wallpaper/issues/8)).
-* **Accrescent (Future Exploration)**: Under evaluation for zero-privilege, unattended atomic updates.
+Accrescent, IzzyOnDroid, F-Droid, and commercial channels remain evaluations governed
+by milestone qualification. No submissions, store support, or cross-store signing
+continuity are established by this PR.

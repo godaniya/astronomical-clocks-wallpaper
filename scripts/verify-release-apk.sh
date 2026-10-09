@@ -3,7 +3,11 @@
 set -euo pipefail
 : "${ANDROID_HOME:?Set ANDROID_HOME to your Android SDK directory}"
 
-apk=${1:-app/build/outputs/apk/release/app-release.apk}
+source scripts/release-common.sh
+validate_release_tag "${2:?Pass the release tag as argument 2}"
+require_release_tools
+require_release_certificate
+apk=${1:?Pass the signed APK as argument 1}
 mkdir -p build/reports
 
 if [[ ! -f "$apk" ]]; then
@@ -11,19 +15,9 @@ if [[ ! -f "$apk" ]]; then
   exit 1
 fi
 
-apkanalyzer="$ANDROID_HOME/cmdline-tools/23.0/bin/apkanalyzer"
-if [[ ! -x "$apkanalyzer" ]]; then
-  apkanalyzer=$(find "$ANDROID_HOME/cmdline-tools" -name apkanalyzer 2>/dev/null | head -n 1)
-fi
-
-if [[ -z "$apkanalyzer" || ! -x "$apkanalyzer" ]]; then
-  echo "ERROR: apkanalyzer not found or not executable under $ANDROID_HOME/cmdline-tools" >&2
-  exit 1
-fi
-
 "$apkanalyzer" manifest print "$apk" > build/reports/apk-release-manifest.xml
 
-python3 - "$apk" <<'PY'
+python3 - "$apk" "$release_version" "$release_code" <<'PY'
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -49,11 +43,8 @@ check(sdk is not None, 'missing uses-sdk element')
 check(sdk.get(android + 'minSdkVersion') == '26', 'minSdkVersion must be 26')
 check(sdk.get(android + 'targetSdkVersion') == '37', 'targetSdkVersion must be 37')
 
-version_name = manifest.get(android + 'versionName')
-check(
-    bool(version_name) and not version_name.endswith('-debug'),
-    f'release application must have a valid non-debug versionName (got {version_name})',
-)
+check(manifest.get(android + 'versionName') == sys.argv[2], 'release versionName mismatch')
+check(manifest.get(android + 'versionCode') == sys.argv[3], 'release versionCode mismatch')
 
 permission_names = [e.get(android + 'name') for e in manifest.iter() if e.tag.startswith('uses-permission')]
 check(
@@ -107,21 +98,24 @@ with ZipFile(sys.argv[1]) as archive:
 print('Release APK Astronomy Engine license verified against the bundled upstream notice.')
 PY
 
-apksigner="$ANDROID_HOME/build-tools/36.0.0/apksigner"
-if [[ ! -x "$apksigner" ]]; then
-  apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner 2>/dev/null | head -n 1)
-fi
-
-if [[ -z "$apksigner" || ! -x "$apksigner" ]]; then
-  echo "ERROR: apksigner not found or not executable under $ANDROID_HOME/build-tools" >&2
-  exit 1
-fi
-
 "$apksigner" verify --verbose --print-certs "$apk" | tee build/reports/apk-release-signature.txt
-if grep -Eq 'Signer #1 certificate DN: .*CN=Android Debug' build/reports/apk-release-signature.txt; then
-  echo "Verification failed: Release APK must not be signed with Android Debug certificate!" >&2
+signature=build/reports/apk-release-signature.txt
+if ! grep -Fxq 'Verified using v2 scheme (APK Signature Scheme v2): true' "$signature"; then
+  echo 'Verification failed: APK Signature Scheme v2 must be verified.' >&2
   exit 1
 fi
-
+if ! grep -Fxq 'Number of signers: 1' "$signature"; then
+  echo 'Verification failed: exactly one signer is required.' >&2
+  exit 1
+fi
+certificate=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$signature")
+if [[ "$certificate" != "$release_certificate" ]]; then
+  echo 'Verification failed: signing certificate does not match RELEASE_CERT_SHA256.' >&2
+  exit 1
+fi
+if grep -Eq 'Signer #1 certificate DN: .*CN=Android Debug' "$signature"; then
+  echo 'Verification failed: Android Debug signing identity.' >&2
+  exit 1
+fi
 shasum -a 256 "$apk" | tee build/reports/apk-release-sha256.txt
-echo "Release APK passed all verification checks successfully."
+echo 'Release APK passed all verification checks.'

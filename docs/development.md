@@ -295,17 +295,14 @@ The debug APK is `app/build/outputs/apk/debug/app-debug.apk`, with application I
 `io.github.godaniya.astronomicalclockswallpaper.debug`. `scripts/verify-apk.sh` checks its ID, SDK metadata,
 wallpaper declaration, that the only requested permission is `ACCESS_COARSE_LOCATION`, the debug flag
 and signature, and the complete bundled Astronomy Engine license, then records SHA-256.
-The stable release ID is `io.github.godaniya.astronomicalclockswallpaper`. Official release APKs
-are packaged using `scripts/package-release.sh` and verified with `scripts/verify-release-apk.sh`,
-which asserts the production application ID, `debuggable = false`, that no debug key signed the
-artifact, and that only coarse location permission and bundled licenses are present. Tagged release
-pushes (`v*`) automatically trigger `.github/workflows/release.yml` using GitHub Secrets,
-publishing signed artifacts to GitHub Releases with predictable filenames for Obtainium tracking
-and direct download (see [installation.md](installation.md)). Debug signing keys are disposable and
-local/CI APKs may require uninstalling the previous debug app.
+The stable release ID is `io.github.godaniya.astronomicalclockswallpaper`.
+Release builds are unsigned; [release preparation](releasing.md) describes the
+separate signing, verification, draft creation, qualification, and owner publication
+steps. No public releases exist yet. Debug signing keys are disposable and local/CI
+APKs may require uninstalling the previous debug app.
 
 GitHub Actions runs on pull requests and pushes to `main`. Actions use immutable commit references,
-and the jobs have only `contents: read`. The host checks and the Android build run as separate
+and these quality-gate jobs have only `contents: read`. The host checks and the Android build run as separate
 parallel jobs, so a failure in one does not withhold the other's artifacts and diagnostics. Open the
 **Android quality gate** run and download `debug-apk-<source revision>` or
 `check-reports-<source revision>`. The PR run checks GitHub's merge revision, recorded in the
