@@ -309,6 +309,11 @@ parallel jobs, so a failure in one does not withhold the other's artifacts and d
 artifact name and `toolchain.txt`. Check reports upload even on failure; the APK uploads only after a
 successful gate and APK verification. No release credentials are used.
 
+The release workflow's pinned-Temurin install block is repeated in three jobs, and the
+debug and release APK verifiers share near-identical metadata and license checks. Extracting
+a composite action and one parameterized verifier is a recorded follow-up, deferred so
+security-critical workflow changes stay reviewable one at a time.
+
 Install a downloaded debug APK with `adb install -r app-debug.apk`, open **Astro Clocks**, and
 tap **Open wallpaper preview**. See [device-testing.md](device-testing.md) for the physical-device
 procedure and [2026-09-28-feat-2-device-feasibility.md](testing/reports/2026-09-28-feat-2-device-feasibility.md) for the #2 acceptance results.

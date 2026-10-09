@@ -108,7 +108,7 @@ if ! grep -Fxq 'Number of signers: 1' "$signature"; then
   echo 'Verification failed: exactly one signer is required.' >&2
   exit 1
 fi
-certificate=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$signature")
+certificate=$(normalize_certificate_sha256 "$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$signature")")
 if [[ "$certificate" != "$release_certificate" ]]; then
   echo 'Verification failed: signing certificate does not match RELEASE_CERT_SHA256.' >&2
   exit 1

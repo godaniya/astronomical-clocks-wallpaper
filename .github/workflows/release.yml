@@ -33,6 +33,7 @@ jobs:
           set -euo pipefail
           source scripts/release-common.sh
           validate_release_tag "$RELEASE_TAG"
+          require_increasing_version_code "$release_code" "$(highest_prior_version_code "$RELEASE_TAG")"
           main_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
           git fetch --no-tags origin main
           git merge-base --is-ancestor HEAD "$main_sha"

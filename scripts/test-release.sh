@@ -44,6 +44,25 @@ scripts/package-release.sh v0.2.0 "$test_dir/signed.apk"
 (cd build/dist && shasum -a 256 -c AstronomicalClocksWallpaper-v0.2.0-sha256sums.txt)
 [[ $(cat build/dist/AstronomicalClocksWallpaper-v0.2.0-signing-cert-sha256.txt) == "$RELEASE_CERT_SHA256" ]]
 cmp "$test_dir/signed.apk" build/dist/AstronomicalClocksWallpaper-v0.2.0.apk
+# The shared fingerprint normalizer and the configured-fingerprint comparison
+# must accept colon-separated uppercase as well as contiguous lowercase form.
+[[ $(normalize_certificate_sha256 'AA:BB:CC:dd') == 'aabbccdd' ]]
+colon_certificate=$(printf '%s' "$RELEASE_CERT_SHA256" | sed 's/\(..\)/\1:/g; s/:$//' | tr '[:lower:]' '[:upper:]')
+env RELEASE_CERT_SHA256="$colon_certificate" scripts/verify-release-apk.sh "$test_dir/signed.apk" v0.2.0
+# A release versionCode must strictly exceed every other v* tag's declaration.
+require_increasing_version_code 2 1
+expect_failure 'versionCode equal to the highest released' require_increasing_version_code 2 2
+expect_failure 'lowered versionCode' require_increasing_version_code 2 3
+fixture="$test_dir/version-code-fixture"
+mkdir -p "$fixture/app"
+git -C "$fixture" init -q
+printf '    versionCode = 1\n' > "$fixture/app/build.gradle.kts"
+git -C "$fixture" add app/build.gradle.kts
+git -C "$fixture" -c commit.gpgsign=false -c user.name='Release Test' \
+  -c user.email='release-test@example.invalid' commit -q -m fixture
+git -C "$fixture" -c tag.gpgsign=false tag v0.1.0
+[[ $(cd "$fixture" && highest_prior_version_code v0.2.0) == 1 ]]
+[[ $(cd "$fixture" && highest_prior_version_code v0.1.0) == 0 ]]
 expect_failure 'unsigned APK' scripts/verify-release-apk.sh "$unsigned" v0.2.0
 expect_failure 'wrong certificate' env RELEASE_CERT_SHA256="$(printf '%064d' 0)" scripts/verify-release-apk.sh "$test_dir/signed.apk" v0.2.0
 expect_failure 'debug artifact' scripts/verify-release-apk.sh "$debug" v0.2.0
@@ -69,6 +88,13 @@ keytool -genkeypair -keystore "$RELEASE_KEYSTORE_PATH" -storepass:env RELEASE_KE
   --ks-pass env:RELEASE_KEYSTORE_PASSWORD --key-pass env:RELEASE_KEY_PASSWORD \
   --v3-signing-enabled false --out "$test_dir/multiple.apk" "$unsigned"
 expect_failure 'multiple signers' scripts/verify-release-apk.sh "$test_dir/multiple.apk" v0.2.0
+# CI signs through RELEASE_KEYSTORE_BASE64, which must match the RELEASE_KEYSTORE_PATH result.
+RELEASE_KEYSTORE_BASE64=$(base64 < "$RELEASE_KEYSTORE_PATH" | tr -d '\n')
+env -u RELEASE_KEYSTORE_PATH RELEASE_KEYSTORE_BASE64="$RELEASE_KEYSTORE_BASE64" \
+  scripts/sign-release-apk.sh "$unsigned" "$test_dir/signed-base64.apk"
+cmp "$test_dir/signed.apk" "$test_dir/signed-base64.apk"
+scripts/package-release.sh v0.2.0 "$test_dir/signed-base64.apk"
+(cd build/dist && shasum -a 256 -c AstronomicalClocksWallpaper-v0.2.0-sha256sums.txt)
 mkdir "$test_dir/temporary"
 expect_failure 'invalid keystore encoding' env TMPDIR="$test_dir/temporary" RELEASE_KEYSTORE_BASE64='invalid encoding!' \
   scripts/sign-release-apk.sh "$unsigned" "$test_dir/invalid.apk"

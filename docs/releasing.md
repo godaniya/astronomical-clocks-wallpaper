@@ -71,9 +71,11 @@ Only after reviewing the source on current `main`, create an owner-authorized ta
 `vX.Y.Z` (optional prerelease suffix) matching `versionName`. Use monotonically
 increasing `versionCode`. Do not create a tag merely to test this tooling.
 
-The read-only build job validates tag syntax and current-main ancestry, runs the
-quality gate, and uploads the unsigned APK. The protected draft job downloads that
-exact artifact from the same workflow run; only its signing step receives secrets.
+The read-only build job validates tag syntax and current-main ancestry, rejects a
+declared `versionCode` that does not exceed the highest across existing `v*` tags
+(so a lowered code cannot prepare a draft), runs the quality gate, and uploads the
+unsigned APK. The protected draft job downloads that exact artifact from the same
+workflow run; only its signing step receives secrets.
 It verifies and packages the signed APK and creates a draft with the three exact
 assets. Only this job has `contents: write`. Existing releases, including drafts,
 are rejected; the workflow never overwrites them or publishes automatically.
