@@ -1076,14 +1076,17 @@ class SharedDeviceLayerTest(unittest.TestCase):
 class ProducerTraceTest(unittest.TestCase):
     """Checks the producer-window parsing and the zero-versus-unread distinction it exists for."""
 
+    # Mark pairs in the shape this device emits them: the name is on the begin half and the end
+    # half is nameless, with a decoy from another process and an untracked event name alongside.
     TRACE = """# tracer: nop
      wallpaper-1234  [001] d..2 120.000000: tracing_mark_write: B|1234|dequeueBuffer
-     wallpaper-1234  [001] d..2 120.010000: tracing_mark_write: E|1234|dequeueBuffer
+     wallpaper-1234  [001] d..2 120.010000: tracing_mark_write: E|1234
      wallpaper-1234  [001] d..2 120.020000: tracing_mark_write: B|1234|queueBuffer
-     wallpaper-1234  [001] d..2 120.030000: tracing_mark_write: E|1234|queueBuffer
+     wallpaper-1234  [001] d..2 120.030000: tracing_mark_write: E|1234
      SurfaceFlinger-999  [000] d..2 120.040000: tracing_mark_write: B|999|queueBuffer
-     SurfaceFlinger-999  [000] d..2 120.050000: tracing_mark_write: E|999|queueBuffer
-     wallpaper-1234  [001] d..2 121.020000: tracing_mark_write: E|1234|onFrameCommitted
+     SurfaceFlinger-999  [000] d..2 120.050000: tracing_mark_write: E|999
+     wallpaper-1234  [001] d..2 121.020000: tracing_mark_write: B|1234|onFrameCommitted
+     wallpaper-1234  [001] d..2 121.030000: tracing_mark_write: E|1234
 """
 
     def test_counts_the_traced_process_buffer_events(self) -> None:

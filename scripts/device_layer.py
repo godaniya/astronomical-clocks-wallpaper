@@ -591,11 +591,11 @@ TRACE_WINDOW_SECONDS: Final = 30.0
 TRACE_DISPLAY_SAMPLE_SECONDS: Final = 2.0
 TRACE_CATEGORIES: Final = ("gfx", "view")
 TRACE_DEVICE_PATH: Final = "/data/local/tmp/wallpaper-producer.ftrace"
-# The text trace marks each event with a `B|<pid>|<name>` / `E|<pid>|<name>` pair, so only the
-# completion half is matched: counting both would double every event. `--async_start` traces into a
-# circular buffer, which truncates the head of the window rather than the tail, so a leading `E`
-# whose `B` was cut is still one completed event while a trailing `B` without its `E` is not counted.
-TRACE_MARK_PATTERN: Final = re.compile(r"tracing_mark_write:\s*E\|\s*(\d+)\|([^\s|]+)")
+# The text trace marks each event with a `B|<pid>|<name>` / `E|<pid>|<name>` pair, so only one half
+# is counted or every event would be doubled. The begin half carries the name and the end half is
+# emitted nameless (`E|<pid>` with nothing after it), which is why the name is read from `B`; both
+# were checked against a real trace from this device rather than assumed.
+TRACE_MARK_PATTERN: Final = re.compile(r"tracing_mark_write:\s*B\|\s*(\d+)\|([^\s|]+)")
 # A produced frame is the buffer the producer hands to the consumer; the dequeue is recorded
 # alongside it because a draw that never commits shows up as a dequeue without a queue.
 PRODUCER_QUEUE_EVENT: Final = "queueBuffer"
