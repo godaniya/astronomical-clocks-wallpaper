@@ -1184,6 +1184,42 @@ class PhaseDecisionTest(unittest.TestCase):
         self.assertEqual(failures, [])
 
     @patch.object(qualification, "ensure_screen_on", return_value=True)
+    @patch.object(device_layer, "detect_hand_angle", side_effect=[0.0, 8.0004, 180.0])
+    @patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16)))
+    @patch.object(device_layer, "send_debug_clock_broadcast", return_value=True)
+    @patch.object(qualification.time, "sleep")
+    def test_time_travel_rejects_a_residual_that_only_rounds_to_the_tolerance(
+        self, _sleep: MagicMock, _send: MagicMock, _capture: MagicMock, _angle: MagicMock, _ensure: MagicMock
+    ) -> None:
+        """A 0.5004° residual rounds to 0.500°; comparing the raw value must still reject it."""
+        res_30m = 8.0004 - device_layer.EXPECTED_ADVANCE_30M_DEG
+        self.assertGreater(res_30m, device_layer.ANGLE_TOLERANCE_DEG)
+        self.assertEqual(round(res_30m, qualification.ANGLE_REPORT_DECIMALS), device_layer.ANGLE_TOLERANCE_DEG)
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            qualification.phase_time_travel(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("Angle residuals exceeded tolerance", failures[0])
+        self.assertEqual(results, [])
+
+    @patch.object(qualification, "ensure_screen_on", return_value=True)
+    @patch.object(device_layer, "detect_hand_angle", side_effect=[0.0, 8.0, 179.0])
+    @patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16)))
+    @patch.object(device_layer, "send_debug_clock_broadcast", return_value=True)
+    @patch.object(qualification.time, "sleep")
+    def test_time_travel_rejects_a_twelve_hour_residual_past_the_tolerance(
+        self, _sleep: MagicMock, _send: MagicMock, _capture: MagicMock, _angle: MagicMock, _ensure: MagicMock
+    ) -> None:
+        """The +12h conjunct is checked on its own: a -1.000° residual must fail while +30m sits on the boundary."""
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            qualification.phase_time_travel(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(failures, ["Angle residuals exceeded tolerance: 30m=+0.500°, 12h=-1.000°"])
+        self.assertEqual(results, [])
+
+    @patch.object(qualification, "ensure_screen_on", return_value=True)
     @patch.object(device_layer, "detect_hand_angle")
     @patch.object(device_layer, "capture_frame")
     @patch.object(device_layer, "send_debug_clock_broadcast", return_value=False)
@@ -1258,6 +1294,29 @@ class PhaseDecisionTest(unittest.TestCase):
         _, residuals, problems = qualification.evaluate_rollover(zone, instants, measured, "Europe/Prague")
         self.assertAlmostEqual(residuals[-1], 0.5)
         self.assertEqual(problems, [])
+
+    def test_evaluate_rollover_rejects_a_residual_that_only_rounds_to_the_tolerance(self) -> None:
+        """A 0.5004° residual rounds to 0.500°; comparing the raw value must still flag it."""
+        zone = ZoneInfo("Europe/Prague")
+        instants = qualification.rollover_instants(zone)
+        measured = [168.75, 179.958, 180.042, 191.7504]
+        _, residuals, problems = qualification.evaluate_rollover(zone, instants, measured, "Europe/Prague")
+        self.assertGreater(abs(residuals[-1]), device_layer.ANGLE_TOLERANCE_DEG)
+        self.assertEqual(
+            round(abs(residuals[-1]), qualification.ANGLE_REPORT_DECIMALS), device_layer.ANGLE_TOLERANCE_DEG
+        )
+        self.assertEqual(len(problems), 1)
+        self.assertIn("exceeds the", problems[0])
+
+    def test_evaluate_rollover_rejects_a_negative_residual_past_the_tolerance(self) -> None:
+        """The check uses the residual's magnitude: a -0.5004° residual must flag, not cancel out."""
+        zone = ZoneInfo("Europe/Prague")
+        instants = qualification.rollover_instants(zone)
+        measured = [168.75, 179.958, 180.042, 190.7496]
+        _, residuals, problems = qualification.evaluate_rollover(zone, instants, measured, "Europe/Prague")
+        self.assertLess(residuals[-1], -device_layer.ANGLE_TOLERANCE_DEG)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("exceeds the", problems[0])
 
     @patch.object(qualification, "ensure_screen_on", return_value=True)
     @patch.object(device_layer, "read_saved_site_zone_id", return_value="Europe/Prague")
@@ -1767,7 +1826,15 @@ class PhasePrerequisiteTest(unittest.TestCase):
             self.assertIn("<0.010s CPU", results[0][1])
             self.assertIn("budget 0.05s", results[0][1])
             self.assertIn("hand detected after wake at 123.456°", results[0][1])
-            for unsupported in ("0.0%", "dormancy", "halted", "within 1s", "off for 4s", "sleep interval"):
+            for unsupported in (
+                "0.0%",
+                "dormancy",
+                "halted",
+                "within 1s",
+                "off for 4s",
+                "sleep interval",
+                "confirmed-off",
+            ):
                 self.assertNotIn(unsupported, results[0][1])
                 self.assertNotIn(unsupported, output.getvalue())
 
@@ -1907,7 +1974,7 @@ class PhasePrerequisiteTest(unittest.TestCase):
         self.assertEqual(len(results), 1)
 
     def test_screen_off_wake_fails_when_the_screen_wakes_mid_window(self) -> None:
-        """A display that turns on inside the sample window voids the quiescence claim."""
+        """A display that is on at the window's end voids the bounded-window claim."""
         results: list[tuple[str, str]] = []
         failures: list[str] = []
         with (

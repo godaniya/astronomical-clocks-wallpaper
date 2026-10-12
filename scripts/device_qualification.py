@@ -4,8 +4,8 @@
 Run observable live-wallpaper checks on one physical Android device via ADB.
 
 This harness verifies lifecycle transitions, dial rendering accuracy across time shifts,
-screen-off CPU quiescence, midnight date rollover, memory growth stability, and renderer-log
-diagnostics.
+a bounded screen-off CPU observation, civil-hand accuracy across site-aware midnight, memory
+growth stability, and renderer-log diagnostics.
 
 The shared device layer owns the ADB primitives, the dial/frame analysis, and the target device
 identity; this module keeps the qualification phases, its restore policy, and its report.
@@ -26,10 +26,15 @@ import device_layer
 REBIND_POLL_COUNT: Final = 10
 REBIND_POLL_SECONDS: Final = 0.5
 PSS_SAMPLE_SECONDS: Final = 10.0
+# Decimal places for printed angles and residuals. This is a presentation setting: the tolerance
+# comparison uses the raw residual, since rounding first would widen the stated boundary.
 ANGLE_REPORT_DECIMALS: Final = 3
 
-# Screen-off CPU evidence: sample the wallpaper process's tick counter across a measured,
-# confirmed-off interval and bound its CPU time against a budget. One tick on the device clock
+# Screen-off CPU evidence: sample the wallpaper process's tick counter across a measured window and
+# bound its CPU time against a budget. The display is confirmed off only at the window's endpoints:
+# nothing polls it inside the window, so a display that wakes and sleeps again mid-window would pass
+# both endpoint checks. That continuous in-window evidence is deferred to
+# https://github.com/godaniya/astronomical-clocks-wallpaper/issues/125. One tick on the device clock
 # is the smallest observable unit, so a zero-tick sample bounds CPU time below one tick rather
 # than at zero.
 SCREEN_OFF_SETTLE_SECONDS: Final = 1.0
@@ -276,7 +281,7 @@ def evaluate_screen_off_cpu(
     clock_ticks: int | None,
     window_seconds: float,
 ) -> tuple[int | None, str | None]:
-    """Return (tick delta, failure message) for one confirmed-off sample window."""
+    """Return (tick delta, failure message) for one endpoint-bracketed screen-off sample window."""
     if ticks_start is None or ticks_end is None:
         return None, "Failed to sample wallpaper CPU ticks during confirmed screen-off state"
     if ticks_end < ticks_start:
@@ -316,6 +321,9 @@ def phase_screen_off_wake(device: device_layer.AdbDevice, results: list[tuple[st
     # test, so re-read the pid after the screen settles rather than sampling against the stale one.
     pid = confirm_pid_unchanged(device, pid_before, failures, description="screen-off transition")
 
+    # The sleep below is uninterrupted: nothing reads the display state or mVisible inside the window.
+    # Only the display-off state is bracketed by the read_screen_on reads on either side of it;
+    # mVisible was read once, before the window, and is not observed throughout.
     ticks_start = read_safe_cpu_ticks(device, pid)
     window_start = time.monotonic()
     time.sleep(SCREEN_OFF_SAMPLE_SECONDS)
@@ -575,10 +583,10 @@ def phase_time_travel(device: device_layer.AdbDevice, results: list[tuple[str, s
             f"(expected: {device_layer.EXPECTED_ADVANCE_12H_DEG:.3f}°, residual: {res_12h:+.3f}°)"
         )
 
-        if (
-            round(abs(res_30m), ANGLE_REPORT_DECIMALS) <= device_layer.ANGLE_TOLERANCE_DEG
-            and round(abs(res_12h), ANGLE_REPORT_DECIMALS) <= device_layer.ANGLE_TOLERANCE_DEG
-        ):
+        # Compare the raw residuals, never a rounded copy: ANGLE_REPORT_DECIMALS is display-only,
+        # and rounding first would accept a residual just above the boundary. The comparison is
+        # inclusive, so a residual of exactly ANGLE_TOLERANCE_DEG passes.
+        if abs(res_30m) <= device_layer.ANGLE_TOLERANCE_DEG and abs(res_12h) <= device_layer.ANGLE_TOLERANCE_DEG:
             results.append(
                 (
                     "time travel (+30m, +12h)",
@@ -649,7 +657,10 @@ def evaluate_rollover(
     ]
     problems: list[str] = []
     for instant, residual in zip(instants, residuals, strict=True):
-        if round(abs(residual), ANGLE_REPORT_DECIMALS) > device_layer.ANGLE_TOLERANCE_DEG:
+        # Compare the raw residual: rounding to ANGLE_REPORT_DECIMALS first would accept a residual
+        # just above the boundary (0.5004° rounds to 0.500°), widening the tolerance beyond its stated
+        # 0.5°. The test stays strict, so a residual of exactly the tolerance passes.
+        if abs(residual) > device_layer.ANGLE_TOLERANCE_DEG:
             problems.append(
                 f"Midnight rollover at {instant} (zone {zone_id}) hand angle residual {residual:+.3f}° "
                 f"exceeds the {device_layer.ANGLE_TOLERANCE_DEG}° tolerance"
