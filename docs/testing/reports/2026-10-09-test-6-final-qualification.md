@@ -38,7 +38,7 @@ A third review round on the same PR found further overstatement in the matrix an
 - **Target Platform**: Physical device running Android 16 (API 36), display 1080x2408 (480 dpi).
 - **Locale & Timezone**: Locale `de-DE`, default timezone `Europe/Prague`.
 - **Privacy Policy Compliance**: Hardware serial number, OEM name, marketing model, and firmware build identifier are withheld in accordance with the project's [physical-device privacy policy](../../../CONTRIBUTING.md#physical-device-testing-and-privacy).
-- **Test Build**: Local debug `app-debug.apk` built from clean source tree (APK SHA-256 `3ef8bf795587aff1488e2e073b3cc3bf70eb7620df821cb4bfa3d953fda3dc4d`), verified via `scripts/verify-apk.sh` and signed with Android Debug certificate.
+- **Test Build**: Local debug `app-debug.apk` built from clean source tree (APK SHA-256 `3ef8bf795587aff1488e2e073b3cc3bf70eb7620df821cb4bfa3d953fda3dc4d`), verified via `scripts/verify-apk.sh` and signed with Android Debug certificate. App sources are unchanged from `021ee34a2f81255111cb36167dd598142ce16149` (`git diff 021ee34 -- app/` is empty).
 - **Active Settings**: Dark appearance palette (`DialStyle.RIM` `#1C2C39`), default Prague manual location (`50.08, 14.42`), standard Orloj dial layers (Zodiac, Sun, Moon active).
 
 ---
