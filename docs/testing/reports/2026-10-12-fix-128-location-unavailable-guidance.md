@@ -57,10 +57,7 @@ mean running a different build, not a different device setting. The branch there
 host test (`LocationProviderTest.fetchNullWithoutNetwork`) only, per the criterion's own
 instruction to state any case that could not be exercised.
 
-Only the disabled-provider case was driven. The unavailable, timeout, and permission-denied
-messages were not exercised on this device, and the two that changed in this push for the first
-time — the disabled-provider string — were the subject; the other strings are unchanged from the
-previous build.
+Only the disabled-provider case was driven. The unavailable, timeout, and permission-denied messages were not exercised on this device; the disabled-provider string was the only message changed in this push, and it was the subject of the device check. The other strings are unchanged from the previous build.
 
 The pass establishes what the app displayed for one device, one build, and one location state. It
 does not establish that a user acts on the message, and #128's own product feature gate records
