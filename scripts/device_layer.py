@@ -125,9 +125,11 @@ PREFS_FILE_ABSENT_MARKER: Final = "No such file or directory"
 
 # Mirror of LocationStore.kt and ObservingLocation.kt record validation, the source of truth.
 # LocationStore.load() ignores a record whose version is not the integral 1, whose latitude or
-# longitude is not an in-range JSON number, or whose source is not one of these names, and only then
-# does it fall back to the device zone. A harness that read a rejected record's zone would probe a
-# civil midnight the service never renders, so parse_saved_site_zone applies the same checks.
+# longitude is not an in-range JSON number, or whose source is not one of these names; the service
+# then renders the device zone. It renders the device zone for an absent or unbuildable zoneId as
+# well, and only the absent case is mirrored here (an unbuildable id is the phase's to reject; see
+# saved_record_zone_id). A harness that read a rejected record's zone would probe a civil midnight
+# the service never renders, so parse_saved_site_zone applies the same checks.
 LOCATION_RECORD_VERSION: Final = 1
 LOCATION_SOURCES: Final = frozenset({"CURRENT_COARSE", "MANUAL"})
 LOCATION_MAX_LATITUDE: Final = 90.0
