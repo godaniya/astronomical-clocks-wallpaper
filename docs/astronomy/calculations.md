@@ -51,11 +51,10 @@ The wallpaper on `main` still reads the phone's civil time and does not render t
 astronomy results. [PR #29](https://github.com/godaniya/astronomical-clocks-wallpaper/pull/29)
 adds saved-timezone infrastructure, but current-location and raw-coordinate saves
 capture the phone zone; migration also tags legacy coordinates with the phone zone.
-That does not establish the site's geographic timezone.
-[Issue #24](https://github.com/godaniya/astronomical-clocks-wallpaper/issues/24) owns the remaining
-gap across current location, raw coordinates, city selection, and correction of
-previously phone-tagged records. The offline city chooser is
-[issue #21](https://github.com/godaniya/astronomical-clocks-wallpaper/issues/21).
+[Issue #24](https://github.com/godaniya/astronomical-clocks-wallpaper/issues/24)
+addressed this by establishing the geographic timezone from coordinate anchors (#83).
+The offline city chooser (#21) was withdrawn as not planned in favour of raw coordinate
+entry with offline timezone inference.
 
 ## Coordinate frames
 
