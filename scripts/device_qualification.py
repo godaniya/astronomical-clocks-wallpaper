@@ -35,8 +35,10 @@ ANGLE_REPORT_DECIMALS: Final = 3
 # nothing polls it inside the window, so a display that wakes and sleeps again mid-window would pass
 # both endpoint checks. That continuous in-window evidence is deferred to
 # https://github.com/godaniya/astronomical-clocks-wallpaper/issues/125. One tick on the device clock
-# is the smallest observable unit, so a zero-tick sample bounds CPU time below one tick rather
-# than at zero.
+# is the smallest observable unit, so a delta of D ticks cannot exceed D+1 ticks of CPU time: the
+# budget decision compares that upper bound, (D+1)/CLK_TCK, rather than the exact-looking D/CLK_TCK.
+# A clock whose single tick is itself wider than the budget can never show the sample within budget,
+# so the sample is refused instead of passed.
 SCREEN_OFF_SETTLE_SECONDS: Final = 1.0
 SCREEN_OFF_SAMPLE_SECONDS: Final = 4.0
 SCREEN_OFF_CPU_BUDGET_SECONDS: Final = 0.05
@@ -244,7 +246,12 @@ def format_screen_off_observation(
     window_seconds: float | None,
     angle_wake: float,
 ) -> str:
-    """Build the descriptive observation record for the screen-off / wake phase."""
+    """
+    Build the descriptive observation record for the screen-off / wake phase.
+
+    The CPU figure is the same one-tick upper bound the budget decision compares, so the number a
+    reader sees is the one the pass or failure turned on.
+    """
     if wallpaper_visible is False:
         visibility_text = "wallpaper reported hidden (mVisible=false)"
     elif wallpaper_visible is True:
@@ -253,21 +260,14 @@ def format_screen_off_observation(
         visibility_text = "wallpaper visibility was unreadable"
 
     if ticks_delta is not None and clock_ticks is not None and window_seconds:
-        if ticks_delta == 0:
-            # A zero-whole-tick sample bounds CPU time below one tick, never at exactly zero.
-            bound_seconds = 1 / clock_ticks
-            cpu_text = (
-                f"{ticks_delta} CPU ticks over the measured {window_seconds:.2f}s screen-off window at "
-                f"{clock_ticks} ticks/s (<{bound_seconds:.3f}s CPU, <{bound_seconds / window_seconds * 100:.2f}% "
-                f"of the window; budget {SCREEN_OFF_CPU_BUDGET_SECONDS:.2f}s)"
-            )
-        else:
-            cpu_seconds = ticks_delta / clock_ticks
-            cpu_text = (
-                f"{ticks_delta} CPU ticks over the measured {window_seconds:.2f}s screen-off window at "
-                f"{clock_ticks} ticks/s ({cpu_seconds:.3f}s CPU, {cpu_seconds / window_seconds * 100:.2f}% "
-                f"of the window; budget {SCREEN_OFF_CPU_BUDGET_SECONDS:.2f}s)"
-            )
+        # A delta of D whole ticks cannot exceed D+1 ticks of CPU time, so the reported figure is
+        # that upper bound, marked with "<". This mirrors evaluate_screen_off_cpu's comparison.
+        bound_seconds = (ticks_delta + 1) / clock_ticks
+        cpu_text = (
+            f"{ticks_delta} CPU ticks over the measured {window_seconds:.2f}s screen-off window at "
+            f"{clock_ticks} ticks/s (<{bound_seconds:.3f}s CPU, <{bound_seconds / window_seconds * 100:.2f}% "
+            f"of the window; budget {SCREEN_OFF_CPU_BUDGET_SECONDS:.2f}s)"
+        )
     else:
         cpu_text = "rendering while asleep was not measured"
 
@@ -281,7 +281,14 @@ def evaluate_screen_off_cpu(
     clock_ticks: int | None,
     window_seconds: float,
 ) -> tuple[int | None, str | None]:
-    """Return (tick delta, failure message) for one endpoint-bracketed screen-off sample window."""
+    """
+    Return (tick delta, failure message) for one endpoint-bracketed screen-off sample window.
+
+    A delta of D whole ticks cannot exceed D+1 ticks of CPU time, so the decision compares that upper
+    bound against the budget. A clock whose single tick is wider than the budget can never show the
+    sample within budget, so it is reported as unmeasured rather than passed. Both comparisons are
+    strict: one tick exactly equal to the budget still bounds the true CPU time below the budget.
+    """
     if ticks_start is None or ticks_end is None:
         return None, "Failed to sample wallpaper CPU ticks during confirmed screen-off state"
     if ticks_end < ticks_start:
@@ -289,10 +296,16 @@ def evaluate_screen_off_cpu(
     if clock_ticks is None:
         return None, "Could not read the device clock-tick rate (getconf CLK_TCK); CPU time is unbounded"
     ticks_delta = ticks_end - ticks_start
-    cpu_seconds = ticks_delta / clock_ticks
-    if cpu_seconds > SCREEN_OFF_CPU_BUDGET_SECONDS:
+    tick_seconds = 1 / clock_ticks
+    if tick_seconds > SCREEN_OFF_CPU_BUDGET_SECONDS:
+        return None, (
+            f"The device clock ticks at {clock_ticks}/s, so one {tick_seconds:.3f}s tick is wider than the "
+            f"{SCREEN_OFF_CPU_BUDGET_SECONDS:.2f}s budget and this sample cannot establish it"
+        )
+    cpu_bound_seconds = (ticks_delta + 1) / clock_ticks
+    if cpu_bound_seconds > SCREEN_OFF_CPU_BUDGET_SECONDS:
         return ticks_delta, (
-            f"Wallpaper process used {cpu_seconds:.3f}s CPU while screen off "
+            f"Wallpaper process used up to {cpu_bound_seconds:.3f}s CPU while screen off "
             f"({ticks_delta} ticks over the measured {window_seconds:.2f}s window "
             f"at {clock_ticks} ticks/s); budget {SCREEN_OFF_CPU_BUDGET_SECONDS:.2f}s"
         )

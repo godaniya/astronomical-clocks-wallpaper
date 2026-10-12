@@ -1408,6 +1408,86 @@ class PhaseDecisionTest(unittest.TestCase):
         self.assertEqual(len(problems), 1)
         self.assertIn("exceeds the", problems[0])
 
+    def test_evaluate_screen_off_cpu_decides_on_the_one_tick_upper_bound(self) -> None:
+        """
+        Pin the decision to the (delta + 1) upper bound rather than the raw delta.
+
+        A delta of D ticks cannot exceed D+1 ticks of CPU time, so at 100 Hz the 5-tick sample a raw
+        D/CLK_TCK comparison passed at 0.050 s has a 0.060 s bound and must fail: deciding on the
+        quotient would report CPU time the measurement cannot establish. Both comparisons are strict,
+        so a single tick exactly equal to the budget (CLK_TCK == 20) still passes a zero delta, and
+        the first clock coarse enough to exceed the budget is 19.
+        """
+        cases = (
+            # ticks_start, ticks_end, clock_ticks, expected delta, expected failure substring
+            (100, 100, 100, 0, None),  # zero delta, well inside the budget
+            (100, 104, 100, 4, None),  # bound 0.050 s: exactly the budget, so it still passes
+            (100, 105, 100, 5, "used up to 0.060s CPU"),  # the tightened boundary: bound 0.060 s
+            (100, 101, 40, 1, None),  # a non-round ratio puts the boundary at 2/40 == 0.050 s too
+            (100, 102, 40, 2, "used up to 0.075s CPU"),  # 3/40 s crosses it
+            (100, 100, 20, 0, None),  # one tick == the budget: true CPU time is below it
+            (100, 101, 20, 1, "used up to 0.100s CPU"),  # the equality clock passes the guard, then the budget governs
+            (100, 100, 19, None, "cannot establish it"),  # one tick > the budget: the clock cannot resolve it
+            (100, 100, 10, None, "cannot establish it"),
+        )
+        for ticks_start, ticks_end, clock_ticks, expected_delta, expected_failure in cases:
+            with self.subTest(clock_ticks=clock_ticks, ticks_end=ticks_end):
+                delta, failure = qualification.evaluate_screen_off_cpu(
+                    ticks_start=ticks_start,
+                    ticks_end=ticks_end,
+                    clock_ticks=clock_ticks,
+                    window_seconds=4.00,
+                )
+                self.assertEqual(delta, expected_delta)
+                self.assertEqual(failure is not None, expected_failure is not None)
+                if failure is not None and expected_failure is not None:
+                    self.assertIn(expected_failure, failure)
+
+    def test_format_screen_off_observation_reports_the_one_tick_upper_bound(self) -> None:
+        """
+        The reported figure is the one-tick upper bound, marked "<", for every delta.
+
+        The 0-tick / 100 Hz / 4.01 s row is asserted verbatim: it is the row in
+        2026-10-09-test-6-civil-midnight-and-cpu-evidence.md, and the same CPU clause appears in the
+        other two 2026-10-09 reports at a different window or wake angle, so collapsing the two
+        reporting branches must not move the recorded text.
+        """
+        self.assertEqual(
+            qualification.format_screen_off_observation(
+                wallpaper_visible=False,
+                ticks_delta=0,
+                clock_ticks=100,
+                window_seconds=4.01,
+                angle_wake=69.884,
+            ),
+            (
+                "wallpaper reported hidden (mVisible=false); 0 CPU ticks over the measured 4.01s "
+                "screen-off window at 100 ticks/s (<0.010s CPU, <0.25% of the window; budget 0.05s); "
+                "hand detected after wake at 69.884°"
+            ),
+        )
+        # A nonzero delta reports its own bound, not the raw delta/rate quotient.
+        nonzero = qualification.format_screen_off_observation(
+            wallpaper_visible=False,
+            ticks_delta=5,
+            clock_ticks=100,
+            window_seconds=4.00,
+            angle_wake=69.884,
+        )
+        self.assertIn("5 CPU ticks over the measured 4.00s screen-off window at 100 ticks/s", nonzero)
+        self.assertIn("<0.060s CPU", nonzero)
+        # Without a clock rate there is no bound to report, so the row stays unmeasured.
+        self.assertIn(
+            "rendering while asleep was not measured",
+            qualification.format_screen_off_observation(
+                wallpaper_visible=False,
+                ticks_delta=0,
+                clock_ticks=None,
+                window_seconds=4.00,
+                angle_wake=69.884,
+            ),
+        )
+
     @patch.object(qualification, "ensure_screen_on", return_value=True)
     @patch.object(device_layer, "read_saved_site_zone_id", return_value="Europe/Prague")
     @patch.object(device_layer, "detect_hand_angle", side_effect=[198.75, 209.958, 210.042, 221.25])
@@ -1977,8 +2057,13 @@ class PhasePrerequisiteTest(unittest.TestCase):
                 self.assertNotIn(unsupported, results[0][1])
                 self.assertNotIn(unsupported, output.getvalue())
 
-    def test_screen_off_wake_reports_a_measured_cpu_time_for_a_nonzero_sample(self) -> None:
-        """A nonzero sample inside the budget is reported as measured CPU time, never a bare rate."""
+    def test_screen_off_wake_reports_the_upper_bound_for_a_nonzero_sample(self) -> None:
+        """
+        A nonzero sample inside the budget is reported as an upper bound, not the exact measurement.
+
+        Four ticks at 100 Hz bound CPU time below 5 ticks, i.e. below 0.050 s: that bound sits exactly
+        on the budget, yet the strict comparison still passes it.
+        """
         results: list[tuple[str, str]] = []
         failures: list[str] = []
         with (
@@ -1986,7 +2071,7 @@ class PhasePrerequisiteTest(unittest.TestCase):
             patch.object(device_layer, "read_screen_on", side_effect=[False, False, True]),
             patch.object(device_layer, "read_wallpaper_visible", return_value=False),
             patch.object(device_layer, "get_wallpaper_pid", return_value=123),
-            patch.object(device_layer, "read_process_cpu_ticks", side_effect=[100, 105]),
+            patch.object(device_layer, "read_process_cpu_ticks", side_effect=[100, 104]),
             patch.object(device_layer, "read_process_cpu_clock_ticks", return_value=100),
             patch.object(qualification.time, "monotonic", side_effect=[10.0, 14.2]),
             patch.object(device_layer, "wake_screen", return_value=True),
@@ -2000,8 +2085,8 @@ class PhasePrerequisiteTest(unittest.TestCase):
             qualification.phase_screen_off_wake(device_layer.AdbDevice("device"), results, failures)
         self.assertEqual(failures, [])
         self.assertEqual(len(results), 1)
-        self.assertIn("5 CPU ticks over the measured 4.20s screen-off window at 100 ticks/s", results[0][1])
-        self.assertIn("0.050s CPU", results[0][1])
+        self.assertIn("4 CPU ticks over the measured 4.20s screen-off window at 100 ticks/s", results[0][1])
+        self.assertIn("<0.050s CPU", results[0][1])
 
     def test_screen_off_wake_fails_when_cpu_ticks_cannot_be_read(self) -> None:
         """When CPU ticks cannot be read during screen-off, the phase must append a failure."""
@@ -2029,7 +2114,7 @@ class PhasePrerequisiteTest(unittest.TestCase):
         self.assertIn("rendering while asleep was not measured", results[0][1])
 
     def test_screen_off_wake_fails_when_cpu_ticks_exceed_the_seconds_budget(self) -> None:
-        """Six ticks at 100 Hz is 0.060 s, over the 0.050 s budget, so the phase must fail."""
+        """Six ticks at 100 Hz bound CPU time below 7 ticks (0.070 s), which exceeds the 0.050 s budget."""
         results: list[tuple[str, str]] = []
         failures: list[str] = []
         with (
@@ -2053,12 +2138,50 @@ class PhasePrerequisiteTest(unittest.TestCase):
             failures,
             [
                 (
-                    "Wallpaper process used 0.060s CPU while screen off "
+                    "Wallpaper process used up to 0.070s CPU while screen off "
                     "(6 ticks over the measured 4.00s window at 100 ticks/s); budget 0.05s"
                 )
             ],
         )
         self.assertEqual(len(results), 1)
+
+    def test_screen_off_wake_refuses_a_sample_the_clock_cannot_resolve(self) -> None:
+        """
+        A clock tick wider than the budget can never show the sample within budget, so the phase fails.
+
+        At CLK_TCK=10 one tick is 0.100 s, over the 0.050 s budget: even a zero-tick delta leaves the
+        sample unestablishable, so the observation row reads "not measured" rather than passing.
+        """
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with (
+            patch.object(device_layer, "sleep_screen", return_value=True),
+            patch.object(device_layer, "read_screen_on", side_effect=[False, False, True]),
+            patch.object(device_layer, "read_wallpaper_visible", return_value=False),
+            patch.object(device_layer, "get_wallpaper_pid", return_value=123),
+            patch.object(device_layer, "read_process_cpu_ticks", side_effect=[100, 100]),
+            patch.object(device_layer, "read_process_cpu_clock_ticks", return_value=10),
+            patch.object(qualification.time, "monotonic", side_effect=[10.0, 14.0]),
+            patch.object(device_layer, "wake_screen", return_value=True),
+            patch.object(device_layer.AdbDevice, "dismiss_keyguard"),
+            patch.object(device_layer.AdbDevice, "show_home"),
+            patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))),
+            patch.object(device_layer, "detect_hand_angle", return_value=123.456),
+            patch.object(qualification.time, "sleep"),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            qualification.phase_screen_off_wake(device_layer.AdbDevice("device"), results, failures)
+        self.assertEqual(
+            failures,
+            [
+                (
+                    "The device clock ticks at 10/s, so one 0.100s tick is wider than the "
+                    "0.05s budget and this sample cannot establish it"
+                )
+            ],
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("rendering while asleep was not measured", results[0][1])
 
     def test_screen_off_wake_fails_when_the_clock_tick_rate_is_unreadable(self) -> None:
         """Without CLK_TCK the tick count has no CPU-time meaning, so the phase must fail."""
