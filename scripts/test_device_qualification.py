@@ -12,7 +12,7 @@ import sys
 import unittest
 from types import ModuleType
 from typing import Final
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 from xml.sax.saxutils import escape as xml_escape
 from zoneinfo import ZoneInfo
 
@@ -853,7 +853,9 @@ class RendererLogScanTest(unittest.TestCase):
         self.assertEqual(results[0][0], "renderer log scan")
         self.assertIn("Inconclusive", results[0][1])
 
-    def _mock_every_phase_succeeding(self, stack: contextlib.ExitStack) -> tuple[MagicMock, MagicMock, MagicMock]:
+    # typeshed's _patch.__enter__ returns MagicMock | AsyncMock (new defaults to DEFAULT), so the
+    # honest element type is their common supertype; callers only read .call_count.
+    def _mock_every_phase_succeeding(self, stack: contextlib.ExitStack) -> tuple[Mock, Mock, Mock]:
         """
         Enter the doubles under which every phase except the renderer log scan succeeds.
 
