@@ -28,8 +28,10 @@ settings across a restart were unproven.
 ## Method
 
 `device_layer.capture_producer_window` starts `atrace --async_start -a <pid> gfx view` on the
-wallpaper process, samples `dumpsys power`'s display state every two seconds for the whole
-wall-clock span of the trace, and collects the buffer with `atrace --async_dump`. A produced frame
+wallpaper process, reads `dumpsys power`'s display state every two seconds for the whole wall-clock
+span of the trace, and collects the buffer with `atrace --async_dump`. The display reads are discrete
+instants, not a continuous record, and the property that consumes them is named
+`display_off_at_every_sample` for that reason. A produced frame
 is a `queueBuffer` mark attributed to that pid; only the `B|<pid>|<name>` half of each mark pair is
 counted, because the `E` half is emitted nameless on this device — both halves were checked against
 a real capture rather than assumed.
@@ -50,7 +52,7 @@ read the same state back. The full qualification harness was then run over the r
 | --- | --- | --- |
 | 2026-10-12 | build, install | `./gradlew qualityGate :app:assembleDebug` passed (93 tasks); installed in place with `adb install -r`, no other device state changed |
 | 2026-10-12 | producer trace, visible control | 42 producer frames over 20 s; display sampled 10 times inside the window, on for all 10 |
-| 2026-10-12 | producer trace, hidden with the display off | **0 producer frames over 60 s**; display sampled 30 times inside the window, off for all 30, so the window is a screen-off window by measurement and not by endpoint check |
+| 2026-10-12 | producer trace, hidden with the display off | **0 producer frames over 60 s**; the display was read 30 times inside the window, every 2 s, and read off at all 30 samples, so the screen-off state is sampled across the window rather than checked only at its endpoints |
 | 2026-10-12 | producer trace, visible control after | 42 producer frames over 20 s; display sampled 10 times, on for all 10 — the tracer still worked after the hidden window, which is what makes its zero a measurement |
 | 2026-10-12 | repeat on the second run | The full harness re-ran the same phase over the same restarted device: 42 frames / 20 s, 0 frames / 60 s with 30/30 samples off, 42 frames / 20 s. The counts reproduced exactly |
 | 2026-10-12 | reboot, before | `uptime` `up 6 min`; wallpaper process pid 17682; home component `…AstronomicalClocksWallpaperService`; `date` `Mon Oct 12 23:09:22 CEST 2026`; timezone `Europe/Berlin` |
@@ -76,6 +78,13 @@ counted as a frame. The categories enabled are `gfx` and `view`; an event the tr
 cannot be seen. `atrace` also samples the process's marks, not the display pipeline's output, so the
 row is "the producer handed no frame to the consumer", which is the budget's wording, not a claim
 about the panel.
+
+The screen-off state is sampled, not recorded continuously: the display was read once every two
+seconds, so a display that came on and went off again between two reads would leave no mark in these
+rows. What the pass bounds is the display being off at every one of the 30 reads across the window,
+which is strictly more than the endpoint check it replaces and strictly less than a continuous
+display-state trace. The frame count is what carries the hard claim: it is counted from the same
+trace for the whole window, and it is zero.
 
 The 42 frames in 20 s of the visible control are a rate observation, not a cadence measurement:
 they are not resolved per second, no dropped-frame analysis was done, and the count includes

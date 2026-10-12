@@ -618,14 +618,29 @@ class ProducerWindow:
         return self.event_counts.get(PRODUCER_QUEUE_EVENT, 0)
 
     @property
-    def display_off_throughout(self) -> bool:
-        """Whether every sample taken inside the window found the display off."""
+    def display_off_at_every_sample(self) -> bool:
+        """
+        Whether every sample taken inside the window found the display off.
+
+        This is a sequence of discrete reads, not a continuous record: a display that came on and
+        went off again between two samples would leave no trace here. The name says what the
+        evidence is so that a caller, and a report built from it, cannot read it as more.
+        """
         return bool(self.display_states) and all(state is False for state in self.display_states)
 
     @property
-    def display_on_throughout(self) -> bool:
-        """Whether every sample taken inside the window found the display on."""
+    def display_on_at_every_sample(self) -> bool:
+        """
+        Whether every sample taken inside the window found the display on.
+
+        Discrete reads, with the same limitation as [display_off_at_every_sample].
+        """
         return bool(self.display_states) and all(state is True for state in self.display_states)
+
+    @property
+    def display_unknown_samples(self) -> int:
+        """How many samples could not be read at all."""
+        return sum(1 for state in self.display_states if state is None)
 
 
 def parse_producer_events(trace_text: str, pid: int) -> dict[str, int]:
@@ -654,6 +669,9 @@ def capture_producer_window(
     display *inside* the window rather than only at its endpoints. An unusable trace is raised: a
     window with no usable trace is not a window in which nothing was drawn.
     """
+    if seconds <= 0 or sample_seconds <= 0:
+        detail = f"a trace window needs positive durations but got seconds={seconds}, sample_seconds={sample_seconds}"
+        raise ProbeError(detail)
     start_command = ["shell", "atrace", "--async_start", "-a", str(pid)]
     start_command.extend(TRACE_CATEGORIES)
     run_adb(start_command, serial=serial)

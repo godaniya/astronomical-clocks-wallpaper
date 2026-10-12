@@ -815,7 +815,7 @@ def phase_renderer_log_scan(
     device: device_layer.AdbDevice, run_start_marker: str, results: list[tuple[str, str]], failures: list[str]
 ) -> bool:
     """Scan the run's renderer log lines and append the outcome to the results."""
-    print("\n--- Phase 8: Renderer Log Scan ---")
+    print("\n--- Phase 9: Renderer Log Scan ---")
     log_scan_inconclusive = False
     try:
         log_check = device.run_adb(
@@ -954,7 +954,7 @@ def evaluate_producer_control(
             "recorded beside it would be an unread counter rather than a measured zero"
         )
         return False
-    if not window.display_on_throughout:
+    if not window.display_on_at_every_sample:
         failures.append(f"The {description} display was not on for every sample taken inside it")
     return True
 
@@ -981,10 +981,17 @@ def measure_producer_window(  # noqa: PLR0913
         failures.append(f"The {description} producer trace failed: {device_layer.error_detail(error)}")
         return None
     states = window.display_states
-    display = "on" if window.display_on_throughout else "off" if window.display_off_throughout else "mixed"
+    display = (
+        "on at every sample"
+        if window.display_on_at_every_sample
+        else "off at every sample"
+        if window.display_off_at_every_sample
+        else "mixed"
+    )
     summary = (
         f"{window.frame_count} producer frames over {window.window_seconds:.0f} s "
-        f"({window.trace_lines} trace lines; display sampled {len(states)}x: {display})"
+        f"({window.trace_lines} trace lines; display sampled {len(states)} times: {display}, "
+        f"{window.display_unknown_samples} unreadable)"
     )
     results.append((f"producer trace, {description}", summary))
     print(f"{description}: {summary}")
@@ -995,7 +1002,7 @@ def evaluate_hidden_window(window: device_layer.ProducerWindow | None, failures:
     """Fail unless the hidden window was screen-off for its whole width and produced no frames."""
     if window is None:
         return
-    if not window.display_off_throughout:
+    if not window.display_off_at_every_sample:
         failures.append(
             "The display was not off for every sample inside the hidden producer window, so its "
             "frame count does not describe a screen-off window"
@@ -1024,8 +1031,15 @@ def phase_hidden_frames(device: device_layer.AdbDevice, results: list[tuple[str,
     if device.read_screen_on() is not False:
         failures.append("Display was not confirmed off before the hidden producer window")
         return
-    if device.read_wallpaper_visible() is True:
-        failures.append("The wallpaper reported visible while the screen was confirmed off")
+    visible = device.read_wallpaper_visible()
+    if visible is not False:
+        failures.append(
+            f"The wallpaper engine was not confirmed hidden before the producer window (mVisible={visible}); "
+            "an unreadable probe is not a hidden engine, so the window was not recorded"
+        )
+        if not device.wake_screen():
+            failures.append("Screen wake request failed after the hidden window was abandoned")
+        return
 
     pid = confirm_pid_unchanged(device, pid_before, failures, description="hidden producer window")
     hidden = measure_producer_window(

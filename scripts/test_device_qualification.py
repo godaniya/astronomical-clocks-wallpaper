@@ -1108,29 +1108,53 @@ class ProducerTraceTest(unittest.TestCase):
             display_states=(True, True),
         )
         self.assertEqual(30, window.frame_count)
-        self.assertTrue(window.display_on_throughout)
-        self.assertFalse(window.display_off_throughout)
+        self.assertTrue(window.display_on_at_every_sample)
+        self.assertFalse(window.display_off_at_every_sample)
 
     def test_an_empty_event_map_is_a_measured_zero_not_a_missing_key(self) -> None:
         window = device_layer.ProducerWindow(
             window_seconds=60.0, pid=1234, event_counts={}, trace_lines=3, display_states=(False, False, False)
         )
         self.assertEqual(0, window.frame_count)
-        self.assertTrue(window.display_off_throughout)
+        self.assertTrue(window.display_off_at_every_sample)
 
     def test_a_window_with_no_display_samples_is_neither_on_nor_off(self) -> None:
         window = device_layer.ProducerWindow(
             window_seconds=60.0, pid=1234, event_counts={}, trace_lines=3, display_states=()
         )
-        self.assertFalse(window.display_off_throughout)
-        self.assertFalse(window.display_on_throughout)
+        self.assertFalse(window.display_off_at_every_sample)
+        self.assertFalse(window.display_on_at_every_sample)
+
+    def test_an_unreadable_display_sample_is_counted_as_unknown(self) -> None:
+        window = device_layer.ProducerWindow(
+            window_seconds=60.0, pid=1234, event_counts={}, trace_lines=3, display_states=(False, None, False)
+        )
+        self.assertEqual(1, window.display_unknown_samples)
+        self.assertFalse(window.display_off_at_every_sample)
+
+    def test_a_zero_sampling_interval_is_refused_before_the_trace_starts(self) -> None:
+        # A zero interval would make the sampling loop spin forever with the trace already running.
+        with (
+            patch.object(device_layer, "run_adb") as run_adb,
+            self.assertRaises(device_layer.ProbeError),
+        ):
+            device_layer.capture_producer_window("device", 1234, seconds=10.0, sample_seconds=0.0)
+        run_adb.assert_not_called()
+
+    def test_a_non_positive_window_is_refused(self) -> None:
+        with (
+            patch.object(device_layer, "run_adb") as run_adb,
+            self.assertRaises(device_layer.ProbeError),
+        ):
+            device_layer.capture_producer_window("device", 1234, seconds=0.0, sample_seconds=1.0)
+        run_adb.assert_not_called()
 
     def test_an_uncapturable_trace_is_an_error(self) -> None:
         with (
             patch.object(device_layer, "run_adb", side_effect=subprocess.CalledProcessError(1, "atrace")),
             self.assertRaises(subprocess.CalledProcessError),
         ):
-            device_layer.capture_producer_window("device", 1234, seconds=0.0, sample_seconds=0.0)
+            device_layer.capture_producer_window("device", 1234, seconds=1.0, sample_seconds=1.0)
 
 
 class HiddenFramesPhaseTest(unittest.TestCase):
