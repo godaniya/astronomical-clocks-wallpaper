@@ -136,6 +136,49 @@ class SettingsActivityAcquisitionTest {
         }
     }
 
+    @Test
+    fun unavailableProviderShowsToast() {
+        locationShadow.removeProvider(LocationManager.NETWORK_PROVIDER)
+        Robolectric.buildActivity(SettingsActivity::class.java).use { controller ->
+            val activity = controller.setup().get()
+            activity.findViewById<Button>(R.id.use_current_location).performClick()
+            assertEquals(1, ShadowToast.shownToastCount())
+            assertEquals(
+                activity.getString(R.string.location_provider_unavailable),
+                ShadowToast.getTextOfLatestToast(),
+            )
+        }
+    }
+
+    @Test
+    fun disabledProviderShowsToast() {
+        locationShadow.setProviderEnabled(LocationManager.NETWORK_PROVIDER, false)
+        Robolectric.buildActivity(SettingsActivity::class.java).use { controller ->
+            val activity = controller.setup().get()
+            activity.findViewById<Button>(R.id.use_current_location).performClick()
+            assertEquals(1, ShadowToast.shownToastCount())
+            assertEquals(
+                activity.getString(R.string.location_provider_disabled),
+                ShadowToast.getTextOfLatestToast(),
+            )
+        }
+    }
+
+    @Test
+    fun timeoutShowsTimeoutToast() {
+        Robolectric.buildActivity(SettingsActivity::class.java).use { controller ->
+            val activity = controller.setup().get()
+            activity.findViewById<Button>(R.id.refresh_location).performClick()
+            assertEquals(0, ShadowToast.shownToastCount())
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(10))
+            assertEquals(1, ShadowToast.shownToastCount())
+            assertEquals(
+                activity.getString(R.string.location_timeout),
+                ShadowToast.getTextOfLatestToast(),
+            )
+        }
+    }
+
     // Literal coordinates are test input, not user-facing text.
     @SuppressLint("SetTextI18n")
     private fun saveManualLocation(activity: SettingsActivity) {
