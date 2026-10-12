@@ -11,7 +11,7 @@ This final qualification synthesizes and builds upon the merged device and lifec
 - Screen-off visibility, wake recovery, and PSS sampling (PR #111)
 
 This run records three observations:
-1. **Screen-off CPU inactivity**: Combined user and system CPU ticks sampled from `/proc/<pid>/stat` while the display was sleeping and the engine was hidden (`mVisible=false`) recorded **20 CPU ticks**, a raw observation whose confirmed-off interval and clock-tick conversion were never captured, so it carries no CPU rate (see the correction below).
+1. **Screen-off CPU sample**: Combined user and system CPU ticks sampled from `/proc/<pid>/stat` while the engine was hidden (`mVisible=false`) recorded **20 CPU ticks** — a raw sample that began before the sleep request, with no confirmed screen-off interval and no clock-tick conversion, so it carries no CPU rate (see the correction below).
 2. **Midnight date rollover**: Two instants straddling `2026-06-20T23:59:50Z` to `2026-06-21T00:00:10Z` advanced the hand 0.079° against 0.083° expected (residual −0.005°). Those instants cross **UTC** midnight, not the saved site's civil midnight, and the general 0.5° tolerance cannot reject a frozen hand on a 0.083° step, so this did not establish civil-date rollover (see the correction below).
 3. **Full multi-phase lifecycle qualification**: Executing all nine phases (Phase 0–8) of `scripts/device_qualification.py` with clean exit code 0.
 
@@ -111,7 +111,7 @@ Renderer log scan inconclusive: no matching warning records.
 | Date | Check | Observed |
 | --- | --- | --- |
 | 2026-10-09 | visible dial baseline | Dial rendered (Dark palette), hand at 56.020° |
-| 2026-10-09 | screen-off / wake navigation | device reported screen off after the 4s sleep interval; wallpaper reported hidden (mVisible=false); 20 CPU ticks while asleep (see editorial correction); hand detected after wake at 56.099° |
+| 2026-10-09 | screen-off / wake navigation | device reported screen off after the 4s sleep interval; wallpaper reported hidden (mVisible=false); 20 CPU ticks, a raw sample that began before the sleep request with no confirmed-off interval (see editorial correction); hand detected after wake at 56.099° |
 | 2026-10-09 | preview navigation | returned to home and detected the active wallpaper hand at 56.145°; preview-engine cleanup was not inspected |
 | 2026-10-09 | surface recreation | Override to 1080x2000 and verified restore to physical size redrew dial; hand at 56.152° |
 | 2026-10-09 | process rebind | new PID observed within 10 polls at 0.5s intervals; hand visible at 56.190°; saved preference values were not inspected |
