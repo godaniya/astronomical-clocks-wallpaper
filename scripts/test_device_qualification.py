@@ -766,6 +766,7 @@ class DeviceQualificationTest(unittest.TestCase):
             "phase_time_travel",
             "phase_midnight_rollover",
             "phase_total_pss_growth",
+            "phase_hidden_frames",
         )
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.object(sys, "argv", ["device_qualification.py", "--max-pss-growth-kb", "10"]))
@@ -934,6 +935,10 @@ class RendererLogScanTest(unittest.TestCase):
             patch.object(device_layer, "detect_hand_angle", side_effect=FIXTURE_HAND_ANGLES)
         )
         stack.enter_context(patch.object(qualification.time, "sleep"))
+        # The hidden producer window has its own tests; this fixture exists to make every *other*
+        # phase succeed without also having to satisfy a trace console, and its pid/probe side
+        # effects are consumed in a fixed order that another live phase would exhaust.
+        stack.enter_context(patch.object(qualification, "phase_hidden_frames"))
         return hand_mock, pid_mock, size_mock
 
     def test_log_collection_failure_makes_the_whole_run_exit_nonzero(self) -> None:
@@ -1066,6 +1071,132 @@ class SharedDeviceLayerTest(unittest.TestCase):
             for name in DUPLICATED_CONSTANT_NAMES:
                 with self.subTest(harness=harness.__name__, constant=name):
                     self.assertFalse(hasattr(harness, name), f"{harness.__name__} shadows {name}")
+
+
+class ProducerTraceTest(unittest.TestCase):
+    """Checks the producer-window parsing and the zero-versus-unread distinction it exists for."""
+
+    TRACE = """# tracer: nop
+     wallpaper-1234  [001] d..2 120.000000: tracing_mark_write: B|1234|dequeueBuffer
+     wallpaper-1234  [001] d..2 120.010000: tracing_mark_write: E|1234|dequeueBuffer
+     wallpaper-1234  [001] d..2 120.020000: tracing_mark_write: B|1234|queueBuffer
+     wallpaper-1234  [001] d..2 120.030000: tracing_mark_write: E|1234|queueBuffer
+     SurfaceFlinger-999  [000] d..2 120.040000: tracing_mark_write: B|999|queueBuffer
+     SurfaceFlinger-999  [000] d..2 120.050000: tracing_mark_write: E|999|queueBuffer
+     wallpaper-1234  [001] d..2 121.020000: tracing_mark_write: E|1234|onFrameCommitted
+"""
+
+    def test_counts_the_traced_process_buffer_events(self) -> None:
+        counts = device_layer.parse_producer_events(self.TRACE, 1234)
+        self.assertEqual({"dequeueBuffer": 1, "queueBuffer": 1}, counts)
+
+    def test_ignores_events_from_another_process(self) -> None:
+        self.assertEqual({}, device_layer.parse_producer_events(self.TRACE, 42))
+
+    def test_an_empty_trace_has_no_events(self) -> None:
+        self.assertEqual({}, device_layer.parse_producer_events("", 1234))
+
+    def test_a_window_with_frames_reports_them(self) -> None:
+        window = device_layer.ProducerWindow(
+            window_seconds=30.0,
+            pid=1234,
+            event_counts={"queueBuffer": 30, "dequeueBuffer": 30},
+            trace_lines=60,
+            display_states=(True, True),
+        )
+        self.assertEqual(30, window.frame_count)
+        self.assertTrue(window.display_on_throughout)
+        self.assertFalse(window.display_off_throughout)
+
+    def test_an_empty_event_map_is_a_measured_zero_not_a_missing_key(self) -> None:
+        window = device_layer.ProducerWindow(
+            window_seconds=60.0, pid=1234, event_counts={}, trace_lines=3, display_states=(False, False, False)
+        )
+        self.assertEqual(0, window.frame_count)
+        self.assertTrue(window.display_off_throughout)
+
+    def test_a_window_with_no_display_samples_is_neither_on_nor_off(self) -> None:
+        window = device_layer.ProducerWindow(
+            window_seconds=60.0, pid=1234, event_counts={}, trace_lines=3, display_states=()
+        )
+        self.assertFalse(window.display_off_throughout)
+        self.assertFalse(window.display_on_throughout)
+
+    def test_an_uncapturable_trace_is_an_error(self) -> None:
+        with (
+            patch.object(device_layer, "run_adb", side_effect=subprocess.CalledProcessError(1, "atrace")),
+            self.assertRaises(subprocess.CalledProcessError),
+        ):
+            device_layer.capture_producer_window("device", 1234, seconds=0.0, sample_seconds=0.0)
+
+
+class HiddenFramesPhaseTest(unittest.TestCase):
+    """Checks the hidden-window phase's accept, refuse, and tracer-validation branches."""
+
+    def window(self, frames: int, states: tuple[bool | None, ...]) -> device_layer.ProducerWindow:
+        counts = {"queueBuffer": frames} if frames else {}
+        return device_layer.ProducerWindow(
+            window_seconds=20.0, pid=123, event_counts=counts, trace_lines=40, display_states=states
+        )
+
+    def run_phase(self, windows: list[object]) -> tuple[list[tuple[str, str]], list[str]]:
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        device = MagicMock()
+        device.get_wallpaper_pid.return_value = 123
+        device.sleep_screen.return_value = True
+        device.read_screen_on.return_value = False
+        device.read_wallpaper_visible.return_value = False
+        device.wake_screen.return_value = True
+        device.capture_producer_window.side_effect = windows
+        with patch.object(qualification.time, "sleep"), contextlib.redirect_stdout(io.StringIO()):
+            qualification.phase_hidden_frames(device, results, failures)
+        return results, failures
+
+    def test_zero_frames_with_working_controls_pass(self) -> None:
+        results, failures = self.run_phase(
+            [self.window(20, (True, True)), self.window(0, (False, False, False)), self.window(20, (True, True))]
+        )
+        self.assertEqual([], failures)
+        self.assertEqual(3, len(results))
+
+    def test_frames_in_the_hidden_window_fail_the_budget(self) -> None:
+        _, failures = self.run_phase(
+            [self.window(20, (True, True)), self.window(5, (False, False)), self.window(20, (True, True))]
+        )
+        self.assertTrue(any("5 producer frames were rendered" in failure for failure in failures))
+
+    def test_a_blind_control_refuses_instead_of_recording_a_zero(self) -> None:
+        results, failures = self.run_phase([self.window(0, (True, True))])
+        # The blind control is recorded as evidence that it was run and found nothing, and the
+        # hidden window is never traced at all, so no zero can be read as a hidden-frame result.
+        self.assertEqual(1, len(results))
+        self.assertIn("visible control", results[0][0])
+        self.assertTrue(any("unread counter rather than a measured zero" in failure for failure in failures))
+
+    def test_a_control_that_stopped_working_invalidates_the_zero(self) -> None:
+        _, failures = self.run_phase(
+            [self.window(20, (True, True)), self.window(0, (False, False)), self.window(0, (True, True))]
+        )
+        self.assertTrue(any("tracer stopped working during the hidden window" in failure for failure in failures))
+
+    def test_a_window_whose_display_came_on_is_not_a_screen_off_window(self) -> None:
+        _, failures = self.run_phase(
+            [self.window(20, (True, True)), self.window(0, (False, True, False)), self.window(20, (True, True))]
+        )
+        self.assertTrue(any("does not describe a screen-off window" in failure for failure in failures))
+
+    def test_a_failed_trace_is_reported_rather_than_read_as_zero(self) -> None:
+        results, failures = self.run_phase(
+            [
+                device_layer.ProbeError("the atrace window produced no mark lines"),
+                self.window(0, (False, False)),
+                self.window(20, (True, True)),
+            ]
+        )
+        self.assertEqual([], results)
+        self.assertTrue(any("producer trace failed" in failure for failure in failures))
+        self.assertTrue(any("no mark lines" in failure for failure in failures))
 
 
 class HandDetectionTest(unittest.TestCase):
@@ -2378,6 +2509,7 @@ class PhasePrerequisiteTest(unittest.TestCase):
                     "phase_time_travel",
                     "phase_midnight_rollover",
                     "phase_total_pss_growth",
+                    "phase_hidden_frames",
                 ):
                     stack.enter_context(patch.object(qualification, phase))
                 stack.enter_context(patch.object(device_layer, "sleep_screen", return_value=True))
@@ -2511,6 +2643,7 @@ class PhasePrerequisiteTest(unittest.TestCase):
                 "phase_time_travel",
                 "phase_midnight_rollover",
                 "phase_total_pss_growth",
+                "phase_hidden_frames",
             ):
                 stack.enter_context(patch.object(module, phase))
             with self.assertRaises(SystemExit) as exit_error:

@@ -41,6 +41,12 @@ ANGLE_REPORT_DECIMALS: Final = 3
 # so the sample is refused instead of passed.
 SCREEN_OFF_SETTLE_SECONDS: Final = 1.0
 SCREEN_OFF_SAMPLE_SECONDS: Final = 4.0
+# The producer windows below bracket the hidden one on both sides: a control taken before and after,
+# each on the visible home screen, is what makes a zero inside the hidden window a measurement
+# rather than an empty trace. Durations are bounded so no single gather holds the shared device for
+# long, and the 60 s hidden window is sampled every 2 s across its whole width.
+PRODUCER_CONTROL_SECONDS: Final = 20.0
+PRODUCER_HIDDEN_SECONDS: Final = 60.0
 SCREEN_OFF_CPU_BUDGET_SECONDS: Final = 0.05
 
 # Rollover instants are built in the zone the service actually renders with (the saved site's,
@@ -936,6 +942,111 @@ def finish_run(results: list[tuple[str, str]], failures: list[str], *, log_scan_
         print("ALL CONFIGURED DEVICE CHECKS PASSED.")
 
 
+def evaluate_producer_control(
+    window: device_layer.ProducerWindow | None, failures: list[str], *, description: str
+) -> bool:
+    """Fail unless a visible control window produced frames with the display on throughout."""
+    if window is None:
+        return False
+    if window.frame_count == 0:
+        failures.append(
+            f"The {description} produced no producer frames, so the tracer is not evidence and a zero "
+            "recorded beside it would be an unread counter rather than a measured zero"
+        )
+        return False
+    if not window.display_on_throughout:
+        failures.append(f"The {description} display was not on for every sample taken inside it")
+    return True
+
+
+# device, pid, seconds, results, failures and the description all have to reach the one call site
+# that both records and fails the check; bundling them into a carrier type would not make the call
+# clearer, so the argument count is the honest shape here.
+def measure_producer_window(  # noqa: PLR0913
+    device: device_layer.AdbDevice,
+    pid: int | None,
+    seconds: float,
+    results: list[tuple[str, str]],
+    failures: list[str],
+    *,
+    description: str,
+) -> device_layer.ProducerWindow | None:
+    """Trace one bounded producer window, recording its evidence or failing the check."""
+    if pid is None:
+        failures.append(f"No wallpaper process to trace for the {description}")
+        return None
+    try:
+        window = device.capture_producer_window(pid, seconds=seconds)
+    except (subprocess.SubprocessError, OSError, RuntimeError) as error:
+        failures.append(f"The {description} producer trace failed: {device_layer.error_detail(error)}")
+        return None
+    states = window.display_states
+    display = "on" if window.display_on_throughout else "off" if window.display_off_throughout else "mixed"
+    summary = (
+        f"{window.frame_count} producer frames over {window.window_seconds:.0f} s "
+        f"({window.trace_lines} trace lines; display sampled {len(states)}x: {display})"
+    )
+    results.append((f"producer trace, {description}", summary))
+    print(f"{description}: {summary}")
+    return window
+
+
+def evaluate_hidden_window(window: device_layer.ProducerWindow | None, failures: list[str]) -> None:
+    """Fail unless the hidden window was screen-off for its whole width and produced no frames."""
+    if window is None:
+        return
+    if not window.display_off_throughout:
+        failures.append(
+            "The display was not off for every sample inside the hidden producer window, so its "
+            "frame count does not describe a screen-off window"
+        )
+    if window.frame_count != 0:
+        failures.append(
+            f"{window.frame_count} producer frames were rendered while the engine was hidden and the "
+            "display was off; the budget is zero"
+        )
+
+
+def phase_hidden_frames(device: device_layer.AdbDevice, results: list[tuple[str, str]], failures: list[str]) -> None:
+    """Evidence zero rendering while the engine is hidden and the display is off (#125 criterion 1)."""
+    print("\n--- Phase 8: Hidden Producer Window ---")
+    pid_before = read_safe_pid(device)
+    control = measure_producer_window(
+        device, pid_before, PRODUCER_CONTROL_SECONDS, results, failures, description="visible control"
+    )
+    if not evaluate_producer_control(control, failures, description="visible control window"):
+        return
+
+    if not device.sleep_screen():
+        failures.append("Screen sleep request failed; the hidden producer window was skipped")
+        return
+    time.sleep(SCREEN_OFF_SETTLE_SECONDS)
+    if device.read_screen_on() is not False:
+        failures.append("Display was not confirmed off before the hidden producer window")
+        return
+    if device.read_wallpaper_visible() is True:
+        failures.append("The wallpaper reported visible while the screen was confirmed off")
+
+    pid = confirm_pid_unchanged(device, pid_before, failures, description="hidden producer window")
+    hidden = measure_producer_window(
+        device, pid, PRODUCER_HIDDEN_SECONDS, results, failures, description="hidden, screen off"
+    )
+    evaluate_hidden_window(hidden, failures)
+
+    if not device.wake_screen():
+        failures.append("Screen wake request failed; the closing control trace was skipped")
+        return
+    time.sleep(SCREEN_OFF_SETTLE_SECONDS)
+    closing = measure_producer_window(
+        device, pid_before, PRODUCER_CONTROL_SECONDS, results, failures, description="visible control after"
+    )
+    if closing is not None and closing.frame_count == 0:
+        failures.append(
+            "The visible control window after the hidden one produced no producer frames, so the "
+            "tracer stopped working during the hidden window and its zero is not evidence"
+        )
+
+
 def main() -> None:
     """Inspect the device, run every check phase, restore the device, and report."""
     args = build_argument_parser().parse_args()
@@ -976,8 +1087,11 @@ def main() -> None:
 
             current_phase = "total PSS growth"
             phase_total_pss_growth(device, args.max_pss_growth_kb, results, failures)
+
+            current_phase = "hidden producer window"
+            phase_hidden_frames(device, results, failures)
         else:
-            print("Skipping phases 1-7: environment setup was not confirmed.", file=sys.stderr)
+            print("Skipping phases 1-8: environment setup was not confirmed.", file=sys.stderr)
 
     except (subprocess.SubprocessError, OSError, RuntimeError) as error:
         failures.append(f"Run aborted during {current_phase}: {device_layer.error_detail(error)}")

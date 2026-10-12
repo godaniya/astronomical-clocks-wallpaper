@@ -41,6 +41,8 @@ DEBUG_CLOCK_RESET_MESSAGE: Final = "Debug clock reset to system UTC"
 # Bound every ADB call: a stalled transport would otherwise block the run forever.
 ADB_TIMEOUT_SECONDS: Final = 30
 ADB_RESTORE_TIMEOUT_SECONDS: Final = 60
+# A trace dump moves the whole trace buffer over the transport, which a plain shell call cannot.
+ADB_TRACE_TIMEOUT_SECONDS: Final = 120
 
 # The service logs its acceptance asynchronously; a deferred or racy write can land after the
 # broadcast command returns, so the confirmation re-reads a bounded number of times.
@@ -576,6 +578,112 @@ def read_process_cpu_clock_ticks(serial: str) -> int | None:
     return int(value) if value.isdigit() and int(value) > 0 else None
 
 
+# --- Producer accounting for a hidden window (#125 criterion 1) --------------
+#
+# A frame count has to come from the wallpaper's own producer pipeline, not from its lifecycle
+# state: `mVisible=false` is what the framework was told, and a bounded CPU reading can still
+# contain rendered frames. `atrace` on the app's own process is the console this device exposes.
+# The window is always bracketed by a visible control, so a zero count inside it is distinguishable
+# from a trace that silently produced nothing: a control that finds no frames is an error, never a
+# zero, because a counter that was never read cannot evidence anything.
+
+TRACE_WINDOW_SECONDS: Final = 30.0
+TRACE_DISPLAY_SAMPLE_SECONDS: Final = 2.0
+TRACE_CATEGORIES: Final = ("gfx", "view")
+TRACE_DEVICE_PATH: Final = "/data/local/tmp/wallpaper-producer.ftrace"
+# The text trace marks each event with a `B|<pid>|<name>` / `E|<pid>|<name>` pair, so only the
+# completion half is matched: counting both would double every event. `--async_start` traces into a
+# circular buffer, which truncates the head of the window rather than the tail, so a leading `E`
+# whose `B` was cut is still one completed event while a trailing `B` without its `E` is not counted.
+TRACE_MARK_PATTERN: Final = re.compile(r"tracing_mark_write:\s*E\|\s*(\d+)\|([^\s|]+)")
+# A produced frame is the buffer the producer hands to the consumer; the dequeue is recorded
+# alongside it because a draw that never commits shows up as a dequeue without a queue.
+PRODUCER_QUEUE_EVENT: Final = "queueBuffer"
+PRODUCER_TRACKED_EVENTS: Final = frozenset({PRODUCER_QUEUE_EVENT, "dequeueBuffer"})
+
+
+@dataclass(frozen=True)
+class ProducerWindow:
+    """One bounded producer-trace window, with the display state sampled inside it."""
+
+    window_seconds: float
+    pid: int
+    event_counts: dict[str, int]
+    trace_lines: int
+    display_states: tuple[bool | None, ...]
+
+    @property
+    def frame_count(self) -> int:
+        """The number of frames the traced process handed to the consumer during the window."""
+        return self.event_counts.get(PRODUCER_QUEUE_EVENT, 0)
+
+    @property
+    def display_off_throughout(self) -> bool:
+        """Whether every sample taken inside the window found the display off."""
+        return bool(self.display_states) and all(state is False for state in self.display_states)
+
+    @property
+    def display_on_throughout(self) -> bool:
+        """Whether every sample taken inside the window found the display on."""
+        return bool(self.display_states) and all(state is True for state in self.display_states)
+
+
+def parse_producer_events(trace_text: str, pid: int) -> dict[str, int]:
+    """Count one process's producer buffer events in an `atrace` text trace."""
+    counts: dict[str, int] = {}
+    for match in TRACE_MARK_PATTERN.finditer(trace_text):
+        if not captured_text(match, 1).isdigit() or int(captured_text(match, 1)) != pid:
+            continue
+        name = captured_text(match, 2)
+        if name in PRODUCER_TRACKED_EVENTS:
+            counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def capture_producer_window(
+    serial: str,
+    pid: int,
+    *,
+    seconds: float = TRACE_WINDOW_SECONDS,
+    sample_seconds: float = TRACE_DISPLAY_SAMPLE_SECONDS,
+) -> ProducerWindow:
+    """
+    Trace a process's producer pipeline for a bounded window, sampling the display throughout.
+
+    The trace runs on the device while this loop samples the display state, so the record covers the
+    display *inside* the window rather than only at its endpoints. An unusable trace is raised: a
+    window with no usable trace is not a window in which nothing was drawn.
+    """
+    start_command = ["shell", "atrace", "--async_start", "-a", str(pid)]
+    start_command.extend(TRACE_CATEGORIES)
+    run_adb(start_command, serial=serial)
+    try:
+        states: list[bool | None] = []
+        remaining = seconds
+        while remaining > 0:
+            interval = min(sample_seconds, remaining)
+            time.sleep(interval)
+            remaining -= interval
+            states.append(read_screen_on(serial))
+        dump = run_adb(["shell", "atrace", "--async_dump"], serial=serial, timeout=ADB_TRACE_TIMEOUT_SECONDS)
+    finally:
+        run_adb(["shell", "atrace", "--async_stop"], serial=serial, timeout=ADB_TRACE_TIMEOUT_SECONDS)
+    trace_text = dump.decode("utf-8", errors="replace")
+    if "tracing_mark_write" not in trace_text:
+        detail = (
+            f"the atrace window produced no mark lines for pid {pid}, so it cannot evidence a frame "
+            "count; check that atrace is permitted on this build before reading the window"
+        )
+        raise ProbeError(detail)
+    return ProducerWindow(
+        window_seconds=seconds,
+        pid=pid,
+        event_counts=parse_producer_events(trace_text, pid),
+        trace_lines=len(trace_text.splitlines()),
+        display_states=tuple(states),
+    )
+
+
 def is_saved_coordinate_in_range(value: object, limit: float) -> bool:
     """Report whether value is a JSON number within ±limit, excluding JSON true/false (a Python int)."""
     return isinstance(value, (int, float)) and not isinstance(value, bool) and -limit <= value <= limit
@@ -818,6 +926,12 @@ class AdbDevice:
     def read_wallpaper_visible(self) -> bool | None:
         """Read whether the wallpaper engine is reported visible on this device."""
         return read_wallpaper_visible(self.serial)
+
+    def capture_producer_window(
+        self, pid: int, *, seconds: float = TRACE_WINDOW_SECONDS, sample_seconds: float = TRACE_DISPLAY_SAMPLE_SECONDS
+    ) -> ProducerWindow:
+        """Trace this device's producer pipeline for a bounded window, sampling the display."""
+        return capture_producer_window(self.serial, pid, seconds=seconds, sample_seconds=sample_seconds)
 
     def sleep_screen(self) -> bool:
         """Put the screen to sleep."""
