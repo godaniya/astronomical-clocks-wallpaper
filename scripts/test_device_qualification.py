@@ -417,6 +417,20 @@ class DeviceQualificationTest(unittest.TestCase):
         with self.assertRaises(device_layer.ProbeError):
             device_layer.read_saved_site_zone_id("device")
 
+    @patch.object(
+        device_layer,
+        "run_adb",
+        side_effect=subprocess.CalledProcessError(
+            1,
+            ["adb"],
+            stderr=b"cat: " + device_layer.LOCATION_PREFS_PATH.encode() + b": Datei nicht gefunden",
+        ),
+    )
+    def test_a_localized_absence_message_is_not_read_as_absent(self, _run_adb: MagicMock) -> None:
+        """A non-English not-found message naming the prefs path must fail loudly, not read as absent."""
+        with self.assertRaises(device_layer.ProbeError):
+            device_layer.read_saved_site_zone_id("device")
+
     @patch.object(device_layer, "run_adb", return_value=b"100\n")
     def test_clock_tick_rate_is_parsed(self, _run_adb: MagicMock) -> None:
         self.assertEqual(device_layer.read_process_cpu_clock_ticks("device"), 100)
