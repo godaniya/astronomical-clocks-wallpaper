@@ -38,7 +38,32 @@ FIXTURE_START_PID: Final = 111
 
 FIXTURE_REBOUND_PID: Final = 222
 
-FIXTURE_HAND_ANGLES: Final = [0.0, 0.0, 0.0, 0.0, 0.0, 7.5, 180.0, 168.75, 179.958, 180.042, 191.25]
+# detect_hand_angle readings in the mocked main() path, in call order: the baseline, wake, preview,
+# surface, rebind and time-travel-baseline captures (six 0.0 values), then the +30m and +12h advances
+# (7.5 and 180.0), then the four midnight-rollover samples. The log-scan test asserts the count and
+# that no phase but the log scan fails, so a value landing in the wrong phase is caught there too.
+FIXTURE_HAND_ANGLES: Final = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 7.5, 180.0, 168.75, 179.958, 180.042, 191.25]
+
+# get_wallpaper_pid readings in the mocked main() path, in call order: the pre-run baseline, the three
+# screen-off reads (before the sleep request, after the sleep settles, and at the CPU sample window's
+# end), then the rebind's pre-kill read and its two poll reads (the first poll still sees the old PID,
+# the second observes the rebound one). The count is asserted by the log-scan test.
+FIXTURE_WALLPAPER_PIDS: Final = [FIXTURE_START_PID] * 6 + [FIXTURE_REBOUND_PID]
+
+# The physical size the mocked baseline reports, and the override the surface phase is expected to
+# apply: the latter comes from the harness's own chooser, so the two cannot drift apart.
+FIXTURE_PHYSICAL_SIZE: Final = "1080x2408"
+
+FIXTURE_RECREATE_SIZE: Final = device_layer.choose_recreate_size(FIXTURE_PHYSICAL_SIZE, None)
+
+# read_display_size readings in the mocked main() path, in call order: the pre-run baseline read, the
+# surface phase's active-override read, and its post-restore read. The count is asserted by the
+# log-scan test.
+FIXTURE_DISPLAY_SIZES: Final = [
+    (FIXTURE_PHYSICAL_SIZE, None),
+    (FIXTURE_PHYSICAL_SIZE, FIXTURE_RECREATE_SIZE),
+    (FIXTURE_PHYSICAL_SIZE, None),
+]
 
 # A realistic observing_location.xml dump: SharedPreferences XML-escapes the quotes in the stored
 # JSON record, and LocationStore.kt writes the zone as a full IANA id.
@@ -794,7 +819,7 @@ class DeviceQualificationTest(unittest.TestCase):
 
 
 class RendererLogScanTest(unittest.TestCase):
-    """Phase 7's split between an inconclusive scan and a failed collection."""
+    """Phase 8's split between an inconclusive scan and a failed collection."""
 
     @patch.object(
         device_layer,
@@ -828,58 +853,121 @@ class RendererLogScanTest(unittest.TestCase):
         self.assertEqual(results[0][0], "renderer log scan")
         self.assertIn("Inconclusive", results[0][1])
 
-    def test_log_collection_failure_makes_the_whole_run_exit_nonzero(self) -> None:
+    def _mock_every_phase_succeeding(self, stack: contextlib.ExitStack) -> tuple[MagicMock, MagicMock, MagicMock]:
         """
-        Fail the whole run when the log scan cannot be collected.
+        Enter the doubles under which every phase except the renderer log scan succeeds.
 
-        The reported defect: Phase 7 sits after the try/finally, so a collection error there was
-        reported as an inconclusive pass and the run exited 0 even though no log was ever read.
-        Every other phase is made to succeed, so the exit code turns on the log scan alone.
+        The run is driven entirely by these fixtures, so each reading a phase makes has to come from
+        the right one: a constant return or a miscounted fixture turns a phase's outcome quiet rather
+        than loud. The hand-angle, wallpaper-PID, and display-size mocks are returned so the caller
+        can pin how many readings each fixture supplied.
         """
+        display_on = True
+
+        def read_screen_on(_serial: str) -> bool:
+            return display_on
+
+        def sleep_screen(_serial: str) -> bool:
+            nonlocal display_on
+            display_on = False
+            return True
+
+        def wake_screen(_serial: str) -> bool:
+            nonlocal display_on
+            display_on = True
+            return True
 
         def adb_side_effect(command: list[str], **_kwargs: object) -> bytes:
             if command[:2] == ["logcat", "-d"]:
                 raise subprocess.CalledProcessError(1, command, stderr=b"logcat unavailable")
             if "meminfo" in command:
                 return b"TOTAL 1000 0 0\n"
-            if "CHANGE_LIVE_WALLPAPER" in command:
+            # List membership is exact, and the action travels as one element of the argument list;
+            # testing the element itself never matches, which left the preview launch unconfirmed.
+            if any("CHANGE_LIVE_WALLPAPER" in argument for argument in command):
                 return b"Status: ok\n"
             return b""
 
-        with (
-            patch.object(sys, "argv", ["device_qualification.py", "--max-pss-growth-kb", "10"]),
-            patch.object(device_layer, "select_target_serial", return_value="device"),
-            patch.object(device_layer, "run_adb", side_effect=adb_side_effect),
-            patch.object(device_layer, "read_display_size", return_value=("1080x2408", None)),
-            patch.object(device_layer, "read_screen_on", return_value=True),
-            patch.object(device_layer, "read_night_mode", return_value="auto"),
-            patch.object(device_layer, "read_keyguard_locked", return_value=False),
-            patch.object(device_layer, "read_saved_site_zone_id", return_value="Europe/Prague"),
-            patch.object(
-                device_layer,
-                "get_wallpaper_pid",
-                side_effect=[
-                    FIXTURE_START_PID,
-                    FIXTURE_START_PID,
-                    FIXTURE_START_PID,
-                    FIXTURE_START_PID,
-                    FIXTURE_REBOUND_PID,
-                ],
-            ),
-            patch.object(device_layer, "send_debug_clock_broadcast", return_value=True),
-            patch.object(qualification, "restore_device", return_value=True),
-            patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))),
-            patch.object(device_layer, "is_dark_palette", return_value=False),
-            patch.object(device_layer, "detect_hand_angle", side_effect=FIXTURE_HAND_ANGLES),
-            patch.object(qualification.time, "sleep"),
-            contextlib.redirect_stdout(io.StringIO()),
-            contextlib.redirect_stderr(io.StringIO()) as error_output,
-            self.assertRaises(SystemExit) as exit_error,
-        ):
-            qualification.main()
+        # read_display_size is not constant across the run, so one return_value cannot serve it: the
+        # baseline read sees no override, then the surface phase reads the override it applied and the
+        # restored size.
+        stack.enter_context(patch.object(sys, "argv", ["device_qualification.py", "--max-pss-growth-kb", "10"]))
+        stack.enter_context(patch.object(device_layer, "select_target_serial", return_value="device"))
+        stack.enter_context(patch.object(device_layer, "run_adb", side_effect=adb_side_effect))
+        size_mock = stack.enter_context(
+            patch.object(device_layer, "read_display_size", side_effect=FIXTURE_DISPLAY_SIZES)
+        )
+        stack.enter_context(patch.object(device_layer, "read_screen_on", side_effect=read_screen_on))
+        stack.enter_context(patch.object(device_layer, "sleep_screen", side_effect=sleep_screen))
+        stack.enter_context(patch.object(device_layer, "wake_screen", side_effect=wake_screen))
+        stack.enter_context(patch.object(device_layer, "read_wallpaper_visible", return_value=False))
+        stack.enter_context(patch.object(device_layer, "read_night_mode", return_value="auto"))
+        stack.enter_context(patch.object(device_layer, "read_keyguard_locked", return_value=False))
+        stack.enter_context(patch.object(device_layer, "read_saved_site_zone_id", return_value="Europe/Prague"))
+        pid_mock = stack.enter_context(
+            patch.object(device_layer, "get_wallpaper_pid", side_effect=FIXTURE_WALLPAPER_PIDS)
+        )
+        stack.enter_context(patch.object(device_layer, "read_process_cpu_ticks", return_value=100))
+        stack.enter_context(patch.object(device_layer, "read_process_cpu_clock_ticks", return_value=100))
+        stack.enter_context(patch.object(qualification.time, "monotonic", side_effect=[10.0, 14.0]))
+        stack.enter_context(patch.object(device_layer, "send_debug_clock_broadcast", return_value=True))
+        stack.enter_context(patch.object(qualification, "restore_device", return_value=True))
+        stack.enter_context(patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))))
+        stack.enter_context(patch.object(device_layer, "is_dark_palette", return_value=False))
+        hand_mock = stack.enter_context(
+            patch.object(device_layer, "detect_hand_angle", side_effect=FIXTURE_HAND_ANGLES)
+        )
+        stack.enter_context(patch.object(qualification.time, "sleep"))
+        return hand_mock, pid_mock, size_mock
+
+    def test_log_collection_failure_makes_the_whole_run_exit_nonzero(self) -> None:
+        """
+        Fail the whole run when the log scan cannot be collected.
+
+        The reported defect: Phase 8 sits after the try/finally, so a collection error there was
+        reported as an inconclusive pass and the run exited 0 even though no log was ever read.
+        Every other phase is made to succeed, so the exit code turns on the log scan alone.
+        """
+        with contextlib.ExitStack() as stack:
+            hand_mock, pid_mock, size_mock = self._mock_every_phase_succeeding(stack)
+            output = stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            error_output = stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+            with self.assertRaises(SystemExit) as exit_error:
+                qualification.main()
 
         self.assertEqual(exit_error.exception.code, 1)
         self.assertIn("Renderer log scan could not be collected", error_output.getvalue())
+        # Exactly one check fails, and it is the log scan. This is what makes the docstring's claim
+        # true: a fixture that drifts a phase into failing reports a second "- FAIL:" line here, so the
+        # run cannot pass on the exit code while a phase it claims succeeds quietly does not.
+        self.assertEqual(error_output.getvalue().count("FAIL:"), 1)
+        # No phase failed, but the claim is that every other phase succeeded, so each must also have
+        # published its own result row: the failure count alone would still read 1 if a phase returned
+        # early without appending either a result or a failure.
+        for check in (
+            "visible dial baseline",
+            "screen-off / wake navigation",
+            "preview navigation",
+            "surface recreation",
+            "process rebind",
+            "time travel (+30m, +12h)",
+            "midnight date rollover",
+            "total PSS sample",
+        ):
+            with self.subTest(check=check):
+                self.assertIn(check, output.getvalue())
+        # The hand and display-size reads are fixed in number, so comparing their call counts with
+        # their fixture lengths catches both an over-long fixture (whose trailing values would go
+        # unread) and an under-long one (which raises StopIteration out of main()).
+        self.assertEqual(hand_mock.call_count, len(FIXTURE_HAND_ANGLES))
+        self.assertEqual(size_mock.call_count, len(FIXTURE_DISPLAY_SIZES))
+        # The rebind poll loop re-reads the PID until it changes, so its read count grows with the
+        # fixture instead of pinning it, and comparing against len(FIXTURE_WALLPAPER_PIDS) would hold
+        # for an extra leading START absorbed as one more poll. Pin the literal seven reads — the
+        # baseline, the three screen-off reads, the rebind's pre-kill read and its two polls — and the
+        # fixture length, so drift in either fails here.
+        self.assertEqual(pid_mock.call_count, 7)
+        self.assertEqual(len(FIXTURE_WALLPAPER_PIDS), 7)
 
 
 class PaletteProbeTest(unittest.TestCase):
@@ -1716,6 +1804,55 @@ class PhasePrerequisiteTest(unittest.TestCase):
         for readback in (("1080x2408", "1080x2000"), (None, None)):
             with self.subTest(readback=readback):
                 self.check_surface_failure_through_main(qualification, readback)
+
+    def test_the_preview_phase_passes_only_a_confirmed_launch_with_a_visible_hand(self) -> None:
+        """
+        The preview phase's evidence is a confirmed launch plus a hand on the home screen.
+
+        Neither an unconfirmed launch nor a missing hand may leave a passing row behind. The
+        unconfirmed-launch row is the one the full-run test used to emit while claiming every other
+        phase succeeded, so it is pinned here on its own.
+        """
+        for launch, angle, expected_failures in (
+            (b"Status: error\n", 1.0, ["Wallpaper preview did not report a successful launch"]),
+            (b"Status: ok\n", None, ["Hand missing after preview close"]),
+            (b"Status: ok\n", 1.0, []),
+        ):
+            with self.subTest(launch=launch, angle=angle):
+                results: list[tuple[str, str]] = []
+                failures: list[str] = []
+                with (
+                    patch.object(device_layer, "run_adb", return_value=launch),
+                    patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))),
+                    patch.object(device_layer, "detect_hand_angle", return_value=angle),
+                    patch.object(qualification, "ensure_screen_on", return_value=True),
+                    patch.object(qualification.time, "sleep"),
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    qualification.phase_preview_navigation(device_layer.AdbDevice("device"), results, failures)
+                self.assertEqual(failures, expected_failures)
+                self.assertEqual(len(results), int(not expected_failures))
+
+    def test_an_override_that_did_not_take_fails_the_surface_phase(self) -> None:
+        """A resize the readback never shows as active must fail, not be reported as a redrawn dial."""
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        with (
+            patch.object(device_layer, "read_display_size", side_effect=[("1080x2408", None), ("1080x2408", None)]),
+            patch.object(device_layer, "run_adb") as run_adb,
+            patch.object(device_layer, "capture_frame", return_value=(2, 2, bytes(16))),
+            patch.object(device_layer, "detect_hand_angle", return_value=1.0),
+            patch.object(qualification, "ensure_screen_on", return_value=True),
+            patch.object(qualification.time, "sleep"),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            qualification.phase_surface_recreation(
+                device_layer.AdbDevice("device"), None, "1080x2000", results, failures
+            )
+        self.assertEqual(failures, ["Display-size override was not active as requested (None)"])
+        self.assertEqual(results, [])
+        # The restore command still runs: a failed override must not leave the display resized.
+        self.assertEqual(run_adb.call_args.args[0], device_layer.size_restore_command(None))
 
     def test_a_failed_environment_wake_skips_the_reset_broadcast(self) -> None:
         """An unconfirmed environment wake must stop phase 0 before any reset or navigation."""
