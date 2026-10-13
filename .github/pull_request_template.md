@@ -1,6 +1,8 @@
 ## Summary
 
-<!-- Replace with two to four concise bullets explaining outcomes and why. -->
+<!-- Replace with two to four concise bullets: the outcome and why, as the change
+     now stands. When review changes the outcome, revise these bullets; do not add
+     a bullet per push or review round — that history lives in commits and threads. -->
 -
 -
 
@@ -23,18 +25,21 @@
 <summary>Accountability Index</summary>
 
 <!-- Follow CONTRIBUTING.md, "Pull requests and Accountability Index".
-     Update after each push and review round. Use actual native commit references,
-     e.g. owner/repo@sha, without backticks. Keep full rationale in commits/threads.
+     On each push and review round, add a row per new commit and a link per newly
+     resolved finding; nothing else in the body grows. One line per cell; link the
+     rationale in commits/threads rather than copying it. Use actual native commit
+     references, e.g. owner/repo@sha, without backticks.
      After the default squash merge these SHAs live on the PR head ref rather than
      in main's ancestry, so this table is not expected to match main commit for
      commit; citing them is still correct. See [merge policy](../CONTRIBUTING.md#merge-method). -->
 
 | Commit | What | Why |
 | --- | --- | --- |
-| <!-- actual commit reference --> | <!-- brief outcome --> | <!-- brief motivation --> |
+| <!-- actual commit reference --> | <!-- commit subject --> | <!-- one-line motivation --> |
 
-Review decisions: <!-- Link specific discussion comments; say none if none exist.
-     These links target PR discussion and survive the squash merge. -->
+Review decisions: <!-- One link per resolved finding, naming its fixing commit or
+     "declined"; link the verdict reply for findings raised in a review body. Say
+     none if none exist. These links target PR discussion and survive the squash merge. -->
 
 Caveats: <!-- Unrun checks, unresolved questions, or limitations; say none if none. -->
 

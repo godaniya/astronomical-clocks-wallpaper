@@ -35,6 +35,13 @@ For material revisions, preserve existing trailers in chronological order and
 append each newly contributing model once. Never invent model identities or
 edit existing issues solely to apply this policy. Human-only issues omit attribution.
 
+## Pull request bodies and review
+
+Follow [PR accountability](CONTRIBUTING.md#pull-requests-and-accountability-index).
+After a review round, put its reasoning in the thread reply and the commit body;
+in the PR body, add only the new index rows and links, and revise the Summary only
+if the outcome changed.
+
 ## Product feature gate
 
 Agents must perform the [contributor product feature gate](CONTRIBUTING.md#product-feature-gate)

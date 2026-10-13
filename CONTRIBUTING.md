@@ -281,23 +281,33 @@ do not argue for one, unless the owner explicitly asks.
 
 ### Pull requests and Accountability Index
 
-Follow [.github/pull_request_template.md](.github/pull_request_template.md):
+Follow [.github/pull_request_template.md](.github/pull_request_template.md). The
+body describes the change as it now stands, for a reviewer reading it for the
+first time; how it got there is recorded in commit bodies and discussion threads,
+one link away.
 
+- Keep the visible text short. The Summary is two to four outcome bullets
+  describing the change as it now stands; when review changes the outcome, revise
+  those bullets. Do not add a bullet, paragraph, or section per push or review
+  round.
 - Add risk, compatibility, migration, or rollout details only when material.
 - Include a collapsible **Accountability Index** at the bottom: a linked table of
-  each commit with a brief what/why, links to discussion comments containing
-  review decisions, and a short caveats note. It indexes evidence; full rationale
-  belongs in commit bodies and discussion threads.
+  each commit with a one-line what (the commit subject serves) and a one-line why,
+  links to the discussion comments containing review decisions, and a short
+  caveats note. It indexes evidence; it is not the record. Do not copy into it
+  rationale that a commit body or thread reply already holds — link to it.
 - Update the index on every push and review round, in the same pass as the
   commit or reply: add one row for every commit pushed (the table must not stop
-  at the opening commits), and replace the "Review decisions" line with links to
-  every resolved discussion thread. Those rows cite the PR's own commits, which
+  at the opening commits), and keep the "Review decisions" line as one link per
+  resolved finding, each naming the commit that resolved it or marking it
+  declined. A finding raised in a review body rather than a thread is linked
+  through the reply that records its verdict. Those rows cite the PR's own commits, which
   after the default [squash merge](#merge-method) remain on the PR head ref
   rather than in `main`'s ancestry; citing them by SHA is still correct, and the
   index is not expected to match `main` commit-for-commit. A table stuck at the
-  opening commits or a stale "none yet" line is itself a review finding. Link
-  evidence without copying extensive rationale. This project explicitly requires
-  this per-commit index, overriding the global default against one.
+  opening commits or a stale "none yet" line is itself a review finding. This
+  project explicitly requires this per-commit index, overriding the global
+  default against one.
 - Link out-of-band evidence the PR depends on — issue-body edits above all — from
   the index too. When the Summary or Verification rests on edited issue bodies,
   reference each edited issue so its audited state is traceable from the PR
