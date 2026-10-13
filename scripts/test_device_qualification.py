@@ -1374,6 +1374,34 @@ class HiddenFramesPhaseTest(unittest.TestCase):
                 self.assertTrue(any("display was not on for every sample" in failure for failure in failures))
                 self.assertFalse(any("hidden" in label for label, _ in results))
 
+    def test_a_restart_before_the_hidden_window_abandons_it_before_tracing(self) -> None:
+        # `confirm_pid_unchanged` returns the fresh reading even when it does not match, and the trace
+        # is filtered to the pid it is handed. Adopting a replacement here would trace the new process
+        # and then compare the post-window reading against that same replacement, so the mismatch
+        # would satisfy its own check and a zero for a process the opening control never bracketed
+        # would be recorded. The window is therefore abandoned before anything is traced.
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        device = MagicMock()
+        # The third reading is only reached without the fix, where the replacement pid is adopted and
+        # the post-window check then reads it back to compare against itself.
+        device.get_wallpaper_pid.side_effect = [123, 124, 124]
+        device.sleep_screen.return_value = True
+        device.read_screen_on.return_value = False
+        device.read_wallpaper_visible.return_value = False
+        device.wake_screen.return_value = True
+        device.capture_producer_window.return_value = self.window(20, (True, True))
+        with patch.object(qualification.time, "sleep"), contextlib.redirect_stdout(io.StringIO()):
+            qualification.phase_hidden_frames(device, results, failures)
+        # Only the opening control was traced, and it is the only row: the hidden window and the
+        # closing control are both skipped, so no zero is recorded for the replacement process.
+        self.assertEqual(1, device.capture_producer_window.call_count)
+        self.assertEqual(1, len(results))
+        self.assertIn("visible control", results[0][0])
+        self.assertFalse(any("hidden" in label for label, _ in results))
+        self.assertTrue(any("before=123, after=124" in failure for failure in failures))
+        device.wake_screen.assert_called_once_with()
+
     def test_a_process_that_restarted_inside_the_hidden_window_invalidates_the_zero(self) -> None:
         # The trace is filtered to one pid, so a restart inside the window would leave the
         # replacement's frames outside the trace and let the old pid's zero read as hidden-state

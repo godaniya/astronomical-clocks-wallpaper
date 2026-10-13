@@ -234,6 +234,25 @@ def confirm_pid_unchanged(
     return pid
 
 
+def confirm_bracketed_pid(device: device_layer.AdbDevice, pid_before: int | None, failures: list[str]) -> int | None:
+    """
+    Confirm the wallpaper is still the process the opening control bracketed, or abandon the window.
+
+    Returns the pid to trace, or None when the window must be abandoned. `confirm_pid_unchanged`
+    returns the fresh reading even when it does not match, and the trace is filtered to whatever pid
+    it is handed. Adopting a replacement would therefore trace the new process and then compare the
+    post-window reading against that same replacement, so the mismatch would satisfy its own check
+    and a zero for a process the opening control never bracketed would be recorded. The window is
+    abandoned — waking the device — rather than traced against a process that is not that one.
+    """
+    pid = confirm_pid_unchanged(device, pid_before, failures, description="hidden producer window")
+    if pid is None or pid != pid_before:
+        if not device.wake_screen():
+            failures.append("Screen wake request failed after the hidden window was abandoned")
+        return None
+    return pid
+
+
 def read_safe_cpu_ticks(device: device_layer.AdbDevice, pid: int | None) -> int | None:
     """Return process CPU ticks, returning None on missing pid or probe failure."""
     if pid is None:
@@ -1049,7 +1068,10 @@ def phase_hidden_frames(device: device_layer.AdbDevice, results: list[tuple[str,
             failures.append("Screen wake request failed after the hidden window was abandoned")
         return
 
-    pid = confirm_pid_unchanged(device, pid_before, failures, description="hidden producer window")
+    pid = confirm_bracketed_pid(device, pid_before, failures)
+    if pid is None:
+        return
+
     recorded_from = len(results)
     hidden = measure_producer_window(
         device, pid, PRODUCER_HIDDEN_SECONDS, results, failures, description="hidden, screen off"
@@ -1059,7 +1081,7 @@ def phase_hidden_frames(device: device_layer.AdbDevice, results: list[tuple[str,
     # removed rather than printed beside the failure as if it were a measurement, and the evaluation
     # that would have validated it is skipped.
     pid_after = confirm_pid_unchanged(device, pid, failures, description="hidden producer window")
-    if pid_after != pid or pid is None:
+    if pid_after != pid:
         del results[recorded_from:]
     else:
         evaluate_hidden_window(hidden, failures)
