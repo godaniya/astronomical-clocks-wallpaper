@@ -1149,6 +1149,24 @@ class ProducerTraceTest(unittest.TestCase):
             device_layer.capture_producer_window("device", 1234, seconds=0.0, sample_seconds=1.0)
         run_adb.assert_not_called()
 
+    def test_non_finite_durations_are_refused_before_the_trace_starts(self) -> None:
+        # `nan <= 0` and `inf <= 0` are both false, so a positivity-only guard lets them through:
+        # `inf` makes the sampling loop never terminate with the trace running, and `nan` skips the
+        # loop and returns a zero-frame window with no display samples.
+        for seconds, sample_seconds in (
+            (float("inf"), 1.0),
+            (float("nan"), 1.0),
+            (10.0, float("inf")),
+            (10.0, float("nan")),
+        ):
+            with (
+                self.subTest(seconds=seconds, sample_seconds=sample_seconds),
+                patch.object(device_layer, "run_adb") as run_adb,
+                self.assertRaises(device_layer.ProbeError),
+            ):
+                device_layer.capture_producer_window("device", 1234, seconds=seconds, sample_seconds=sample_seconds)
+            run_adb.assert_not_called()
+
     def test_an_uncapturable_trace_is_an_error(self) -> None:
         with (
             patch.object(device_layer, "run_adb", side_effect=subprocess.CalledProcessError(1, "atrace")),

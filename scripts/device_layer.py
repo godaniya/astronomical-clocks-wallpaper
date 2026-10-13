@@ -669,8 +669,15 @@ def capture_producer_window(
     display *inside* the window rather than only at its endpoints. An unusable trace is raised: a
     window with no usable trace is not a window in which nothing was drawn.
     """
-    if seconds <= 0 or sample_seconds <= 0:
-        detail = f"a trace window needs positive durations but got seconds={seconds}, sample_seconds={sample_seconds}"
+    # Finiteness is checked as well as positivity: `nan <= 0` and `inf <= 0` are both false, so a
+    # non-finite duration would pass a positive-only guard. `inf` then makes the sampling loop never
+    # terminate with the trace running, and `nan` skips the loop entirely and returns a zero-frame
+    # window with no display samples — a fabricated zero, which is exactly what this probe exists to
+    # prevent.
+    if not (math.isfinite(seconds) and math.isfinite(sample_seconds)) or seconds <= 0 or sample_seconds <= 0:
+        detail = (
+            f"a trace window needs finite positive durations but got seconds={seconds}, sample_seconds={sample_seconds}"
+        )
         raise ProbeError(detail)
     start_command = ["shell", "atrace", "--async_start", "-a", str(pid)]
     start_command.extend(TRACE_CATEGORIES)
