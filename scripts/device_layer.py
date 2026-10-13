@@ -687,7 +687,8 @@ def capture_producer_window(
     window with no usable trace is not a window in which nothing was drawn. Both durations must be
     in [MIN_TRACE_DURATION_SECONDS, MAX_TRACE_WINDOW_SECONDS]. `seconds` paces the reads; the
     returned window reports the span the trace actually covered, measured, which those reads make at
-    least `seconds`.
+    least `seconds`. A window whose reads cannot be taken inside it is refused rather than returned
+    with samples that do not span its width.
     """
     # Non-finite values are named explicitly rather than left to the range test, which also excludes
     # them (`nan` fails every comparison and `inf` exceeds the ceiling) but would bury the intent in
@@ -730,6 +731,19 @@ def capture_producer_window(
             remaining = deadline - time.monotonic()
             if remaining > 0:
                 time.sleep(remaining)
+            elif time.monotonic() >= started + seconds:
+                # The read count bounds how many reads are owed, not how long each may take: a read
+                # spends up to two adb timeouts, so a slow transport could hold `atrace` open for a
+                # multiple of the window's width. A read that would start after the window's own end
+                # is not taken, and the window is refused rather than returned with samples that do
+                # not span the width it was asked for.
+                overrun = time.monotonic() - (started + seconds)
+                detail = (
+                    f"the {seconds} s trace window could not take its display reads inside the "
+                    f"window: read {index + 1} of {sample_count} would have started {overrun:.1f} s "
+                    "after the window ended, so the samples would not span the width it was asked for"
+                )
+                raise ProbeError(detail)
             states.append(read_screen_on(serial))
         dump = run_adb(["shell", "atrace", "--async_dump"], serial=serial, timeout=ADB_TRACE_TIMEOUT_SECONDS)
         # The display reads and this dump run inside the trace, so the span it actually covers is at

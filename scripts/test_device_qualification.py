@@ -1329,6 +1329,42 @@ class ProducerTraceTest(unittest.TestCase):
         self.assertEqual([1002.0, 1004.0, 1006.0, 1008.0, 1010.0], reads)
         self.assertAlmostEqual(10.0, window.window_seconds)
 
+    def test_a_read_that_outruns_the_window_refuses_rather_than_extending_it(self) -> None:
+        # The read count bounds how many reads are owed, not how long they may take: a read spends up
+        # to two adb timeouts, so a slow transport could hold atrace open for a multiple of the
+        # window's width — at the (600 s, 0.1 s) corner, many hours. A read that would start after the
+        # window's own end is refused instead of taken, so the device is held for the window rather
+        # than for the window plus everything the reads overran.
+        trace = b"wallpaper-1234  [001] d..2 120.020000: tracing_mark_write: B|1234|queueBuffer"
+        clock = [1000.0]
+        read_latency = 3.0
+
+        def run(command: list[str], **_kwargs: object) -> bytes:
+            return trace if "--async_dump" in command else b""
+
+        def monotonic() -> float:
+            return clock[0]
+
+        def sleep(seconds: float) -> None:
+            clock[0] += seconds
+
+        def read_screen_on(_serial: str) -> bool:
+            clock[0] += read_latency
+            return True
+
+        with (
+            patch.object(device_layer, "run_adb", side_effect=run),
+            patch.object(device_layer.time, "monotonic", monotonic),
+            patch.object(device_layer.time, "sleep", sleep),
+            patch.object(device_layer, "read_screen_on", read_screen_on),
+            self.assertRaises(device_layer.ProbeError),
+        ):
+            device_layer.capture_producer_window("device", 1234, seconds=10.0, sample_seconds=2.0)
+        # It stopped just past the window instead of taking the two reads still owed to it, which at
+        # 3 s each would have run to 17 s.
+        self.assertGreater(clock[0] - 1000.0, 10.0)
+        self.assertLessEqual(clock[0] - 1000.0, 10.0 + read_latency)
+
     def test_an_uncapturable_trace_is_an_error(self) -> None:
         with (
             patch.object(device_layer, "run_adb", side_effect=subprocess.CalledProcessError(1, "atrace")),
