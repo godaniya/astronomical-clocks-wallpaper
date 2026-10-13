@@ -326,6 +326,29 @@ This accountability policy is adapted from
 [cmp0xff's pinned guidance](https://github.com/cmp0xff/pandas-stubs/blob/f72b507f64c50427ad50595a7c615b0ac3552b61/AGENTS.md),
 with Android conventions replacing the upstream project's domain-specific rules.
 
+### Responding to review
+
+Review, human or automated, should converge on a mergeable change rather than
+run until a reviewer stops producing findings.
+
+- Before requesting a review or re-review, review the whole diff as it now
+  stands, not only the lines the last finding touched: a re-requested review
+  reads the whole diff again.
+- Answer every open finding from a round in one push, and fix each finding's
+  class across the diff rather than only the reported instance.
+- Record each verdict in the thread, or, for a finding raised in a review body,
+  in one reply comment: accepted with the fixing commit, or declined with the
+  reason. Declining is a legitimate verdict — for example, hardening against
+  input no caller can produce, or tests beyond what
+  [test scope and proportionality](#test-scope-and-proportionality) supports.
+- Stop re-requesting automated review once it has returned "Needs a closer look"
+  three times on the pull request, counted in total rather than in a row. That
+  is Copilot's middle verdict, between "Changes recommended" and "Approval
+  recommended"; if the labels change, count the equivalent middle verdict.
+  Answer the last review's findings without re-requesting, record what remains
+  under Caveats, and leave the merge decision to the owner, who may ask for
+  further rounds.
+
 ## AI-assisted contributions
 
 We recognize and support the use of AI coding assistants (such as Antigravity,
