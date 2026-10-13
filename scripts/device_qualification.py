@@ -954,8 +954,16 @@ def evaluate_producer_control(
             "recorded beside it would be an unread counter rather than a measured zero"
         )
         return False
+    # The control validates the instrument as well as the tracer. It is the one window this phase
+    # knows was lit, so it is the only place the display reader is checked in the direction the
+    # hidden window's claim rests on: the gate before that window only confirms the reader reports
+    # off after the screen was slept, which a reader stuck on False would also satisfy. A control
+    # whose display evidence is invalid has therefore not validated that reading, so — like the
+    # blind control above — it refuses rather than letting the phase record a hidden zero inside a
+    # bracket it has just declared invalid.
     if not window.display_on_at_every_sample:
         failures.append(f"The {description} display was not on for every sample taken inside it")
+        return False
     return True
 
 

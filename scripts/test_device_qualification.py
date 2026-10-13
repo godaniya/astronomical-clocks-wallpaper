@@ -1306,6 +1306,38 @@ class HiddenFramesPhaseTest(unittest.TestCase):
         self.assertIn("visible control", results[0][0])
         self.assertTrue(any("unread counter rather than a measured zero" in failure for failure in failures))
 
+    def test_a_control_whose_display_evidence_is_invalid_skips_the_hidden_window(self) -> None:
+        # The control is the phase's only check that the display reader reports on when lit: the
+        # gate before the hidden window only confirms it reports off after the sleep, which a
+        # reader stuck on False also satisfies. So a control whose samples are off or unreadable
+        # has not validated the reading the hidden window's claim rests on, and — like the blind
+        # control — it refuses before the screen is slept, so nothing else is traced and no hidden
+        # zero is recorded inside a bracket just declared invalid.
+        for states in ((True, False), (True, None)):
+            with self.subTest(states=states):
+                results: list[tuple[str, str]] = []
+                failures: list[str] = []
+                device = MagicMock()
+                device.get_wallpaper_pid.return_value = 123
+                device.sleep_screen.return_value = True
+                device.read_screen_on.return_value = False
+                device.read_wallpaper_visible.return_value = False
+                device.wake_screen.return_value = True
+                device.capture_producer_window.side_effect = [
+                    self.window(20, states),
+                    self.window(0, (False, False)),
+                    self.window(20, (True, True)),
+                ]
+                with patch.object(qualification.time, "sleep"), contextlib.redirect_stdout(io.StringIO()):
+                    qualification.phase_hidden_frames(device, results, failures)
+                # The opening control alone is traced and recorded; the hidden window and the
+                # closing control are both skipped, so the fixture's later windows go unused.
+                self.assertEqual(1, device.capture_producer_window.call_count)
+                self.assertEqual(1, len(results))
+                self.assertIn("visible control", results[0][0])
+                self.assertTrue(any("display was not on for every sample" in failure for failure in failures))
+                self.assertFalse(any("hidden" in label for label, _ in results))
+
     def test_a_process_that_restarted_inside_the_hidden_window_invalidates_the_zero(self) -> None:
         # The trace is filtered to one pid, so a restart inside the window would leave the
         # replacement's frames outside the trace and let the old pid's zero read as hidden-state
