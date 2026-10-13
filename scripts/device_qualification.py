@@ -47,6 +47,9 @@ SCREEN_OFF_SAMPLE_SECONDS: Final = 4.0
 # long, and the 60 s hidden window is sampled every 2 s across its whole width.
 PRODUCER_CONTROL_SECONDS: Final = 20.0
 PRODUCER_HIDDEN_SECONDS: Final = 60.0
+# Named once because the hidden window is described in three places: the trace failure, the recorded
+# row and the summary line, and they have to name the same window.
+PRODUCER_HIDDEN_DESCRIPTION: Final = "hidden, screen off"
 SCREEN_OFF_CPU_BUDGET_SECONDS: Final = 0.05
 
 # Rollover instants are built in the zone the service actually renders with (the saved site's,
@@ -986,6 +989,23 @@ def evaluate_producer_control(
     return True
 
 
+def producer_window_summary(window: device_layer.ProducerWindow) -> str:
+    """Format the one line of evidence recorded for, and printed about, a producer window."""
+    states = window.display_states
+    display = (
+        "on at every sample"
+        if window.display_on_at_every_sample
+        else "off at every sample"
+        if window.display_off_at_every_sample
+        else "mixed"
+    )
+    return (
+        f"{window.frame_count} producer frames over {window.window_seconds:.0f} s "
+        f"({window.trace_lines} trace lines; display sampled {len(states)} times: {display}, "
+        f"{window.display_unknown_samples} unreadable)"
+    )
+
+
 # device, pid, seconds, results, failures and the description all have to reach the one call site
 # that both records and fails the check; bundling them into a carrier type would not make the call
 # clearer, so the argument count is the honest shape here.
@@ -997,8 +1017,15 @@ def measure_producer_window(  # noqa: PLR0913
     failures: list[str],
     *,
     description: str,
+    announce: bool = True,
 ) -> device_layer.ProducerWindow | None:
-    """Trace one bounded producer window, recording its evidence or failing the check."""
+    """
+    Trace one bounded producer window, recording its evidence or failing the check.
+
+    `announce` is False for a window whose validity is not known until a later check: the evidence is
+    recorded either way, but printing it is left to the caller so a window that is then abandoned is
+    not put on the console as a measurement.
+    """
     if pid is None:
         failures.append(f"No wallpaper process to trace for the {description}")
         return None
@@ -1007,22 +1034,25 @@ def measure_producer_window(  # noqa: PLR0913
     except (subprocess.SubprocessError, OSError, RuntimeError) as error:
         failures.append(f"The {description} producer trace failed: {device_layer.error_detail(error)}")
         return None
-    states = window.display_states
-    display = (
-        "on at every sample"
-        if window.display_on_at_every_sample
-        else "off at every sample"
-        if window.display_off_at_every_sample
-        else "mixed"
-    )
-    summary = (
-        f"{window.frame_count} producer frames over {window.window_seconds:.0f} s "
-        f"({window.trace_lines} trace lines; display sampled {len(states)} times: {display}, "
-        f"{window.display_unknown_samples} unreadable)"
-    )
+    summary = producer_window_summary(window)
     results.append((f"producer trace, {description}", summary))
-    print(f"{description}: {summary}")
+    if announce:
+        print(f"{description}: {summary}")
     return window
+
+
+def accept_hidden_window(window: device_layer.ProducerWindow | None, failures: list[str]) -> None:
+    """
+    Announce and judge a hidden window whose pid check held.
+
+    The announcement waits for this point rather than happening as the window is traced, because a
+    window the pid check then abandons is removed from the results and a line printed earlier could
+    not be retracted.
+    """
+    if window is None:
+        return
+    print(f"{PRODUCER_HIDDEN_DESCRIPTION}: {producer_window_summary(window)}")
+    evaluate_hidden_window(window, failures)
 
 
 def evaluate_hidden_window(window: device_layer.ProducerWindow | None, failures: list[str]) -> None:
@@ -1078,7 +1108,13 @@ def phase_hidden_frames(device: device_layer.AdbDevice, results: list[tuple[str,
 
     recorded_from = len(results)
     hidden = measure_producer_window(
-        device, pid, PRODUCER_HIDDEN_SECONDS, results, failures, description="hidden, screen off"
+        device,
+        pid,
+        PRODUCER_HIDDEN_SECONDS,
+        results,
+        failures,
+        description=PRODUCER_HIDDEN_DESCRIPTION,
+        announce=False,
     )
     # The trace is filtered to one pid, so a process that died or restarted inside the window leaves
     # its replacement's frames outside the trace. That zero is the wrong process's, so the result is
@@ -1088,7 +1124,7 @@ def phase_hidden_frames(device: device_layer.AdbDevice, results: list[tuple[str,
     if pid_after != pid:
         del results[recorded_from:]
     else:
-        evaluate_hidden_window(hidden, failures)
+        accept_hidden_window(hidden, failures)
 
     if not device.wake_screen():
         failures.append("Screen wake request failed; the closing control trace was skipped")

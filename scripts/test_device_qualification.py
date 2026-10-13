@@ -1593,6 +1593,30 @@ class HiddenFramesPhaseTest(unittest.TestCase):
         )
         self.assertEqual([], failures)
 
+    def test_the_hidden_summary_is_printed_only_once_its_pid_check_has_held(self) -> None:
+        # The abandoned window's row is removed from the results, but a summary printed before the pid
+        # check could not be retracted: the unattributable zero would still sit on the console beside
+        # the failure saying it is not evidence. It is printed after the check, and only when it held.
+        for pids, printed in (([123, 123, 123, 123], True), ([123, 123, 124, 124], False)):
+            with self.subTest(pids=pids):
+                captured = io.StringIO()
+                results: list[tuple[str, str]] = []
+                failures: list[str] = []
+                device = MagicMock()
+                device.get_wallpaper_pid.side_effect = pids
+                device.sleep_screen.return_value = True
+                device.read_screen_on.return_value = False
+                device.read_wallpaper_visible.return_value = False
+                device.wake_screen.return_value = True
+                device.capture_producer_window.side_effect = [
+                    self.window(20, (True, True)),
+                    self.window(0, (False, False)),
+                    self.window(20, (True, True)),
+                ]
+                with patch.object(qualification.time, "sleep"), contextlib.redirect_stdout(captured):
+                    qualification.phase_hidden_frames(device, results, failures)
+                self.assertEqual(printed, "hidden, screen off:" in captured.getvalue())
+
     def test_a_restart_during_the_wake_does_not_blame_the_tracer_for_it(self) -> None:
         # The closing control asks whether the tracer still works, not whether the process survived
         # the wake: tracing the pid that held through the hidden window would find no frames if the
