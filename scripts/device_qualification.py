@@ -1041,6 +1041,29 @@ def measure_producer_window(  # noqa: PLR0913
     return window
 
 
+def evaluate_closing_control(window: device_layer.ProducerWindow | None, failures: list[str]) -> None:
+    """
+    Fail unless the closing control both produced frames and was on screen throughout.
+
+    Its frame count is what carries the tracer's claim — the hidden zero is only a measurement if the
+    tracer still produced frames after the hidden window — while its display state is what makes it
+    the visible control it is named as. A window with frames but samples that were off or unreadable
+    has confirmed neither, so it is judged on both, as the opening control is.
+    """
+    if window is None:
+        return
+    if window.frame_count == 0:
+        failures.append(
+            "The visible control window after the hidden one produced no producer frames, so the "
+            "tracer stopped working during the hidden window and its zero is not evidence"
+        )
+    if not window.display_on_at_every_sample:
+        failures.append(
+            "The visible control window after the hidden one was not on for every sample taken inside "
+            "it, so it does not confirm a visible control after the hidden window"
+        )
+
+
 def accept_hidden_window(window: device_layer.ProducerWindow | None, failures: list[str]) -> None:
     """
     Announce and judge a hidden window whose pid check held.
@@ -1145,11 +1168,7 @@ def phase_hidden_frames(device: device_layer.AdbDevice, results: list[tuple[str,
     closing = measure_producer_window(
         device, closing_pid, PRODUCER_CONTROL_SECONDS, results, failures, description="visible control after"
     )
-    if closing is not None and closing.frame_count == 0:
-        failures.append(
-            "The visible control window after the hidden one produced no producer frames, so the "
-            "tracer stopped working during the hidden window and its zero is not evidence"
-        )
+    evaluate_closing_control(closing, failures)
 
 
 def main() -> None:

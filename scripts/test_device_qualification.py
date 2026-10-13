@@ -1329,6 +1329,37 @@ class ProducerTraceTest(unittest.TestCase):
         self.assertEqual([1002.0, 1004.0, 1006.0, 1008.0, 1010.0], reads)
         self.assertAlmostEqual(10.0, window.window_seconds)
 
+    def test_the_final_read_is_taken_when_it_lands_on_the_window_end(self) -> None:
+        # The last read is scheduled at the window's own end, and on a real clock a sleep that
+        # overshoots by anything at all lands past it. Refusing a read there would refuse the sample
+        # that closes the window, so only the reads before it are refused for starting after the end:
+        # the final one is taken, and the window can overrun by that one read at most.
+        trace = b"wallpaper-1234  [001] d..2 120.020000: tracing_mark_write: B|1234|queueBuffer"
+        clock = [1000.0]
+        read_latency = 2.0
+
+        def run(command: list[str], **_kwargs: object) -> bytes:
+            return trace if "--async_dump" in command else b""
+
+        def monotonic() -> float:
+            return clock[0]
+
+        def sleep(seconds: float) -> None:
+            clock[0] += seconds
+
+        def read_screen_on(_serial: str) -> bool:
+            clock[0] += read_latency
+            return True
+
+        with (
+            patch.object(device_layer, "run_adb", side_effect=run),
+            patch.object(device_layer.time, "monotonic", monotonic),
+            patch.object(device_layer.time, "sleep", sleep),
+            patch.object(device_layer, "read_screen_on", read_screen_on),
+        ):
+            window = device_layer.capture_producer_window("device", 1234, seconds=10.0, sample_seconds=2.0)
+        self.assertEqual(5, len(window.display_states))
+
     def test_a_read_that_outruns_the_window_refuses_rather_than_extending_it(self) -> None:
         # The read count bounds how many reads are owed, not how long they may take: a read spends up
         # to two adb timeouts, so a slow transport could hold atrace open for a multiple of the
@@ -1651,6 +1682,15 @@ class HiddenFramesPhaseTest(unittest.TestCase):
             [self.window(20, (True, True)), self.window(0, (False, False)), self.window(0, (True, True))]
         )
         self.assertTrue(any("tracer stopped working during the hidden window" in failure for failure in failures))
+
+    def test_a_closing_control_that_was_not_on_screen_is_not_a_visible_bracket(self) -> None:
+        # The closing control's frame count carries the tracer's claim, but its display state is what
+        # makes it the visible control it is named as: without the same display check the opening
+        # control gets, a window with frames and every sample off would pass as that bracket.
+        _, failures = self.run_phase(
+            [self.window(20, (True, True)), self.window(0, (False, False)), self.window(20, (False, False))]
+        )
+        self.assertTrue(any("does not confirm a visible control after" in failure for failure in failures))
 
     def test_a_window_whose_display_came_on_is_not_a_screen_off_window(self) -> None:
         _, failures = self.run_phase(

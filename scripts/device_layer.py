@@ -731,12 +731,14 @@ def capture_producer_window(
             remaining = deadline - time.monotonic()
             if remaining > 0:
                 time.sleep(remaining)
-            elif time.monotonic() >= started + seconds:
+            elif index + 1 < sample_count and time.monotonic() >= started + seconds:
                 # The read count bounds how many reads are owed, not how long each may take: a read
                 # spends up to two adb timeouts, so a slow transport could hold `atrace` open for a
                 # multiple of the window's width. A read that would start after the window's own end
-                # is not taken, and the window is refused rather than returned with samples that do
-                # not span the width it was asked for.
+                # is therefore not taken and the window is refused rather than returned with samples
+                # that do not span the width it was asked for. The last read is exempt because it is
+                # scheduled at that end and is the sample that closes the window, so the window can
+                # overrun by that one read at most — bounded in turn by its own adb timeouts.
                 overrun = time.monotonic() - (started + seconds)
                 detail = (
                     f"the {seconds} s trace window could not take its display reads inside the "
