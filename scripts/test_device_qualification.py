@@ -1290,6 +1290,45 @@ class ProducerTraceTest(unittest.TestCase):
         self.assertEqual(5, len(window.display_states))
         self.assertAlmostEqual(10.0 + read_latency, window.window_seconds)
 
+    def test_the_reads_are_anchored_to_the_trace_start_not_to_the_start_call(self) -> None:
+        # The trace is already active while `atrace --async_start` is in flight, so anchoring the
+        # schedule when that call returns would leave its latency outside the window the samples
+        # describe — and outside the span reported below, which is meant to be that window. The clock
+        # is read before the call, so the reads land on the trace's own start.
+        reads: list[float] = []
+        clock = [1000.0]
+        start_latency = 0.25
+
+        def run(command: list[str], **_kwargs: object) -> bytes:
+            if "--async_start" in command:
+                clock[0] += start_latency
+                return b""
+            if "--async_dump" in command:
+                return b"wallpaper-1234  [001] d..2 120.020000: tracing_mark_write: B|1234|queueBuffer"
+            return b""
+
+        def monotonic() -> float:
+            return clock[0]
+
+        def sleep(seconds: float) -> None:
+            clock[0] += seconds
+
+        def read_screen_on(_serial: str) -> bool:
+            reads.append(clock[0])
+            return True
+
+        with (
+            patch.object(device_layer, "run_adb", side_effect=run),
+            patch.object(device_layer.time, "monotonic", monotonic),
+            patch.object(device_layer.time, "sleep", sleep),
+            patch.object(device_layer, "read_screen_on", read_screen_on),
+        ):
+            window = device_layer.capture_producer_window("device", 1234, seconds=10.0, sample_seconds=2.0)
+        # Five reads at two-second offsets from the trace's start, not from the moment the start call
+        # returned 0.25 s later.
+        self.assertEqual([1002.0, 1004.0, 1006.0, 1008.0, 1010.0], reads)
+        self.assertAlmostEqual(10.0, window.window_seconds)
+
     def test_an_uncapturable_trace_is_an_error(self) -> None:
         with (
             patch.object(device_layer, "run_adb", side_effect=subprocess.CalledProcessError(1, "atrace")),
@@ -1432,7 +1471,8 @@ class HiddenFramesPhaseTest(unittest.TestCase):
         results: list[tuple[str, str]] = []
         failures: list[str] = []
         device = MagicMock()
-        device.get_wallpaper_pid.side_effect = [123, 123, 124]
+        # The fourth reading is the closing control's, taken after the wake.
+        device.get_wallpaper_pid.side_effect = [123, 123, 124, 124]
         device.sleep_screen.return_value = True
         device.read_screen_on.return_value = False
         device.read_wallpaper_visible.return_value = False
@@ -1463,7 +1503,7 @@ class HiddenFramesPhaseTest(unittest.TestCase):
         results: list[tuple[str, str]] = []
         failures: list[str] = []
         device = MagicMock()
-        device.get_wallpaper_pid.side_effect = [123, 123, 123]
+        device.get_wallpaper_pid.side_effect = [123, 123, 123, 123]
         device.sleep_screen.return_value = True
         device.read_screen_on.return_value = False
         device.read_wallpaper_visible.return_value = False
@@ -1516,6 +1556,35 @@ class HiddenFramesPhaseTest(unittest.TestCase):
             order,
         )
         self.assertEqual([], failures)
+
+    def test_a_restart_during_the_wake_does_not_blame_the_tracer_for_it(self) -> None:
+        # The closing control asks whether the tracer still works, not whether the process survived
+        # the wake: tracing the pid that held through the hidden window would find no frames if the
+        # process was recreated during the wake and Home restoration, and would fail the tracer for a
+        # process change that says nothing about it. The current pid is read after the wake and traced.
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        device = MagicMock()
+        device.get_wallpaper_pid.side_effect = [123, 123, 123, 124]
+        device.sleep_screen.return_value = True
+        device.read_screen_on.return_value = False
+        device.read_wallpaper_visible.return_value = False
+        device.wake_screen.return_value = True
+        device.capture_producer_window.side_effect = [
+            self.window(20, (True, True)),
+            self.window(0, (False, False)),
+            self.window(20, (True, True)),
+        ]
+        with patch.object(qualification.time, "sleep"), contextlib.redirect_stdout(io.StringIO()):
+            qualification.phase_hidden_frames(device, results, failures)
+        # The opening control and the hidden window ran on the pid current then; the closing control
+        # ran on the one read after the wake.
+        self.assertEqual(
+            [123, 123, 124],
+            [call.args[0] for call in device.capture_producer_window.call_args_list],
+        )
+        self.assertEqual([], failures)
+        self.assertEqual(3, len(results))
 
     def test_a_control_that_stopped_working_invalidates_the_zero(self) -> None:
         _, failures = self.run_phase(

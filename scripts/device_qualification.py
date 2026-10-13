@@ -1100,8 +1100,14 @@ def phase_hidden_frames(device: device_layer.AdbDevice, results: list[tuple[str,
     device.dismiss_keyguard()
     device.show_home()
     time.sleep(SCREEN_OFF_SETTLE_SECONDS)
+    # The closing control asks whether the tracer still works, not whether the process survived the
+    # wake. The pid that held across the hidden window may have been recreated during the wake and
+    # Home restoration, and tracing a dead pid finds no frames, so the tracer would be failed for a
+    # process change that says nothing about it. The current pid is read and traced instead; when it
+    # cannot be read, `measure_producer_window` reports that and no tracer verdict is drawn.
+    closing_pid = read_safe_pid(device)
     closing = measure_producer_window(
-        device, pid_before, PRODUCER_CONTROL_SECONDS, results, failures, description="visible control after"
+        device, closing_pid, PRODUCER_CONTROL_SECONDS, results, failures, description="visible control after"
     )
     if closing is not None and closing.frame_count == 0:
         failures.append(

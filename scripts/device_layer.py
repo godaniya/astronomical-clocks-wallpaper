@@ -711,10 +711,13 @@ def capture_producer_window(
     start_command = ["shell", "atrace", "--async_start", "-a", str(pid)]
     start_command.extend(TRACE_CATEGORIES)
     try:
-        # The start is inside the guard as well, on the trace timeout the dump and stop already use.
-        # A start that raises after the device has begun tracing would otherwise strand an active
-        # trace on a shared device with nothing to stop it, which is exactly what a bounded window
-        # promises cannot happen.
+        # The clock is read before the start call rather than after it: the trace is already active
+        # while `atrace --async_start` is in flight, so an anchor taken once it returns would leave
+        # that latency out of the schedule and out of the span reported below, which is the span the
+        # trace covered. The start is inside this guard, and on the trace timeout the dump and stop
+        # use, so a start that raises after the device has begun tracing cannot strand an active trace
+        # on a shared device with nothing to stop it.
+        started = time.monotonic()
         run_adb(start_command, serial=serial, timeout=ADB_TRACE_TIMEOUT_SECONDS)
         states: list[bool | None] = []
         # The reads are paced against a monotonic deadline fixed when the trace starts, rather than
@@ -722,7 +725,6 @@ def capture_producer_window(
         # the next sleep instead of pushing every later read out by its own latency, so read latency
         # cannot accumulate across the window. A read that outlasts its own interval still pushes the
         # reads after it, which is why the span the trace covered is measured rather than assumed.
-        started = time.monotonic()
         for index in range(sample_count):
             deadline = started + min((index + 1) * sample_seconds, seconds)
             remaining = deadline - time.monotonic()
