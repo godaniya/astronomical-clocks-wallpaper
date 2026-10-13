@@ -710,8 +710,12 @@ def capture_producer_window(
     sample_count = math.ceil(seconds / sample_seconds)
     start_command = ["shell", "atrace", "--async_start", "-a", str(pid)]
     start_command.extend(TRACE_CATEGORIES)
-    run_adb(start_command, serial=serial)
     try:
+        # The start is inside the guard as well, on the trace timeout the dump and stop already use.
+        # A start that raises after the device has begun tracing would otherwise strand an active
+        # trace on a shared device with nothing to stop it, which is exactly what a bounded window
+        # promises cannot happen.
+        run_adb(start_command, serial=serial, timeout=ADB_TRACE_TIMEOUT_SECONDS)
         states: list[bool | None] = []
         # The reads are paced against a monotonic deadline fixed when the trace starts, rather than
         # by sleeping a fixed interval between them: a read slower than its interval then shortens

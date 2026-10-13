@@ -1297,6 +1297,29 @@ class ProducerTraceTest(unittest.TestCase):
         ):
             device_layer.capture_producer_window("device", 1234, seconds=1.0, sample_seconds=1.0)
 
+    def test_a_start_that_raises_still_stops_the_trace(self) -> None:
+        # The start is what leaves atrace running, so it belongs inside the cleanup guard: a start
+        # that raises after the device has begun tracing would otherwise strand an active trace on a
+        # shared device with nothing to stop it, which is what a bounded window says cannot happen.
+        # Its timeout is the trace timeout the dump and stop already use, not the shorter default the
+        # untimed probe calls take.
+        calls: list[tuple[list[str], dict[str, object]]] = []
+
+        def run(command: list[str], **kwargs: object) -> bytes:
+            calls.append((command, kwargs))
+            raise subprocess.TimeoutExpired(command, device_layer.ADB_TRACE_TIMEOUT_SECONDS)
+
+        with (
+            patch.object(device_layer, "run_adb", side_effect=run),
+            self.assertRaises(subprocess.TimeoutExpired),
+        ):
+            device_layer.capture_producer_window("device", 1234, seconds=1.0, sample_seconds=1.0)
+        started = [(command, kwargs) for command, kwargs in calls if "--async_start" in command]
+        stopped = [command for command, _ in calls if "--async_stop" in command]
+        self.assertEqual(1, len(started))
+        self.assertEqual(1, len(stopped))
+        self.assertEqual(device_layer.ADB_TRACE_TIMEOUT_SECONDS, started[0][1]["timeout"])
+
 
 class HiddenFramesPhaseTest(unittest.TestCase):
     """Checks the hidden-window phase's accept, refuse, and tracer-validation branches."""
