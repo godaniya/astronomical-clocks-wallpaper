@@ -1219,6 +1219,33 @@ class HiddenFramesPhaseTest(unittest.TestCase):
         self.assertIn("visible control", results[0][0])
         self.assertTrue(any("unread counter rather than a measured zero" in failure for failure in failures))
 
+    def test_a_process_that_restarted_inside_the_hidden_window_invalidates_the_zero(self) -> None:
+        # The trace is filtered to one pid, so a restart inside the window would leave the
+        # replacement's frames outside the trace and let the old pid's zero read as hidden-state
+        # evidence. The pid is therefore reconfirmed after the window, as the CPU window already does.
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        device = MagicMock()
+        device.get_wallpaper_pid.side_effect = [123, 123, 124]
+        device.sleep_screen.return_value = True
+        device.read_screen_on.return_value = False
+        device.read_wallpaper_visible.return_value = False
+        device.wake_screen.return_value = True
+        device.capture_producer_window.side_effect = [
+            self.window(20, (True, True)),
+            self.window(0, (False, False)),
+            self.window(20, (True, True)),
+        ]
+        with patch.object(qualification.time, "sleep"), contextlib.redirect_stdout(io.StringIO()):
+            qualification.phase_hidden_frames(device, results, failures)
+        self.assertTrue(
+            any(
+                "was not confirmed unchanged across the hidden producer window" in failure
+                and "before=123, after=124" in failure
+                for failure in failures
+            )
+        )
+
     def test_a_control_that_stopped_working_invalidates_the_zero(self) -> None:
         _, failures = self.run_phase(
             [self.window(20, (True, True)), self.window(0, (False, False)), self.window(0, (True, True))]
@@ -2475,7 +2502,7 @@ class PhasePrerequisiteTest(unittest.TestCase):
             [
                 (
                     "Wallpaper PID was not confirmed unchanged across the CPU sample window "
-                    "(before=123, after=124); the CPU sample is not attributable"
+                    "(before=123, after=124); the measurement is not attributable to one process"
                 )
             ],
         )
@@ -2507,7 +2534,7 @@ class PhasePrerequisiteTest(unittest.TestCase):
             [
                 (
                     "Wallpaper PID was not confirmed unchanged across the screen-off transition "
-                    "(before=123, after=124); the CPU sample is not attributable"
+                    "(before=123, after=124); the measurement is not attributable to one process"
                 )
             ],
         )

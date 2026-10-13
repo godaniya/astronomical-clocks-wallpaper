@@ -229,7 +229,7 @@ def confirm_pid_unchanged(
     if pid is None or pid != expected_pid:
         failures.append(
             f"Wallpaper PID was not confirmed unchanged across the {description} "
-            f"(before={expected_pid}, after={pid}); the CPU sample is not attributable"
+            f"(before={expected_pid}, after={pid}); the measurement is not attributable to one process"
         )
     return pid
 
@@ -1045,6 +1045,10 @@ def phase_hidden_frames(device: device_layer.AdbDevice, results: list[tuple[str,
     hidden = measure_producer_window(
         device, pid, PRODUCER_HIDDEN_SECONDS, results, failures, description="hidden, screen off"
     )
+    # The trace is filtered to one pid, so a process that died or restarted inside the window would
+    # leave its replacement's frames outside the trace and let the old pid's zero read as hidden-state
+    # evidence. Reconfirming the pid afterwards invalidates that zero instead of accepting it.
+    confirm_pid_unchanged(device, pid, failures, description="hidden producer window")
     evaluate_hidden_window(hidden, failures)
 
     if not device.wake_screen():
