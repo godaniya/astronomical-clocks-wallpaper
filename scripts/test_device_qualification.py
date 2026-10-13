@@ -1529,6 +1529,19 @@ class HiddenFramesPhaseTest(unittest.TestCase):
         )
         self.assertTrue(any("does not describe a screen-off window" in failure for failure in failures))
 
+    def test_a_mixed_window_does_not_claim_its_frames_were_rendered_with_the_display_off(self) -> None:
+        # A window whose samples are not all off has a frame count that is not attributable to a
+        # screen-off window, so the zero-frame budget must not be applied to it: reporting those
+        # frames as rendered with the display off would claim more than the samples support, and the
+        # display-state failure is the whole verdict.
+        for states in ((False, True, False), (False, None)):
+            with self.subTest(states=states):
+                _, failures = self.run_phase(
+                    [self.window(20, (True, True)), self.window(5, states), self.window(20, (True, True))]
+                )
+                self.assertTrue(any("does not describe a screen-off window" in failure for failure in failures))
+                self.assertFalse(any("budget is zero" in failure for failure in failures))
+
     def test_a_failed_trace_is_reported_rather_than_read_as_zero(self) -> None:
         results, failures = self.run_phase(
             [

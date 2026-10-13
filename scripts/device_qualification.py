@@ -1034,6 +1034,10 @@ def evaluate_hidden_window(window: device_layer.ProducerWindow | None, failures:
             "The display was not off for every sample inside the hidden producer window, so its "
             "frame count does not describe a screen-off window"
         )
+        # The budget is not applied to a window whose samples were not all off: the count is not
+        # attributable to a screen-off window, so reporting the frames as rendered with the display
+        # off would claim more than the samples support. The failure above is the whole verdict.
+        return
     if window.frame_count != 0:
         failures.append(
             f"{window.frame_count} producer frames were rendered while the engine was hidden and the "
