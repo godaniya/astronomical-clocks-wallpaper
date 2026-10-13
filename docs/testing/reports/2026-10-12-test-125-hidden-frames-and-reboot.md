@@ -3,10 +3,11 @@
 Test build: local debug `app-debug.apk` built from this branch's tree with
 `./gradlew qualityGate :app:assembleDebug`, APK SHA-256
 `3ef8bf795587aff1488e2e073b3cc3bf70eb7620df821cb4bfa3d953fda3dc4d`. The `app/src/main` tree it
-compiles is the one at `55649bfc9d76864bc0c9226e0c40804295d6396f`, which is byte-identical to
-`upstream/main`'s (`git diff upstream/main 55649bf -- app/src/main` is empty); the branch head
-carries host tooling and documentation only. The artifact was installed in place with
-`adb install -r`.
+compiles is the one at `55649bfc9d76864bc0c9226e0c40804295d6396f`, which is byte-identical to the
+tree of the branch's base commit `5efae15` (`git diff 5efae15 55649bf -- app/src/main` is empty —
+compared against the base rather than the `upstream/main` ref, which has moved on since and is not a
+stable comparison); the branch head carries host tooling and documentation only. The artifact was
+installed in place with `adb install -r`.
 
 Physical device running Android 16 (API 36). Vendor, model, serial, and firmware build are withheld
 per the device-privacy policy. The saved site carried through the pass is the manual published
@@ -59,7 +60,7 @@ read the same state back. The full qualification harness was then run over the r
 | 2026-10-12 | reboot, after | `uptime` `up 0 min`; wallpaper process pid 4032; home component still `…AstronomicalClocksWallpaperService`; `date` `Mon Oct 12 23:10:21 CEST 2026`; timezone `Europe/Berlin` |
 | 2026-10-12 | reboot, saved state | Every `shared_prefs` file read back byte-identical: `observing_location.xml` still `{"version":1,"latitude":50.08,"longitude":14.42,"source":"MANUAL","zoneId":"Europe/Prague"}`, with `dial_settings.xml` (`sun`/`moon`/`zodiac_ring` all true), `dial_display.xml` (`size`/`horizontal`/`vertical`/`brightness` all 100/50/50/100), `appearance_settings.xml` (`SYSTEM`) and `location_permission.xml` unchanged. The re-created `ActivityThread.IDS.xml` matches the file the framework wrote before the restart |
 | 2026-10-12 | reboot, rendering after | The harness then qualified the restarted build on the same artifact: the dial was found at 166.311°, screen-off/wake preserved it at 166.360°, surface recreation at 166.416°, process recreation at 166.437° with pid 4040 → 15733, and the site's midnight rollover resolved in `Europe/Prague` with residuals +0.088°, +0.245°, +0.232°, +0.159° against the zone's absolute hand angles |
-| 2026-10-12 | device state restored | The screen was left on the home screen with the live wallpaper bound; no display-size override, night mode, or screen-state setting was left changed by the frame phase, which reads the display and never writes it |
+| 2026-10-12 | device state restored | The screen was left on the home screen with the live wallpaper bound; no display-size override, night mode, or screen-state setting was left changed. The frame phase does drive the screen rather than only reading it — it sleeps it to hide the engine, wakes it afterwards, and returns it to the home screen — so this row is the end state the run was left in, not a phase that never touched it |
 
 The capturable evidence is the two control rows beside the hidden row: the same tracer that finds 42
 frames in 20 s on the home screen finds none in 60 s with the display off, and finds 42 again

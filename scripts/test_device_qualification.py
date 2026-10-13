@@ -1403,6 +1403,78 @@ class ProducerTraceTest(unittest.TestCase):
         ):
             device_layer.capture_producer_window("device", 1234, seconds=1.0, sample_seconds=1.0)
 
+    def test_a_trace_with_no_mark_lines_is_refused_rather_than_read_as_zero(self) -> None:
+        # The guard is on the buffer, not on the pid: a window in which the process drew nothing
+        # legitimately holds no marks of its own, while this one holds none from any process, so the
+        # tracer captured nothing to count. Reading a zero off it would be reading an unread counter,
+        # which is the distinction the phase's controls rest on. Driven through the real function
+        # rather than an injected message, so the "an unusable trace raises, it is never a zero"
+        # claim is pinned to the code that makes it.
+        with (
+            patch.object(device_layer, "run_adb", return_value=b"# tracer: nop\n"),
+            patch.object(device_layer, "read_screen_on", return_value=False),
+            patch.object(device_layer.time, "sleep"),
+            self.assertRaises(device_layer.ProbeError) as raised,
+        ):
+            device_layer.capture_producer_window("device", 1234, seconds=1.0, sample_seconds=1.0)
+        # "at all" is the claim the check supports: it says nothing about what this pid drew.
+        self.assertIn("no mark lines at all", str(raised.exception))
+
+    def test_a_stop_failure_says_the_trace_may_still_be_running(self) -> None:
+        # A read overruns the window and the same stalled transport then fails the stop, so the
+        # failure the caller records names the stop. The stop's error cannot say on its own that a
+        # trace may still be filling a buffer on the shared device, so that is said out loud before
+        # it is raised.
+        stop_error = subprocess.TimeoutExpired(["adb", "shell", "atrace", "--async_stop"], 120)
+        clock = [1000.0]
+
+        def run(command: list[str], **_kwargs: object) -> bytes:
+            if "--async_stop" in command:
+                raise stop_error
+            return b""
+
+        def monotonic() -> float:
+            return clock[0]
+
+        def sleep(seconds: float) -> None:
+            clock[0] += seconds
+
+        def read_screen_on(_serial: str) -> bool:
+            clock[0] += 3.0
+            return True
+
+        stderr = io.StringIO()
+        with (
+            patch.object(device_layer, "run_adb", side_effect=run),
+            patch.object(device_layer.time, "monotonic", monotonic),
+            patch.object(device_layer.time, "sleep", sleep),
+            patch.object(device_layer, "read_screen_on", read_screen_on),
+            contextlib.redirect_stderr(stderr),
+            self.assertRaises(subprocess.TimeoutExpired),
+        ):
+            device_layer.capture_producer_window("device", 1234, seconds=10.0, sample_seconds=2.0)
+        self.assertIn("atrace --async_stop failed and a trace may still be active", stderr.getvalue())
+
+    def test_a_stop_failure_with_no_body_failure_is_the_window_failure(self) -> None:
+        # Nothing in the body went wrong, so a stop that failed is the whole reason the window cannot
+        # be read: an unstopped trace keeps filling the buffer the next window's dump reads, which
+        # would attribute this window's frames to that one. It fails rather than warning.
+        stop_error = subprocess.TimeoutExpired(["adb", "shell", "atrace", "--async_stop"], 120)
+        trace = b"wallpaper-1234  [001] d..2 120.020000: tracing_mark_write: B|1234|queueBuffer"
+
+        def run(command: list[str], **_kwargs: object) -> bytes:
+            if "--async_stop" in command:
+                raise stop_error
+            return trace if "--async_dump" in command else b""
+
+        with (
+            patch.object(device_layer, "run_adb", side_effect=run),
+            patch.object(device_layer, "read_screen_on", return_value=True),
+            patch.object(device_layer.time, "sleep"),
+            self.assertRaises(subprocess.TimeoutExpired),
+        ):
+            device_layer.capture_producer_window("device", 1234, seconds=1.0, sample_seconds=1.0)
+
     def test_a_start_that_raises_still_stops_the_trace(self) -> None:
         # The start is what leaves atrace running, so it belongs inside the cleanup guard: a start
         # that raises after the device has begun tracing would otherwise strand an active trace on a
@@ -1436,19 +1508,32 @@ class HiddenFramesPhaseTest(unittest.TestCase):
             window_seconds=20.0, pid=123, event_counts=counts, trace_lines=40, display_states=states
         )
 
-    def run_phase(self, windows: list[object]) -> tuple[list[tuple[str, str]], list[str]]:
-        results: list[tuple[str, str]] = []
-        failures: list[str] = []
+    def stub_device(self) -> MagicMock:
+        """Return a device whose phase probes all succeed, for a test to override the one it checks."""
         device = MagicMock()
         device.get_wallpaper_pid.return_value = 123
         device.sleep_screen.return_value = True
         device.read_screen_on.return_value = False
         device.read_wallpaper_visible.return_value = False
         device.wake_screen.return_value = True
-        device.capture_producer_window.side_effect = windows
+        device.capture_producer_window.side_effect = [
+            self.window(20, (True, True)),
+            self.window(0, (False, False)),
+            self.window(20, (True, True)),
+        ]
+        return device
+
+    def run_with(self, device: MagicMock) -> tuple[list[tuple[str, str]], list[str]]:
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
         with patch.object(qualification.time, "sleep"), contextlib.redirect_stdout(io.StringIO()):
             qualification.phase_hidden_frames(device, results, failures)
         return results, failures
+
+    def run_phase(self, windows: list[object]) -> tuple[list[tuple[str, str]], list[str]]:
+        device = self.stub_device()
+        device.capture_producer_window.side_effect = windows
+        return self.run_with(device)
 
     def test_zero_frames_with_working_controls_pass(self) -> None:
         results, failures = self.run_phase(
@@ -1503,6 +1588,79 @@ class HiddenFramesPhaseTest(unittest.TestCase):
                 self.assertTrue(any("display was not on for every sample" in failure for failure in failures))
                 self.assertFalse(any("hidden" in label for label, _ in results))
 
+    def test_a_failed_sleep_request_skips_the_hidden_window(self) -> None:
+        # The sleep is what hides the engine, so a request that was not delivered leaves nothing for
+        # the window to measure: the phase fails before it rather than tracing a window on a screen
+        # it never put to sleep.
+        device = self.stub_device()
+        device.sleep_screen.return_value = False
+        results, failures = self.run_with(device)
+        self.assertEqual(1, device.capture_producer_window.call_count)
+        self.assertEqual(1, len(results))
+        self.assertTrue(any("Screen sleep request failed" in failure for failure in failures))
+        self.assertFalse(any("hidden" in label for label, _ in results))
+
+    def test_a_display_that_is_not_confirmed_off_skips_the_hidden_window(self) -> None:
+        # `is not False` is the point of the gate: an unreadable display read is not a screen-off
+        # window, and one traced on it would record a zero for a screen the phase never saw go off.
+        for state in (None, True):
+            with self.subTest(state=state):
+                device = self.stub_device()
+                device.read_screen_on.return_value = state
+                results, failures = self.run_with(device)
+                self.assertEqual(1, device.capture_producer_window.call_count)
+                self.assertTrue(any("Display was not confirmed off" in failure for failure in failures))
+                self.assertFalse(any("hidden" in label for label, _ in results))
+
+    def test_an_engine_that_is_not_confirmed_hidden_abandons_the_window(self) -> None:
+        # An unreadable probe is not a hidden engine, and a visible one is the state criterion 1
+        # excludes: either way the window is abandoned and the device woken, and nothing is traced.
+        for visible in (None, True):
+            with self.subTest(visible=visible):
+                device = self.stub_device()
+                device.read_wallpaper_visible.return_value = visible
+                results, failures = self.run_with(device)
+                self.assertEqual(1, device.capture_producer_window.call_count)
+                self.assertTrue(any("not confirmed hidden" in failure for failure in failures))
+                self.assertFalse(any("hidden" in label for label, _ in results))
+                device.wake_screen.assert_called_once_with()
+
+    def test_an_unreadable_wallpaper_pid_skips_the_window(self) -> None:
+        # No pid is no window: the phase records the missing process rather than tracing nothing and
+        # letting an empty trace stand in for a measured zero.
+        device = self.stub_device()
+        device.get_wallpaper_pid.return_value = None
+        results, failures = self.run_with(device)
+        self.assertEqual(0, device.capture_producer_window.call_count)
+        self.assertEqual([], results)
+        self.assertTrue(any("No wallpaper process to trace" in failure for failure in failures))
+
+    def test_a_wake_failure_after_the_hidden_window_skips_the_closing_control(self) -> None:
+        # Tracing the closing control on a screen that never woke would fail the tracer for the
+        # wake, so the phase reports the wake and traces nothing after the hidden window.
+        device = self.stub_device()
+        device.wake_screen.return_value = False
+        results, failures = self.run_with(device)
+        self.assertEqual(2, device.capture_producer_window.call_count)
+        self.assertEqual(2, len(results))
+        self.assertTrue(any("closing control trace was skipped" in failure for failure in failures))
+
+    def test_the_summary_labels_a_window_by_the_samples_it_read(self) -> None:
+        # "mixed" claims that an on sample and an off sample were both seen, so it is used only when
+        # both were. A window whose every sample was unreadable observed neither state, and one whose
+        # readable samples were all one way observed only that way; calling either of those mixed
+        # would assert a contrast the reads never made.
+        for states, expected in (
+            ((True, True), "on at every readable sample"),
+            ((False, False), "off at every readable sample"),
+            ((True, False), "mixed"),
+            ((False, None), "off at every readable sample"),
+            ((True, None), "on at every readable sample"),
+            ((None, None), "unreadable at every sample"),
+        ):
+            with self.subTest(states=states):
+                self.assertIn(expected, qualification.producer_window_summary(self.window(0, states)))
+
     def test_a_restart_before_the_hidden_window_abandons_it_before_tracing(self) -> None:
         # `confirm_pid_unchanged` returns the fresh reading even when it does not match, and the trace
         # is filtered to the pid it is handed. Adopting a replacement here would trace the new process
@@ -1529,6 +1687,13 @@ class HiddenFramesPhaseTest(unittest.TestCase):
         self.assertIn("visible control", results[0][0])
         self.assertFalse(any("hidden" in label for label, _ in results))
         self.assertTrue(any("before=123, after=124" in failure for failure in failures))
+        # The failure says the window was abandoned, not that a measurement is unattributable: at
+        # this point nothing has been measured, and the post-window check reports the same span in
+        # words of its own so the two cannot read as one.
+        self.assertTrue(
+            any("abandoned rather than traced against a process it never bracketed" in failure for failure in failures)
+        )
+        self.assertFalse(any("is not attributable" in failure for failure in failures))
         device.wake_screen.assert_called_once_with()
 
     def test_a_process_that_restarted_inside_the_hidden_window_invalidates_the_zero(self) -> None:
@@ -1678,10 +1843,19 @@ class HiddenFramesPhaseTest(unittest.TestCase):
         self.assertEqual(3, len(results))
 
     def test_a_control_that_stopped_working_invalidates_the_zero(self) -> None:
+        # The failure states what the closing control observed — no frames on the pid read after the
+        # wake, so the tracer is not confirmed working — rather than the cause, which a process
+        # recreated during the wake produces with a working tracer, on the very path the code
+        # deliberately traces the current pid for.
         _, failures = self.run_phase(
             [self.window(20, (True, True)), self.window(0, (False, False)), self.window(0, (True, True))]
         )
-        self.assertTrue(any("tracer stopped working during the hidden window" in failure for failure in failures))
+        self.assertTrue(
+            any(
+                "tracer is not confirmed to have been working across the hidden window" in failure
+                for failure in failures
+            )
+        )
 
     def test_a_closing_control_that_was_not_on_screen_is_not_a_visible_bracket(self) -> None:
         # The closing control's frame count carries the tracer's claim, but its display state is what
@@ -1712,16 +1886,19 @@ class HiddenFramesPhaseTest(unittest.TestCase):
                 self.assertFalse(any("budget is zero" in failure for failure in failures))
 
     def test_a_failed_trace_is_reported_rather_than_read_as_zero(self) -> None:
+        # The injected message is the test's own, so it pins the phase's handling of a trace that
+        # raised — reported, never read as a zero — and not the shape of any particular refusal. The
+        # trace's own empty-buffer refusal is checked against the real function in ProducerTraceTest.
         results, failures = self.run_phase(
             [
-                device_layer.ProbeError("the atrace window produced no mark lines"),
+                device_layer.ProbeError("the atrace dump could not be read"),
                 self.window(0, (False, False)),
                 self.window(20, (True, True)),
             ]
         )
         self.assertEqual([], results)
         self.assertTrue(any("producer trace failed" in failure for failure in failures))
-        self.assertTrue(any("no mark lines" in failure for failure in failures))
+        self.assertTrue(any("the atrace dump could not be read" in failure for failure in failures))
 
 
 class HandDetectionTest(unittest.TestCase):

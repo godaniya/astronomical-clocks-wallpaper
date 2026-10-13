@@ -601,11 +601,10 @@ MIN_TRACE_DURATION_SECONDS: Final = 0.1
 MAX_TRACE_WINDOW_SECONDS: Final = 600.0
 MAX_TRACE_SAMPLES: Final = 6000
 TRACE_CATEGORIES: Final = ("gfx", "view")
-TRACE_DEVICE_PATH: Final = "/data/local/tmp/wallpaper-producer.ftrace"
-# The text trace marks each event with a `B|<pid>|<name>` / `E|<pid>|<name>` pair, so only one half
-# is counted or every event would be doubled. The begin half carries the name and the end half is
-# emitted nameless (`E|<pid>` with nothing after it), which is why the name is read from `B`; both
-# were checked against a real trace from this device rather than assumed.
+# The text trace marks each event with a `B|<pid>|<name>` / `E|<pid>` pair, so only one half is
+# counted or every event would be doubled. The begin half carries the name and the end half is
+# emitted nameless, which is why the name is read from `B`; both were checked against a real trace
+# from this device rather than assumed.
 TRACE_MARK_PATTERN: Final = re.compile(r"tracing_mark_write:\s*B\|\s*(\d+)\|([^\s|]+)")
 # A produced frame is the buffer the producer hands to the consumer; the dequeue is recorded
 # alongside it because a draw that never commits shows up as a dequeue without a queue.
@@ -618,9 +617,9 @@ class ProducerWindow:
     """
     One bounded producer-trace window, with the display state sampled inside it.
 
-    `window_seconds` is the span the trace actually covered, measured rather than requested: the
-    display reads and the dump run inside the trace, so the frame count describes a window at least
-    as wide as the duration asked for.
+    `window_seconds` is the local monotonic span from the clock read before `atrace --async_start`
+    was issued to the return of the dump, so the trace ran inside it: the frame count describes a
+    window at least as wide as the duration asked for, and never one wider than this.
     """
 
     window_seconds: float
@@ -686,9 +685,9 @@ def capture_producer_window(
     display *inside* the window rather than only at its endpoints. An unusable trace is raised: a
     window with no usable trace is not a window in which nothing was drawn. Both durations must be
     in [MIN_TRACE_DURATION_SECONDS, MAX_TRACE_WINDOW_SECONDS]. `seconds` paces the reads; the
-    returned window reports the span the trace actually covered, measured, which those reads make at
-    least `seconds`. A window whose reads cannot be taken inside it is refused rather than returned
-    with samples that do not span its width.
+    returned window reports the local span the trace ran inside, measured, which those reads make at
+    least `seconds` wide. A window whose reads cannot be taken inside it is refused rather than
+    returned with samples that do not span its width.
     """
     # Non-finite values are named explicitly rather than left to the range test, which also excludes
     # them (`nan` fails every comparison and `inf` exceeds the ceiling) but would bury the intent in
@@ -714,10 +713,10 @@ def capture_producer_window(
     try:
         # The clock is read before the start call rather than after it: the trace is already active
         # while `atrace --async_start` is in flight, so an anchor taken once it returns would leave
-        # that latency out of the schedule and out of the span reported below, which is the span the
-        # trace covered. The start is inside this guard, and on the trace timeout the dump and stop
-        # use, so a start that raises after the device has begun tracing cannot strand an active trace
-        # on a shared device with nothing to stop it.
+        # that latency out of the schedule and out of the span reported below, which brackets the
+        # trace. The start is inside this guard, and on the trace timeout the dump and stop use, so a
+        # start that raises after the device has begun tracing cannot strand an active trace on a
+        # shared device with nothing to stop it.
         started = time.monotonic()
         run_adb(start_command, serial=serial, timeout=ADB_TRACE_TIMEOUT_SECONDS)
         states: list[bool | None] = []
@@ -725,7 +724,7 @@ def capture_producer_window(
         # by sleeping a fixed interval between them: a read slower than its interval then shortens
         # the next sleep instead of pushing every later read out by its own latency, so read latency
         # cannot accumulate across the window. A read that outlasts its own interval still pushes the
-        # reads after it, which is why the span the trace covered is measured rather than assumed.
+        # reads after it, which is why the span is measured rather than assumed.
         for index in range(sample_count):
             deadline = started + min((index + 1) * sample_seconds, seconds)
             remaining = deadline - time.monotonic()
@@ -748,17 +747,34 @@ def capture_producer_window(
                 raise ProbeError(detail)
             states.append(read_screen_on(serial))
         dump = run_adb(["shell", "atrace", "--async_dump"], serial=serial, timeout=ADB_TRACE_TIMEOUT_SECONDS)
-        # The display reads and this dump run inside the trace, so the span it actually covers is at
-        # least `seconds`. Reporting the requested duration would advertise a window narrower than
-        # the one the frame count describes, so what is reported is the measured span.
+        # The display reads and this dump run inside the trace, so the trace covers at least
+        # `seconds`. Reporting the requested duration would advertise a window narrower than the one
+        # the frame count describes, so what is reported is the span measured locally here — the
+        # tightest bound available without reading the trace's own timestamps, since it opens before
+        # the start call and closes after the dump returns, and the trace lies inside it.
         window_seconds = time.monotonic() - started
     finally:
-        run_adb(["shell", "atrace", "--async_stop"], serial=serial, timeout=ADB_TRACE_TIMEOUT_SECONDS)
+        try:
+            run_adb(["shell", "atrace", "--async_stop"], serial=serial, timeout=ADB_TRACE_TIMEOUT_SECONDS)
+        except (subprocess.SubprocessError, OSError) as stop_error:
+            # A stop that failed fails the window: an unstopped trace keeps filling the buffer the
+            # next window's dump reads, which would attribute this window's frames to that one. It is
+            # reported before it is raised, because the failure the caller records will name the stop
+            # and nothing else will say the trace may still be running on the shared device.
+            print(
+                f"WARNING: atrace --async_stop failed and a trace may still be active: {error_detail(stop_error)}",
+                file=sys.stderr,
+            )
+            raise
     trace_text = dump.decode("utf-8", errors="replace")
     if "tracing_mark_write" not in trace_text:
+        # The check is on the buffer, not on the pid: a window in which the process drew nothing
+        # legitimately holds no marks of its own, while this one holds none from any process, which
+        # means the tracer captured nothing to count rather than that nothing was drawn. Reading the
+        # count out of it would be reading a counter that was never filled.
         detail = (
-            f"the atrace window produced no mark lines for pid {pid}, so it cannot evidence a frame "
-            "count; check that atrace is permitted on this build before reading the window"
+            f"the atrace window produced no mark lines at all, so it cannot evidence a frame count "
+            f"for pid {pid}; check that atrace is permitted on this build before reading the window"
         )
         raise ProbeError(detail)
     return ProducerWindow(

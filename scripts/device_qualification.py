@@ -247,9 +247,20 @@ def confirm_bracketed_pid(device: device_layer.AdbDevice, pid_before: int | None
     post-window reading against that same replacement, so the mismatch would satisfy its own check
     and a zero for a process the opening control never bracketed would be recorded. The window is
     abandoned — waking the device — rather than traced against a process that is not that one.
+
+    The failure is worded here rather than by `confirm_pid_unchanged`: that message ends "the
+    measurement is not attributable to one process", and at this point there is no measurement to be
+    attributable, because the window is abandoned before it is traced. Its shared description would
+    also be the same literal the post-window check reports, so two failures about different spans
+    would read as one.
     """
-    pid = confirm_pid_unchanged(device, pid_before, failures, description="hidden producer window")
+    pid = read_safe_pid(device)
     if pid is None or pid != pid_before:
+        failures.append(
+            f"The wallpaper process is not confirmed to be the one the opening control bracketed "
+            f"(before={pid_before}, after={pid}); the hidden producer window was abandoned rather "
+            "than traced against a process it never bracketed"
+        )
         if not device.wake_screen():
             failures.append("Screen wake request failed after the hidden window was abandoned")
         return None
@@ -976,13 +987,14 @@ def evaluate_producer_control(
             "recorded beside it would be an unread counter rather than a measured zero"
         )
         return False
-    # The control validates the instrument as well as the tracer. It is the one window this phase
-    # knows was lit, so it is the only place the display reader is checked in the direction the
-    # hidden window's claim rests on: the gate before that window only confirms the reader reports
-    # off after the screen was slept, which a reader stuck on False would also satisfy. A control
-    # whose display evidence is invalid has therefore not validated that reading, so — like the
-    # blind control above — it refuses rather than letting the phase record a hidden zero inside a
-    # bracket it has just declared invalid.
+    # The control validates the instrument as well as the tracer. It is the window this phase knows
+    # was lit before the hidden one, so it is the only check on the display reader in the direction
+    # the hidden window's claim rests on that comes before that window: the sleep gate between the
+    # two only confirms the reader reports off after the screen was slept, which a reader stuck on
+    # False would also satisfy. (The closing control checks the reader in the same direction, but
+    # only after the window it brackets.) A control whose display evidence is invalid has therefore
+    # not validated that reading, so — like the blind control above — it refuses rather than letting
+    # the phase record a hidden zero inside a bracket it has just declared invalid.
     if not window.display_on_at_every_sample:
         failures.append(f"The {description} display was not on for every sample taken inside it")
         return False
@@ -990,15 +1002,25 @@ def evaluate_producer_control(
 
 
 def producer_window_summary(window: device_layer.ProducerWindow) -> str:
-    """Format the one line of evidence recorded for, and printed about, a producer window."""
+    """
+    Format the one line of evidence recorded for, and printed about, a producer window.
+
+    The display label is read off the samples rather than chosen as the complement of the window's
+    verdicts: "mixed" claims that an on sample and an off sample were both seen, and it is used only
+    when both were. A window whose samples were all unreadable observed neither state, and one whose
+    readable samples were all on observed no off state, so neither is called mixed.
+    """
     states = window.display_states
-    display = (
-        "on at every sample"
-        if window.display_on_at_every_sample
-        else "off at every sample"
-        if window.display_off_at_every_sample
-        else "mixed"
-    )
+    on_samples = sum(1 for state in states if state is True)
+    off_samples = sum(1 for state in states if state is False)
+    if on_samples and off_samples:
+        display = "mixed"
+    elif on_samples:
+        display = "on at every readable sample"
+    elif off_samples:
+        display = "off at every readable sample"
+    else:
+        display = "unreadable at every sample"
     return (
         f"{window.frame_count} producer frames over {window.window_seconds:.0f} s "
         f"({window.trace_lines} trace lines; display sampled {len(states)} times: {display}, "
@@ -1053,9 +1075,13 @@ def evaluate_closing_control(window: device_layer.ProducerWindow | None, failure
     if window is None:
         return
     if window.frame_count == 0:
+        # The observation, not a cause: a process recreated during the wake produces the same empty
+        # window with a working tracer, and a hidden window whose trace failed or whose row was
+        # discarded for an unattributable pid leaves no zero for this failure to be about.
         failures.append(
-            "The visible control window after the hidden one produced no producer frames, so the "
-            "tracer stopped working during the hidden window and its zero is not evidence"
+            "The visible control window after the hidden one produced no producer frames on the pid "
+            "traced after the wake, so the tracer is not confirmed to have been working across the "
+            "hidden window"
         )
     if not window.display_on_at_every_sample:
         failures.append(
