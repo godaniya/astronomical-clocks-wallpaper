@@ -1133,7 +1133,9 @@ class ProducerTraceTest(unittest.TestCase):
         self.assertFalse(window.display_off_at_every_sample)
 
     def test_a_zero_sampling_interval_is_refused_before_the_trace_starts(self) -> None:
-        # A zero interval would make the sampling loop spin forever with the trace already running.
+        # A zero interval would make the sampling loop spin forever with the trace already running;
+        # it is refused by the duration floor, which is also the interval the read cap is derived
+        # from.
         with (
             patch.object(device_layer, "run_adb") as run_adb,
             self.assertRaises(device_layer.ProbeError),
@@ -1142,6 +1144,7 @@ class ProducerTraceTest(unittest.TestCase):
         run_adb.assert_not_called()
 
     def test_a_non_positive_window_is_refused(self) -> None:
+        # A zero window is below the duration floor, so it never reaches the trace.
         with (
             patch.object(device_layer, "run_adb") as run_adb,
             self.assertRaises(device_layer.ProbeError),
@@ -1152,7 +1155,8 @@ class ProducerTraceTest(unittest.TestCase):
     def test_non_finite_durations_are_refused_before_the_trace_starts(self) -> None:
         # `nan <= 0` and `inf <= 0` are both false, so a positivity-only guard lets them through:
         # `inf` makes the sampling loop never terminate with the trace running, and `nan` skips the
-        # loop and returns a zero-frame window with no display samples.
+        # loop and returns a zero-frame window with no display samples. The duration range excludes
+        # them as well, and names them so the intent is not left to comparison semantics.
         for seconds, sample_seconds in (
             (float("inf"), 1.0),
             (float("nan"), 1.0),
@@ -1170,7 +1174,7 @@ class ProducerTraceTest(unittest.TestCase):
     def test_a_window_longer_than_the_cap_is_refused_before_the_trace_starts(self) -> None:
         # Finiteness and positivity are both satisfied by 1e17, but `remaining -= interval` is a
         # no-op in float64 at that magnitude, so the accumulating loop would never terminate once
-        # `atrace` was running. The window is bounded by construction instead.
+        # `atrace` was running. The duration range excludes it before the trace starts.
         with (
             patch.object(device_layer, "run_adb") as run_adb,
             self.assertRaises(device_layer.ProbeError),
@@ -1179,8 +1183,8 @@ class ProducerTraceTest(unittest.TestCase):
         run_adb.assert_not_called()
 
     def test_a_window_sampled_too_finely_is_refused_before_the_trace_starts(self) -> None:
-        # A window within the length cap can still imply more display reads than the probe will
-        # make, so the read count it implies is capped too.
+        # 0.01 s is below the duration floor, and the floor is what keeps the read count within
+        # MAX_TRACE_SAMPLES: a 600 s window at the smallest accepted interval is exactly the cap.
         with (
             patch.object(device_layer, "run_adb") as run_adb,
             self.assertRaises(device_layer.ProbeError),
@@ -1188,9 +1192,32 @@ class ProducerTraceTest(unittest.TestCase):
             device_layer.capture_producer_window("device", 1234, seconds=600.0, sample_seconds=0.01)
         run_adb.assert_not_called()
 
-    def test_the_window_cap_is_a_bound_and_the_reads_are_counted(self) -> None:
-        # The cap is inclusive: a window at exactly the maximum is accepted, and the loop sleeps
-        # exactly ceil(seconds / sample_seconds) times, a count fixed before the trace starts.
+    def test_a_subnormal_sampling_interval_is_refused_before_the_trace_starts(self) -> None:
+        # 5e-324 is finite and positive, so the finiteness/positivity guard let it through, and
+        # 600.0 / 5e-324 overflows to inf, which `math.ceil` raises OverflowError for. That is an
+        # ArithmeticError, which the caller does not catch, so it crashed the whole run rather than
+        # failing the probe. The duration floor refuses it before the trace starts.
+        with (
+            patch.object(device_layer, "run_adb") as run_adb,
+            self.assertRaises(device_layer.ProbeError),
+        ):
+            device_layer.capture_producer_window("device", 1234, seconds=600.0, sample_seconds=5e-324)
+        run_adb.assert_not_called()
+
+    def test_a_window_and_interval_that_underflow_the_read_count_are_refused_before_the_trace_starts(self) -> None:
+        # The reciprocal extreme: 1e-300 / 1e300 underflows to 0.0, so `range(0)` took no display
+        # reads at all while `atrace` ran and the window came back with `display_states=()` — the
+        # fabricated "unreadable" result this probe exists to prevent. Both values are outside the
+        # duration range, so the pair is refused before the trace starts.
+        with (
+            patch.object(device_layer, "run_adb") as run_adb,
+            self.assertRaises(device_layer.ProbeError),
+        ):
+            device_layer.capture_producer_window("device", 1234, seconds=1e-300, sample_seconds=1e300)
+        run_adb.assert_not_called()
+
+    def sample_window(self, seconds: float, sample_seconds: float) -> tuple[int, int]:
+        """Capture a window with the trace and the clock stubbed, returning (sleeps, samples)."""
         trace = b"wallpaper-1234  [001] d..2 120.020000: tracing_mark_write: B|1234|queueBuffer"
 
         def run(command: list[str], **_kwargs: object) -> bytes:
@@ -1200,10 +1227,32 @@ class ProducerTraceTest(unittest.TestCase):
             patch.object(device_layer, "run_adb", side_effect=run),
             patch.object(device_layer.time, "sleep") as sleep,
         ):
-            window = device_layer.capture_producer_window("device", 1234, seconds=device_layer.MAX_TRACE_WINDOW_SECONDS)
+            window = device_layer.capture_producer_window(
+                "device", 1234, seconds=seconds, sample_seconds=sample_seconds
+            )
+        return sleep.call_count, len(window.display_states)
+
+    def test_the_window_cap_is_a_bound_and_the_reads_are_counted(self) -> None:
+        # The cap is inclusive: a window at exactly the maximum is accepted, and the loop sleeps
+        # exactly ceil(seconds / sample_seconds) times, a count fixed before the trace starts.
         expected = math.ceil(device_layer.MAX_TRACE_WINDOW_SECONDS / device_layer.TRACE_DISPLAY_SAMPLE_SECONDS)
-        self.assertEqual(expected, sleep.call_count)
-        self.assertEqual(expected, len(window.display_states))
+        self.assertEqual(
+            (expected, expected),
+            self.sample_window(device_layer.MAX_TRACE_WINDOW_SECONDS, device_layer.TRACE_DISPLAY_SAMPLE_SECONDS),
+        )
+
+    def test_the_duration_range_corners_are_inclusive(self) -> None:
+        # The floor and the ceiling are both accepted, and the read count over the whole range stays
+        # in [1, MAX_TRACE_SAMPLES]: the smallest accepted interval against the longest accepted
+        # window is exactly the cap, and the shortest window still takes one read.
+        self.assertEqual(
+            (device_layer.MAX_TRACE_SAMPLES, device_layer.MAX_TRACE_SAMPLES),
+            self.sample_window(device_layer.MAX_TRACE_WINDOW_SECONDS, device_layer.MIN_TRACE_DURATION_SECONDS),
+        )
+        minimum = device_layer.MIN_TRACE_DURATION_SECONDS
+        for seconds, sample_seconds in ((minimum, minimum), (minimum, device_layer.MAX_TRACE_WINDOW_SECONDS)):
+            with self.subTest(seconds=seconds, sample_seconds=sample_seconds):
+                self.assertEqual((1, 1), self.sample_window(seconds, sample_seconds))
 
     def test_an_uncapturable_trace_is_an_error(self) -> None:
         with (

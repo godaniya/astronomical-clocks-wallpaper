@@ -589,11 +589,15 @@ def read_process_cpu_clock_ticks(serial: str) -> int | None:
 
 TRACE_WINDOW_SECONDS: Final = 30.0
 TRACE_DISPLAY_SAMPLE_SECONDS: Final = 2.0
-# The probe holds the device for the whole window with a trace running, so the window is bounded by
-# construction. A caller-supplied duration cannot be trusted to bound itself: above about 1e16,
-# `remaining -= interval` stops changing the value, so a `while remaining > 0` loop would spin
-# forever after `atrace` started. The window length and the number of display reads it implies are
-# both capped, and the reads are counted up front rather than accumulated.
+# This probe holds a shared device for the whole window with an atrace running, so both durations are
+# bounded to the range a real measurement can lie in rather than trusted to be sane. The bound is
+# what makes the arithmetic total: within it `seconds / sample_seconds` is finite and well-scaled, so
+# it can neither overflow to inf — which `math.ceil` would turn into an OverflowError the caller does
+# not catch — nor underflow to 0.0, which would start a trace that takes no display reads and return
+# a window with no display evidence. The floor is the interval at which the count reaches the cap:
+# a 600 s window sampled every 0.1 s is exactly the 6000 reads this probe will make, so the read
+# count the loop can run to is bounded by construction, not by a check on a rounded quotient.
+MIN_TRACE_DURATION_SECONDS: Final = 0.1
 MAX_TRACE_WINDOW_SECONDS: Final = 600.0
 MAX_TRACE_SAMPLES: Final = 6000
 TRACE_CATEGORIES: Final = ("gfx", "view")
@@ -674,36 +678,28 @@ def capture_producer_window(
 
     The trace runs on the device while this loop samples the display state, so the record covers the
     display *inside* the window rather than only at its endpoints. An unusable trace is raised: a
-    window with no usable trace is not a window in which nothing was drawn.
+    window with no usable trace is not a window in which nothing was drawn. Both durations must be
+    in [MIN_TRACE_DURATION_SECONDS, MAX_TRACE_WINDOW_SECONDS].
     """
-    # Finiteness is checked as well as positivity: `nan <= 0` and `inf <= 0` are both false, so a
-    # non-finite duration would pass a positive-only guard. `inf` then makes the sampling loop never
-    # terminate with the trace running, and `nan` skips the loop entirely and returns a zero-frame
-    # window with no display samples — a fabricated zero, which is exactly what this probe exists to
-    # prevent.
-    if not (math.isfinite(seconds) and math.isfinite(sample_seconds)) or seconds <= 0 or sample_seconds <= 0:
+    # Non-finite values are named explicitly rather than left to the range test, which also excludes
+    # them (`nan` fails every comparison and `inf` exceeds the ceiling) but would bury the intent in
+    # comparison semantics. The range is what bounds the loop: with both durations in
+    # [MIN_TRACE_DURATION_SECONDS, MAX_TRACE_WINDOW_SECONDS] the quotient is finite and well-scaled,
+    # so it can neither overflow to inf nor underflow to 0.0, and the count is in
+    # [1, MAX_TRACE_SAMPLES] — the smallest ratio still rounds up to one read, and the largest
+    # (MAX_TRACE_WINDOW_SECONDS / MIN_TRACE_DURATION_SECONDS) is exactly the cap.
+    if not (
+        math.isfinite(seconds)
+        and math.isfinite(sample_seconds)
+        and MIN_TRACE_DURATION_SECONDS <= seconds <= MAX_TRACE_WINDOW_SECONDS
+        and MIN_TRACE_DURATION_SECONDS <= sample_seconds <= MAX_TRACE_WINDOW_SECONDS
+    ):
         detail = (
-            f"a trace window needs finite positive durations but got seconds={seconds}, sample_seconds={sample_seconds}"
-        )
-        raise ProbeError(detail)
-    # An unbounded duration is a hazard the guard above cannot see: finiteness and positivity are
-    # both satisfied by 1e20, yet `remaining -= interval` is a no-op in float64 at that magnitude,
-    # so the sampling loop would never terminate once `atrace` is running. Both the window and the
-    # read count it implies are therefore capped by construction, and the count is computed before
-    # the trace starts rather than accumulated inside the loop.
-    if seconds > MAX_TRACE_WINDOW_SECONDS:
-        detail = (
-            f"a trace window of {seconds} s is longer than the {MAX_TRACE_WINDOW_SECONDS:.0f} s this "
-            "probe will hold the device for"
+            f"a trace window needs finite durations between {MIN_TRACE_DURATION_SECONDS} and "
+            f"{MAX_TRACE_WINDOW_SECONDS:.0f} s but got seconds={seconds}, sample_seconds={sample_seconds}"
         )
         raise ProbeError(detail)
     sample_count = math.ceil(seconds / sample_seconds)
-    if sample_count > MAX_TRACE_SAMPLES:
-        detail = (
-            f"a {seconds} s window sampled every {sample_seconds} s needs {sample_count} display reads, "
-            f"more than the {MAX_TRACE_SAMPLES} this probe will make"
-        )
-        raise ProbeError(detail)
     start_command = ["shell", "atrace", "--async_start", "-a", str(pid)]
     start_command.extend(TRACE_CATEGORIES)
     run_adb(start_command, serial=serial)
