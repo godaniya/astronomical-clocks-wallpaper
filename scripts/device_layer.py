@@ -615,7 +615,13 @@ PRODUCER_TRACKED_EVENTS: Final = frozenset({PRODUCER_QUEUE_EVENT, "dequeueBuffer
 
 @dataclass(frozen=True)
 class ProducerWindow:
-    """One bounded producer-trace window, with the display state sampled inside it."""
+    """
+    One bounded producer-trace window, with the display state sampled inside it.
+
+    `window_seconds` is the span the trace actually covered, measured rather than requested: the
+    display reads and the dump run inside the trace, so the frame count describes a window at least
+    as wide as the duration asked for.
+    """
 
     window_seconds: float
     pid: int
@@ -679,7 +685,9 @@ def capture_producer_window(
     The trace runs on the device while this loop samples the display state, so the record covers the
     display *inside* the window rather than only at its endpoints. An unusable trace is raised: a
     window with no usable trace is not a window in which nothing was drawn. Both durations must be
-    in [MIN_TRACE_DURATION_SECONDS, MAX_TRACE_WINDOW_SECONDS].
+    in [MIN_TRACE_DURATION_SECONDS, MAX_TRACE_WINDOW_SECONDS]. `seconds` paces the reads; the
+    returned window reports the span the trace actually covered, measured, which those reads make at
+    least `seconds`.
     """
     # Non-finite values are named explicitly rather than left to the range test, which also excludes
     # them (`nan` fails every comparison and `inf` exceeds the ceiling) but would bury the intent in
@@ -705,10 +713,23 @@ def capture_producer_window(
     run_adb(start_command, serial=serial)
     try:
         states: list[bool | None] = []
+        # The reads are paced against a monotonic deadline fixed when the trace starts, rather than
+        # by sleeping a fixed interval between them: a read slower than its interval then shortens
+        # the next sleep instead of pushing every later read out by its own latency, so read latency
+        # cannot accumulate across the window. A read that outlasts its own interval still pushes the
+        # reads after it, which is why the span the trace covered is measured rather than assumed.
+        started = time.monotonic()
         for index in range(sample_count):
-            time.sleep(min(sample_seconds, seconds - index * sample_seconds))
+            deadline = started + min((index + 1) * sample_seconds, seconds)
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(remaining)
             states.append(read_screen_on(serial))
         dump = run_adb(["shell", "atrace", "--async_dump"], serial=serial, timeout=ADB_TRACE_TIMEOUT_SECONDS)
+        # The display reads and this dump run inside the trace, so the span it actually covers is at
+        # least `seconds`. Reporting the requested duration would advertise a window narrower than
+        # the one the frame count describes, so what is reported is the measured span.
+        window_seconds = time.monotonic() - started
     finally:
         run_adb(["shell", "atrace", "--async_stop"], serial=serial, timeout=ADB_TRACE_TIMEOUT_SECONDS)
     trace_text = dump.decode("utf-8", errors="replace")
@@ -719,7 +740,7 @@ def capture_producer_window(
         )
         raise ProbeError(detail)
     return ProducerWindow(
-        window_seconds=seconds,
+        window_seconds=window_seconds,
         pid=pid,
         event_counts=parse_producer_events(trace_text, pid),
         trace_lines=len(trace_text.splitlines()),

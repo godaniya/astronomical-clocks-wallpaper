@@ -1254,6 +1254,42 @@ class ProducerTraceTest(unittest.TestCase):
             with self.subTest(seconds=seconds, sample_seconds=sample_seconds):
                 self.assertEqual((1, 1), self.sample_window(seconds, sample_seconds))
 
+    def test_the_window_reports_the_span_it_traced_and_paces_the_reads_to_the_deadline(self) -> None:
+        # The display reads and the dump run inside the trace, so the window the frames describe is
+        # always wider than the duration requested, and reporting the request would advertise a
+        # narrower window than was traced. Each read here costs 0.5 s: pacing against a deadline
+        # fixed at the trace's start spends that latency out of the following sleep, so the last read
+        # still lands at 10 s and the window spans 10.5 s. Sleeping a flat interval instead would
+        # have pushed every later read out by its latency and spanned 12.5 s, which is the drift the
+        # deadline removes; either way the reported value is the measured span.
+        trace = b"wallpaper-1234  [001] d..2 120.020000: tracing_mark_write: B|1234|queueBuffer"
+        clock = [1000.0]
+        read_latency = 0.5
+
+        def run(command: list[str], **_kwargs: object) -> bytes:
+            return trace if "--async_dump" in command else b""
+
+        def monotonic() -> float:
+            return clock[0]
+
+        def sleep(seconds: float) -> None:
+            clock[0] += seconds
+
+        def read_screen_on(_serial: str) -> bool:
+            clock[0] += read_latency
+            return True
+
+        with (
+            patch.object(device_layer, "run_adb", side_effect=run),
+            patch.object(device_layer.time, "monotonic", monotonic),
+            patch.object(device_layer.time, "sleep", sleep),
+            patch.object(device_layer, "read_screen_on", read_screen_on),
+        ):
+            window = device_layer.capture_producer_window("device", 1234, seconds=10.0, sample_seconds=2.0)
+        self.assertEqual(1, window.frame_count)
+        self.assertEqual(5, len(window.display_states))
+        self.assertAlmostEqual(10.0 + read_latency, window.window_seconds)
+
     def test_an_uncapturable_trace_is_an_error(self) -> None:
         with (
             patch.object(device_layer, "run_adb", side_effect=subprocess.CalledProcessError(1, "atrace")),
@@ -1391,6 +1427,44 @@ class HiddenFramesPhaseTest(unittest.TestCase):
         self.assertEqual([], failures)
         self.assertEqual(3, len(results))
         self.assertTrue(any("hidden" in label for label, _ in results))
+
+    def test_the_closing_control_runs_on_the_home_screen_after_the_wake(self) -> None:
+        # Waking confirms only that the display is on, which on a locked device is the keyguard, not
+        # the home screen the opening control ran on. The closing control has to bracket the hidden
+        # window in the same context to be its counterpart, so the keyguard is dismissed and Home
+        # shown before it is traced — the same repair `phase_screen_off_wake` makes after its wake.
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        device = MagicMock()
+        device.get_wallpaper_pid.return_value = 123
+        device.sleep_screen.return_value = True
+        device.read_screen_on.return_value = False
+        device.read_wallpaper_visible.return_value = False
+        device.wake_screen.return_value = True
+        device.capture_producer_window.side_effect = [
+            self.window(20, (True, True)),
+            self.window(0, (False, False)),
+            self.window(20, (True, True)),
+        ]
+        with patch.object(qualification.time, "sleep"), contextlib.redirect_stdout(io.StringIO()):
+            qualification.phase_hidden_frames(device, results, failures)
+        order = [
+            name
+            for name, _args, _kwargs in device.mock_calls
+            if name in {"wake_screen", "dismiss_keyguard", "show_home", "capture_producer_window"}
+        ]
+        self.assertEqual(
+            [
+                "capture_producer_window",  # opening control, on the home screen
+                "capture_producer_window",  # the hidden window itself
+                "wake_screen",  # after the hidden window
+                "dismiss_keyguard",
+                "show_home",
+                "capture_producer_window",  # closing control, in the opening control's context
+            ],
+            order,
+        )
+        self.assertEqual([], failures)
 
     def test_a_control_that_stopped_working_invalidates_the_zero(self) -> None:
         _, failures = self.run_phase(

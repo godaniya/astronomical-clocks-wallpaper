@@ -1067,6 +1067,12 @@ def phase_hidden_frames(device: device_layer.AdbDevice, results: list[tuple[str,
     if not device.wake_screen():
         failures.append("Screen wake request failed; the closing control trace was skipped")
         return
+    # Waking only confirms the display is on, which on a locked device is the keyguard rather than
+    # the home screen the opening control ran on. The closing control has to bracket the hidden
+    # window in the same context to be its counterpart, so the keyguard is dismissed and Home shown
+    # before it is traced, as `phase_screen_off_wake` does after its own wake.
+    device.dismiss_keyguard()
+    device.show_home()
     time.sleep(SCREEN_OFF_SETTLE_SECONDS)
     closing = measure_producer_window(
         device, pid_before, PRODUCER_CONTROL_SECONDS, results, failures, description="visible control after"
