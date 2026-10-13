@@ -1042,14 +1042,19 @@ def phase_hidden_frames(device: device_layer.AdbDevice, results: list[tuple[str,
         return
 
     pid = confirm_pid_unchanged(device, pid_before, failures, description="hidden producer window")
+    recorded_from = len(results)
     hidden = measure_producer_window(
         device, pid, PRODUCER_HIDDEN_SECONDS, results, failures, description="hidden, screen off"
     )
-    # The trace is filtered to one pid, so a process that died or restarted inside the window would
-    # leave its replacement's frames outside the trace and let the old pid's zero read as hidden-state
-    # evidence. Reconfirming the pid afterwards invalidates that zero instead of accepting it.
-    confirm_pid_unchanged(device, pid, failures, description="hidden producer window")
-    evaluate_hidden_window(hidden, failures)
+    # The trace is filtered to one pid, so a process that died or restarted inside the window leaves
+    # its replacement's frames outside the trace. That zero is the wrong process's, so the result is
+    # removed rather than printed beside the failure as if it were a measurement, and the evaluation
+    # that would have validated it is skipped.
+    pid_after = confirm_pid_unchanged(device, pid, failures, description="hidden producer window")
+    if pid_after != pid or pid is None:
+        del results[recorded_from:]
+    else:
+        evaluate_hidden_window(hidden, failures)
 
     if not device.wake_screen():
         failures.append("Screen wake request failed; the closing control trace was skipped")

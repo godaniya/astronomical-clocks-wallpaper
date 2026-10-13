@@ -589,6 +589,13 @@ def read_process_cpu_clock_ticks(serial: str) -> int | None:
 
 TRACE_WINDOW_SECONDS: Final = 30.0
 TRACE_DISPLAY_SAMPLE_SECONDS: Final = 2.0
+# The probe holds the device for the whole window with a trace running, so the window is bounded by
+# construction. A caller-supplied duration cannot be trusted to bound itself: above about 1e16,
+# `remaining -= interval` stops changing the value, so a `while remaining > 0` loop would spin
+# forever after `atrace` started. The window length and the number of display reads it implies are
+# both capped, and the reads are counted up front rather than accumulated.
+MAX_TRACE_WINDOW_SECONDS: Final = 600.0
+MAX_TRACE_SAMPLES: Final = 6000
 TRACE_CATEGORIES: Final = ("gfx", "view")
 TRACE_DEVICE_PATH: Final = "/data/local/tmp/wallpaper-producer.ftrace"
 # The text trace marks each event with a `B|<pid>|<name>` / `E|<pid>|<name>` pair, so only one half
@@ -679,16 +686,31 @@ def capture_producer_window(
             f"a trace window needs finite positive durations but got seconds={seconds}, sample_seconds={sample_seconds}"
         )
         raise ProbeError(detail)
+    # An unbounded duration is a hazard the guard above cannot see: finiteness and positivity are
+    # both satisfied by 1e20, yet `remaining -= interval` is a no-op in float64 at that magnitude,
+    # so the sampling loop would never terminate once `atrace` is running. Both the window and the
+    # read count it implies are therefore capped by construction, and the count is computed before
+    # the trace starts rather than accumulated inside the loop.
+    if seconds > MAX_TRACE_WINDOW_SECONDS:
+        detail = (
+            f"a trace window of {seconds} s is longer than the {MAX_TRACE_WINDOW_SECONDS:.0f} s this "
+            "probe will hold the device for"
+        )
+        raise ProbeError(detail)
+    sample_count = math.ceil(seconds / sample_seconds)
+    if sample_count > MAX_TRACE_SAMPLES:
+        detail = (
+            f"a {seconds} s window sampled every {sample_seconds} s needs {sample_count} display reads, "
+            f"more than the {MAX_TRACE_SAMPLES} this probe will make"
+        )
+        raise ProbeError(detail)
     start_command = ["shell", "atrace", "--async_start", "-a", str(pid)]
     start_command.extend(TRACE_CATEGORIES)
     run_adb(start_command, serial=serial)
     try:
         states: list[bool | None] = []
-        remaining = seconds
-        while remaining > 0:
-            interval = min(sample_seconds, remaining)
-            time.sleep(interval)
-            remaining -= interval
+        for index in range(sample_count):
+            time.sleep(min(sample_seconds, seconds - index * sample_seconds))
             states.append(read_screen_on(serial))
         dump = run_adb(["shell", "atrace", "--async_dump"], serial=serial, timeout=ADB_TRACE_TIMEOUT_SECONDS)
     finally:

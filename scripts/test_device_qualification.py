@@ -1167,6 +1167,44 @@ class ProducerTraceTest(unittest.TestCase):
                 device_layer.capture_producer_window("device", 1234, seconds=seconds, sample_seconds=sample_seconds)
             run_adb.assert_not_called()
 
+    def test_a_window_longer_than_the_cap_is_refused_before_the_trace_starts(self) -> None:
+        # Finiteness and positivity are both satisfied by 1e17, but `remaining -= interval` is a
+        # no-op in float64 at that magnitude, so the accumulating loop would never terminate once
+        # `atrace` was running. The window is bounded by construction instead.
+        with (
+            patch.object(device_layer, "run_adb") as run_adb,
+            self.assertRaises(device_layer.ProbeError),
+        ):
+            device_layer.capture_producer_window("device", 1234, seconds=1e17, sample_seconds=2.0)
+        run_adb.assert_not_called()
+
+    def test_a_window_sampled_too_finely_is_refused_before_the_trace_starts(self) -> None:
+        # A window within the length cap can still imply more display reads than the probe will
+        # make, so the read count it implies is capped too.
+        with (
+            patch.object(device_layer, "run_adb") as run_adb,
+            self.assertRaises(device_layer.ProbeError),
+        ):
+            device_layer.capture_producer_window("device", 1234, seconds=600.0, sample_seconds=0.01)
+        run_adb.assert_not_called()
+
+    def test_the_window_cap_is_a_bound_and_the_reads_are_counted(self) -> None:
+        # The cap is inclusive: a window at exactly the maximum is accepted, and the loop sleeps
+        # exactly ceil(seconds / sample_seconds) times, a count fixed before the trace starts.
+        trace = b"wallpaper-1234  [001] d..2 120.020000: tracing_mark_write: B|1234|queueBuffer"
+
+        def run(command: list[str], **_kwargs: object) -> bytes:
+            return trace if "--async_dump" in command else b""
+
+        with (
+            patch.object(device_layer, "run_adb", side_effect=run),
+            patch.object(device_layer.time, "sleep") as sleep,
+        ):
+            window = device_layer.capture_producer_window("device", 1234, seconds=device_layer.MAX_TRACE_WINDOW_SECONDS)
+        expected = math.ceil(device_layer.MAX_TRACE_WINDOW_SECONDS / device_layer.TRACE_DISPLAY_SAMPLE_SECONDS)
+        self.assertEqual(expected, sleep.call_count)
+        self.assertEqual(expected, len(window.display_states))
+
     def test_an_uncapturable_trace_is_an_error(self) -> None:
         with (
             patch.object(device_layer, "run_adb", side_effect=subprocess.CalledProcessError(1, "atrace")),
@@ -1245,6 +1283,33 @@ class HiddenFramesPhaseTest(unittest.TestCase):
                 for failure in failures
             )
         )
+        # The result is not merely failed: it is removed, because the trace was filtered to the old
+        # pid and the zero describes a process that is no longer the one running. Only the two
+        # visible controls remain, and neither row is the hidden window's.
+        self.assertEqual(2, len(results))
+        self.assertFalse(any("hidden" in label for label, _ in results))
+
+    def test_the_hidden_row_is_kept_when_the_pid_held(self) -> None:
+        # The suppression above must not swallow a good window: with the pid unchanged across the
+        # hidden window, all three rows are recorded and the evaluation still runs.
+        results: list[tuple[str, str]] = []
+        failures: list[str] = []
+        device = MagicMock()
+        device.get_wallpaper_pid.side_effect = [123, 123, 123]
+        device.sleep_screen.return_value = True
+        device.read_screen_on.return_value = False
+        device.read_wallpaper_visible.return_value = False
+        device.wake_screen.return_value = True
+        device.capture_producer_window.side_effect = [
+            self.window(20, (True, True)),
+            self.window(0, (False, False)),
+            self.window(20, (True, True)),
+        ]
+        with patch.object(qualification.time, "sleep"), contextlib.redirect_stdout(io.StringIO()):
+            qualification.phase_hidden_frames(device, results, failures)
+        self.assertEqual([], failures)
+        self.assertEqual(3, len(results))
+        self.assertTrue(any("hidden" in label for label, _ in results))
 
     def test_a_control_that_stopped_working_invalidates_the_zero(self) -> None:
         _, failures = self.run_phase(
