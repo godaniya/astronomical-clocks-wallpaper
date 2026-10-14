@@ -1,0 +1,1811 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+"""
+Battery and resource acceptance protocol for Astronomical Clock Wallpaper.
+
+Each subcommand runs one bounded phase of the budget in `docs/battery-budget.md` against a connected
+physical device, appends one JSON record to a state directory, and prints its own evidence. The
+phases are split so that no invocation blocks for a whole qualification, which is what the shared
+device policy requires: `resources`, `hidden`, `visible`, `pilot`, `memory`, and `report`.
+
+No phase performs the wallpaper swap it measures. The arm is verified before a window starts and the
+window is refused when the device does not match, because a mis-swapped wallpaper must not be
+recorded as a valid measurement.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import json
+import math
+import re
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Final
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
+import device_layer
+
+# The judgement half of the protocol: the budgets, the statistics, the pairing rule, and the report
+# itself. Names are imported rather than the module, so that every call site below is unchanged by
+# the split and the slice that moved them out is exactly the diff a reviewer has to read. The
+# dependency runs one way only — `battery_report` imports nothing from here.
+from battery_report import (
+    MAX_HIDDEN_CPU_PCT,
+    MAX_PSS_GROWTH_KB,
+    MIN_PAIRED_SAMPLES,
+    MINIMUM_HIDDEN_MINUTES,
+    MINIMUM_MEMORY_MINUTES,
+    MINIMUM_WINDOW_MINUTES,
+    Arm,
+    Baseline,
+    collect_restore_problems,
+    phase_report,
+    two_sigma_noise_floor,
+)
+
+CHARGE_COUNTER_PATTERN: Final = re.compile(r"^[ \t]*Charge counter:[ \t]*(\d+)[ \t]*$", re.MULTILINE)
+BATTERY_LEVEL_PATTERN: Final = re.compile(r"^[ \t]*level:[ \t]*(\d+)[ \t]*$", re.MULTILINE)
+# Anchored to the field name so that `Max charging voltage:` can never be read as the pack voltage.
+BATTERY_VOLTAGE_PATTERN: Final = re.compile(r"^[ \t]*voltage:[ \t]*(\d+)[ \t]*$", re.MULTILINE)
+TOTAL_PSS_PATTERN: Final = re.compile(r"^\s*TOTAL\s+(\d+)", re.MULTILINE)
+SDK_PATTERN: Final = re.compile(r"^(\d+)$")
+# Every shape `dumpsys jobscheduler` prints a job line in, taken from the test device's own dump.
+# The two components at the end of a job line are a `<hash> <component>` pair; the component is
+# either `<pkg>/<class>` or `<ns>@<pkg>/<class>`, and one legacy line on this device is tagged
+# rather than component-shaped (`DownloadManager:<pkg>`). The old pattern recognised the plain
+# `JOB #<uid>/<id>` form only, which matched 74 of the 521 job lines this device lists: the
+# namespaced form (`androidx.work.systemjobscheduler:<uid>/<id>`, `SyncManager:<uid>/<id>`) is where
+# WorkManager and the sync adapters keep their jobs, so an app's own jobs could be silently dropped
+# from the count. Group 1 is the package the job belongs to, which is what attributes it to the app.
+JOB_LINE_PATTERN: Final = re.compile(
+    r"^\s*JOB \S+/-?\d+:\s+\S+\s+(?:@[\w.]+@)?(?:[A-Za-z][\w.]*:)?([\w.\-]+)(?:[/:]|$)",
+    re.MULTILINE,
+)
+# The job *entry* predicate: one line per job, whatever its shape. It is deliberately wider than
+# JOB_LINE_PATTERN, so that a job line the attribution cannot parse shows up as a count mismatch or
+# as an unparsable entry rather than being dropped silently.
+JOB_ENTRY_PATTERN: Final = re.compile(r"^\s*JOB \S+/-?\d+:", re.MULTILINE)
+# The wake-lock entry predicate counts every lock type, not `PARTIAL_WAKE_LOCK` alone. The census
+# counts the whole device, and this device's `Wake Locks: size=1` is a `DOZE_WAKE_LOCK`, so an
+# app-scoped count of partial locks can never equal the census and the census could never be
+# checked against it.
+WAKE_LOCK_ENTRY_PATTERN: Final = re.compile(r"^\s*\w+_WAKE_LOCK\b", re.MULTILINE)
+# The alarm entry predicate: the census block prints one `<TYPE> #<n>: Alarm{...}` header per
+# pending alarm. It must be read inside the census block only, because a later section lists alarms
+# of its own in exactly this shape — this device prints `Past-due non-wakeup alarms: 1` followed by
+# `ELAPSED #1: Alarm{...}` — and a whole-dump scan counts that one too.
+ALARM_ENTRY_PATTERN: Final = re.compile(r"^\s*\w+\s*#\d+:\s*Alarm\{", re.MULTILINE)
+# A `dumpsys jobscheduler` dump that has been read at all prints a `Registered <n> jobs:` census line
+# before the job list; requiring it is what separates "the app has no jobs" from "this is not a
+# jobscheduler dump", so an unparsable probe is an error rather than a zero.
+JOBSCHEDULER_CENSUS_PATTERN: Final = re.compile(r"^[ \t]*Registered (\d+) jobs:", re.MULTILINE)
+# A `dumpsys power` that has been read at all prints its wake-lock census before listing the locks,
+# the same way `dumpsys jobscheduler` prints its job census. Requiring it is what separates "the app
+# holds no wake locks" from "this is not a power dump", so a truncated or reshaped dump is an error
+# rather than a zero.
+#
+# The leading and trailing whitespace classes are `[ \t]` and not `\s`. `\s` matches a newline, so
+# `^\s*(\d+) pending alarms:` can begin its match at the blank line *above* the census and run
+# into it — the match then starts one line early, and a parser that locates the censused block from
+# the match start reads the block from the wrong line. Requiring a line's own spaces keeps the match
+# on the census line.
+POWER_WAKELOCK_CENSUS_PATTERN: Final = re.compile(r"^[ \t]*Wake Locks: size=(\d+)[ \t]*$", re.MULTILINE)
+# `dumpsys alarm` likewise prints a census before listing the pending alarms, and that census is what
+# makes an alarm count trustworthy. The line is taken from the test device's own dump, which reads
+# `  164 pending alarms: ` — count first, no `Pending alarm batches:` line anywhere in it. The count
+# is a count of entries and not the highest entry index: the block below this census is numbered `#1`
+# onwards, and on five consecutive reads of one device the declared count and the number of entry
+# lines agreed exactly, which is what `census_entry_block` holds them to.
+ALARM_CENSUS_PATTERN: Final = re.compile(r"^[ \t]*(\d+) pending alarms:[ \t]*$", re.MULTILINE)
+POWERED_LINE_PATTERN: Final = re.compile(r"^\s*(\w+) powered:\s*(true|false)\s*$", re.MULTILINE)
+# The four power sources `dumpsys battery` reports. A reading is only complete when all four are
+# present: a dump that lost three of them must not be read as "the remaining one is false, so the
+# device is on battery", which is what a per-line scan would conclude from a truncated dump.
+EXPECTED_POWER_SOURCES: Final = ("AC", "USB", "Wireless", "Dock")
+
+DEFAULT_STATE_DIR: Final = Path("build/reports/battery")
+RECORD_FILE_NAME: Final = "records.jsonl"
+
+# The launcher takes a moment to come forward after KEYCODE_HOME, so the readback that the home
+# screen is in front is bounded exactly the way the service-log confirmations in `device_layer` are:
+# five reads half a second apart, which covers the transition without holding the phase open.
+HOME_CONFIRM_ATTEMPTS: Final = 5
+HOME_CONFIRM_INTERVAL_SECONDS: Final = 0.5
+
+SAMPLE_INTERVAL_SECONDS: Final = 30.0
+COMMAND_TIMEOUT_SECONDS: Final = 60
+
+PROC_STAT_UTIME_INDEX: Final = 11
+PROC_STAT_INDEX_STIME: Final = 12
+MIN_PROC_STAT_FIELDS: Final = 13
+# `/proc/<pid>/stat` counts CPU in kernel clock ticks, and the ticks per second is a kernel constant
+# (`getconf CLK_TCK`) that is not 100 on every device. It is probed per run through
+# `device_layer.AdbDevice.read_process_cpu_clock_ticks` and the run fails when the probe cannot
+# answer, because scaling a CPU percentage by an assumed rate misreports every CPU criterion.
+
+
+# The arm guard's two provable facts. The live component is a deterministic read — the home slot
+# names it in full — while which static image a baseline carries is not, so the baseline's identity is
+# bounded by the median luminance of the home screen, which refuses rather than guesses when it lands
+# between the two. The live arm is compared as a whole component rather than by a substring of its
+# text: another package shipping a service with the same class name would otherwise be admitted as the
+# wallpaper under test, and every CPU and drain figure this protocol records would be attributed to
+# the wrong process.
+COMPONENT_INFO_PATTERN: Final = re.compile(r"^ComponentInfo\{(.*)\}$")
+LUMA_STRIDE: Final = 8
+LUMA_WEIGHTS: Final = (0.2126, 0.7152, 0.0722)
+LUMA_MAX: Final = 255.0
+MEDIAN_LUMA_NOTE: Final = "recorded, not gated: the OEM stock wallpaper on this device is a dark image"
+
+PINNED_BRIGHTNESS: Final = 128
+# Stay awake on every power source; see DeviceStateSnapshot.pin.
+STAY_ON_ALWAYS: Final = 7
+# A whole hour, so it comfortably exceeds the longest documented window (30 minutes) rather
+# than expiring at the same instant the window closes.
+LONG_SCREEN_TIMEOUT_MS: Final = 3_600_000
+RESTORE_SETTLE_SECONDS: Final = 2.0
+
+# The discharge window's power source. A device that is genuinely on its own battery has a live fuel
+# gauge and its counter moves; a device held on USB only reports battery when `cmd battery unplug`
+# overrides the power source, and on some devices that freezes the gauge. Which one a window was
+# measured under is part of the measurement's identity, so it is recorded and checked.
+POWER_SOURCE_DEVICE: Final = "device"
+POWER_SOURCE_SIMULATED: Final = "simulated"
+# How the device's identity is recorded. The digest is salted so that it is meaningful only inside
+# this project's own state files, and truncated because it is only ever compared for equality.
+DEVICE_ID_SALT: Final = "godaniya-126 device|"
+DEVICE_ID_CHARS: Final = 12
+
+
+@dataclass(frozen=True)
+class BatterySample:
+    """Instantaneous battery and process telemetry reading."""
+
+    timestamp: float
+    charge_counter_uah: int
+    level_pct: int
+    voltage_mv: int
+    process_cpu_seconds: float | None
+    total_pss_kb: int | None
+
+
+@dataclass(frozen=True)
+class Window:
+    """One bounded measurement period under constant display and workload conditions."""
+
+    start_sample: BatterySample
+    end_sample: BatterySample
+    duration_seconds: float
+
+    @property
+    def discharge_uah(self) -> int:
+        """Net microampere-hours consumed during the window."""
+        return self.start_sample.charge_counter_uah - self.end_sample.charge_counter_uah
+
+    @property
+    def discharge_rate_ua(self) -> float:
+        """
+        Average current draw over the window, in microamperes.
+
+        The counter must have fallen. A gauge that reports the pack gaining charge across a window is
+        not measuring a discharge at all — the device was charging, or the gauge recalibrated — and
+        returning the negative draw would let that window enter the comparison as a live arm that
+        looked cheaper, so it is refused at the source rather than judged downstream.
+        """
+        if self.duration_seconds <= 0:
+            detail = "a window with no elapsed time has no discharge rate"
+            raise device_layer.ProbeError(detail)
+        if self.discharge_uah < 0:
+            detail = (
+                f"the charge counter rose by {-self.discharge_uah} uAh across the window "
+                f"({self.start_sample.charge_counter_uah} to {self.end_sample.charge_counter_uah} uAh), "
+                "so the pack gained charge and this is not a discharge measurement"
+            )
+            raise device_layer.ProbeError(detail)
+        return (self.discharge_uah / self.duration_seconds) * 3600.0
+
+    @property
+    def cpu_pct(self) -> float | None:
+        """Average CPU across one core during the window, or None when the process was not read."""
+        start = self.start_sample.process_cpu_seconds
+        end = self.end_sample.process_cpu_seconds
+        if start is None or end is None or self.duration_seconds <= 0:
+            return None
+        if end < start:
+            detail = (
+                f"the process CPU counter went backwards ({start:.3f}s to {end:.3f}s), which means the "
+                "process restarted or the pid was recycled inside the window; the window is not a measurement"
+            )
+            raise device_layer.ProbeError(detail)
+        return ((end - start) / self.duration_seconds) * 100.0
+
+
+@dataclass(frozen=True)
+class Record:
+    """One phase invocation's result, as written to the state file."""
+
+    phase: str
+    recorded_at: str
+    revision: str
+    apk_sha256: str | None
+    api_level: int | None
+    duration_seconds: float
+    values: dict[str, object] = field(default_factory=dict)
+
+
+class DeviceStateSnapshot:
+    """
+    The device state a phase changes, captured so it can be put back and checked.
+
+    The screen's own power state is part of it: a hidden window turns the display off, and a phase
+    that returned that way would leave the device dark.
+    """
+
+    def __init__(  # noqa: PLR0913
+        self,
+        device: device_layer.AdbDevice,
+        *,
+        brightness: int | None,
+        brightness_mode: int | None,
+        screen_timeout: int | None,
+        airplane_mode: int | None,
+        stay_on: int | None,
+        screen_on: bool | None,
+    ) -> None:
+        """Hold the values read before a phase changed anything."""
+        self.device = device
+        self.brightness = brightness
+        self.brightness_mode = brightness_mode
+        self.screen_timeout = screen_timeout
+        self.airplane_mode = airplane_mode
+        self.stay_on = stay_on
+        self.screen_on = screen_on
+
+    @classmethod
+    def capture(cls, device: device_layer.AdbDevice) -> DeviceStateSnapshot:
+        """
+        Read the state a measurement phase pins, including the display's own power state.
+
+        Four of the settings `pin()` writes are required rather than best-effort: a value that could
+        not be read is a value the restore cannot put back, and skipping it would leave the shared
+        device changed by a phase that reported success. The stay-awake setting is the one exception —
+        it is legitimately unset on a device that never had it, and an unset value *is* captured, as
+        `None`, and restored by deleting the key.
+        """
+        return cls(
+            device,
+            brightness=require_int_setting(device, "system", "screen_brightness"),
+            brightness_mode=require_int_setting(device, "system", "screen_brightness_mode"),
+            screen_timeout=require_int_setting(device, "system", "screen_off_timeout"),
+            airplane_mode=require_int_setting(device, "global", "airplane_mode_on"),
+            stay_on=read_int_setting(device, "global", "stay_on_while_plugged_in"),
+            screen_on=device.read_screen_on(),
+        )
+
+    def pin(self) -> None:
+        """Pin the display conditions a visible window is measured under."""
+        self.device.run_adb(["shell", "settings", "put", "system", "screen_brightness_mode", "0"])
+        self.device.run_adb(["shell", "settings", "put", "system", "screen_brightness", str(PINNED_BRIGHTNESS)])
+        self.device.run_adb(["shell", "settings", "put", "system", "screen_off_timeout", str(LONG_SCREEN_TIMEOUT_MS)])
+        # The timeout alone does not hold the display: a device that reports itself as running on
+        # battery ignores the plugged-in stay-awake setting, which is exactly the state a discharge
+        # simulation puts it in. Staying awake on every power source is what keeps a visible window
+        # visible, and it is restored below like everything else.
+        self.device.run_adb(["shell", "settings", "put", "global", "stay_on_while_plugged_in", str(STAY_ON_ALWAYS)])
+        set_airplane_mode(self.device, enabled=True)
+
+    def restore(self) -> list[str]:
+        """Put every pinned value back, isolating each step so none can skip the others."""
+        problems: list[str] = []
+        problems.extend(self._restore_settings())
+        problems.extend(self._restore_display())
+        return problems
+
+    def _restore_settings(self) -> list[str]:
+        """Undo the settings writes, reporting each one that could not be verified."""
+        problems: list[str] = []
+        steps: list[tuple[str, list[str], str, str, int | None]] = [
+            (
+                # Restored to the value it was found with, not to off: a device that had airplane
+                # mode on before the phase must still have it on afterwards.
+                "airplane mode",
+                [
+                    "shell",
+                    "cmd",
+                    "connectivity",
+                    "airplane-mode",
+                    "enable" if self.airplane_mode else "disable",
+                ],
+                "global",
+                "airplane_mode_on",
+                self.airplane_mode,
+            ),
+            (
+                "brightness mode",
+                ["shell", "settings", "put", "system", "screen_brightness_mode", str(self.brightness_mode)],
+                "system",
+                "screen_brightness_mode",
+                self.brightness_mode,
+            ),
+            (
+                "brightness",
+                ["shell", "settings", "put", "system", "screen_brightness", str(self.brightness)],
+                "system",
+                "screen_brightness",
+                self.brightness,
+            ),
+            (
+                "screen timeout",
+                ["shell", "settings", "put", "system", "screen_off_timeout", str(self.screen_timeout)],
+                "system",
+                "screen_off_timeout",
+                self.screen_timeout,
+            ),
+        ]
+        for description, command, namespace, key, expected in steps:
+            if expected is None:
+                continue
+            problems.extend(self._apply(description, command, namespace, key, expected))
+        problems.extend(self._restore_stay_on())
+        return problems
+
+    def _restore_stay_on(self) -> list[str]:
+        """Put the stay-awake setting back, including removing it when it was unset."""
+        if self.stay_on is None:
+            try:
+                self.device.run_adb(["shell", "settings", "delete", "global", "stay_on_while_plugged_in"])
+            except (subprocess.SubprocessError, OSError) as error:
+                return [f"stay-awake restore failed: {device_layer.error_detail(error)}"]
+            # The readback is inside its own guard: a transport failure here used to escape the whole
+            # restore and skip the display step that follows it.
+            try:
+                remaining = read_int_setting(self.device, "global", "stay_on_while_plugged_in")
+            except (subprocess.SubprocessError, OSError) as error:
+                return [f"stay-awake restore could not be verified: {device_layer.error_detail(error)}"]
+            if remaining is not None:
+                return ["global/stay_on_while_plugged_in did not return to unset"]
+            return []
+        return self._apply(
+            "stay-awake",
+            ["shell", "settings", "put", "global", "stay_on_while_plugged_in", str(self.stay_on)],
+            "global",
+            "stay_on_while_plugged_in",
+            self.stay_on,
+        )
+
+    def _apply(self, description: str, command: list[str], namespace: str, key: str, expected: int) -> list[str]:
+        """Run one restore step and verify it, converting a failure into a reported problem."""
+        try:
+            self.device.run_adb(command)
+            time.sleep(RESTORE_SETTLE_SECONDS)
+        except (subprocess.SubprocessError, OSError) as error:
+            return [f"{description} restore failed: {device_layer.error_detail(error)}"]
+        # The readback is guarded too: an uncaught transport failure here used to escape the whole
+        # restore and skip the display restoration.
+        try:
+            actual = read_int_setting(self.device, namespace, key)
+        except (subprocess.SubprocessError, OSError) as error:
+            return [f"{description} restore could not be verified: {device_layer.error_detail(error)}"]
+        if actual != expected:
+            return [f"{namespace}/{key} did not read back as {expected}"]
+        return []
+
+    def _restore_display(self) -> list[str]:
+        """Return the display to the power state it was found in."""
+        if self.screen_on is None:
+            return ["the display state could not be read before the phase, so it cannot be restored"]
+        if self.screen_on and not self.device.wake_screen():
+            return ["the display was on before the phase and could not be woken again"]
+        if not self.screen_on and self.device.read_screen_on() is not False:
+            self.device.sleep_screen()
+            if self.device.read_screen_on() is not False:
+                return ["the display was off before the phase and could not be put back to sleep"]
+        return []
+
+
+def undo_phase_changes(
+    device: device_layer.AdbDevice,
+    snapshot: DeviceStateSnapshot,
+    prior_power: tuple[str, ...] | None = None,
+    *,
+    simulated: bool = False,
+) -> list[str]:
+    """
+    Undo a phase's device changes, isolating each step so none can skip the others.
+
+    The `cmd battery` reset runs only when this phase applied the override. A device that was already
+    on its own battery is never put under the override, so there is nothing to clear, and clearing it
+    would be a write to a device whose state is already correct.
+    """
+    problems: list[str] = []
+    if simulated:
+        try:
+            reset_battery_simulation(device)
+            if prior_power is not None and not power_source_restored(device, prior_power):
+                problems.append("the reported power sources did not return to their pre-phase state")
+        except (subprocess.SubprocessError, OSError) as error:
+            problems.append(f"battery simulation reset failed: {device_layer.error_detail(error)}")
+    try:
+        problems.extend(snapshot.restore())
+    except (subprocess.SubprocessError, OSError) as error:
+        problems.append(f"device settings restore failed: {device_layer.error_detail(error)}")
+    return problems
+
+
+def read_int_setting(device: device_layer.AdbDevice, namespace: str, key: str) -> int | None:
+    """Read one integer device setting, or None when it is unset or not an integer."""
+    raw = device.run_adb(["shell", "settings", "get", namespace, key]).decode(errors="replace").strip()
+    return int(raw) if raw.lstrip("-").isdigit() else None
+
+
+def require_int_setting(device: device_layer.AdbDevice, namespace: str, key: str) -> int:
+    """
+    Read one device setting the pre-phase capture cannot do without.
+
+    `pin()` overwrites every one of these, and the restore can only put back a value that was
+    captured. A phase that pinned a setting it could not read would leave the shared device changed
+    and still report success, so an unreadable value stops the phase before it touches anything.
+    """
+    value = read_int_setting(device, namespace, key)
+    if value is None:
+        detail = (
+            f"{namespace}/{key} could not be read before the phase, so whatever value it had could not "
+            "be restored; refusing to pin a setting whose original value is unknown"
+        )
+        raise device_layer.ProbeError(detail)
+    return value
+
+
+def set_airplane_mode(device: device_layer.AdbDevice, *, enabled: bool) -> None:
+    """Turn airplane mode on or off through the connectivity service."""
+    device.run_adb(["shell", "cmd", "connectivity", "airplane-mode", "enable" if enabled else "disable"])
+
+
+def require_complete_power_sources(lines: Sequence[str]) -> None:
+    """
+    Refuse a power-source reading that is missing any of the four sources `dumpsys battery` reports.
+
+    One `powered:` line is not a reading. A dump that named only `Dock powered: false` would look
+    exactly like a device on its own battery to a per-line scan, and the identity of a discharge
+    measurement rests on this reading, so an incomplete one is raised rather than filled in.
+    """
+    present = {match.group(1) for match in POWERED_LINE_PATTERN.finditer("\n".join(lines))}
+    missing = [source for source in EXPECTED_POWER_SOURCES if source not in present]
+    if missing:
+        detail = (
+            f"the battery dump carried no {' or '.join(missing)} powered: field, so the power source is "
+            "not a complete reading; refusing to infer the device's state from the fields that remain"
+        )
+        raise device_layer.ProbeError(detail)
+
+
+def read_power_source_lines(device: device_layer.AdbDevice) -> tuple[str, ...]:
+    """Read the battery dump's power-source lines, which `cmd battery unplug` rewrites."""
+    output = device.run_adb(["shell", "dumpsys", "battery"]).decode(errors="replace")
+    lines = tuple(line.strip() for line in output.splitlines() if POWERED_LINE_PATTERN.match(line.strip()))
+    require_complete_power_sources(lines)
+    return lines
+
+
+def power_source_restored(device: device_layer.AdbDevice, before: tuple[str, ...]) -> bool:
+    """
+    Report whether the reported power sources match what they were before the simulation.
+
+    Comparing against the pre-simulation reading is what separates "the override is gone" from
+    "this device happens to be running on its own battery", which look identical in the dump.
+    """
+    return read_power_source_lines(device) == before
+
+
+def power_lines_show_battery(lines: Sequence[str]) -> bool:
+    """
+    Report whether a battery dump's `powered:` fields all read false, i.e. the device is on battery.
+
+    Every source is required. A dump that named fewer than the four sources is raised rather than
+    read as "no charger is connected", because a probe that stopped reporting some of them would
+    otherwise look like a device that is discharging.
+    """
+    require_complete_power_sources(lines)
+    return all(match.group(2) == "false" for match in POWERED_LINE_PATTERN.finditer("\n".join(lines)))
+
+
+def device_on_own_battery(device: device_layer.AdbDevice) -> bool:
+    """Report whether the device is already discharging on its own battery rather than on a charger."""
+    return power_lines_show_battery(read_power_source_lines(device))
+
+
+def apply_power_mode(device: device_layer.AdbDevice) -> str:
+    """
+    Put the device in the discharge state a window needs, and name the mode it is in.
+
+    A device that is genuinely discharging already has the live fuel gauge this measurement wants,
+    and `cmd battery unplug` would replace that with a frozen override — the very artefact the
+    simulation was invented to work around. The override is therefore applied only when the device
+    is on a charger, and the mode it chose is recorded in the window as part of its identity.
+    """
+    if device_on_own_battery(device):
+        return POWER_SOURCE_DEVICE
+    simulate_unplug(device)
+    return POWER_SOURCE_SIMULATED
+
+
+def parse_battery_output(output: str) -> tuple[int, int, int]:
+    """
+    Extract charge counter (uAh), level (%), and voltage (mV) from `dumpsys battery`.
+
+    Every field is required. A missing field is raised rather than defaulted, because a battery
+    probe that stopped reporting would otherwise look like a device drawing nothing.
+    """
+    values: list[int] = []
+    for pattern, name in (
+        (CHARGE_COUNTER_PATTERN, "Charge counter"),
+        (BATTERY_LEVEL_PATTERN, "level"),
+        (BATTERY_VOLTAGE_PATTERN, "voltage"),
+    ):
+        match = pattern.search(output)
+        if match is None:
+            detail = f"dumpsys battery output carried no {name} field; refusing to read it as zero"
+            raise device_layer.ProbeError(detail)
+        values.append(int(match.group(1)))
+    return values[0], values[1], values[2]
+
+
+def parse_proc_stat_cpu_seconds(stat_content: str, clk_tck: int) -> float | None:
+    """
+    Parse utime + stime from a `/proc/<pid>/stat` line and return total CPU seconds.
+
+    `clk_tck` is required rather than defaulted: the tick rate is a kernel constant that is not 100 on
+    every device, and scaling by a guess would misreport every CPU percentage the budget is judged on.
+    """
+    if clk_tck <= 0:
+        detail = f"a CPU-tick rate of {clk_tck} cannot scale a tick count"
+        raise device_layer.ProbeError(detail)
+    close = stat_content.rfind(")")
+    if close == -1:
+        return None
+    parts = stat_content[close + 1 :].split()
+    # After the closing parenthesis the first field is `state`, so utime (field 14) and stime
+    # (field 15) are at indices 11 and 12. Splitting on whitespace instead would misparse whenever
+    # the parenthesised comm field contains a space.
+    if len(parts) < MIN_PROC_STAT_FIELDS:
+        return None
+    try:
+        utime = int(parts[PROC_STAT_UTIME_INDEX])
+        stime = int(parts[PROC_STAT_INDEX_STIME])
+    except (ValueError, IndexError):
+        return None
+    return (utime + stime) / float(clk_tck)
+
+
+def parse_total_pss_kb(mem_output: str) -> int | None:
+    """Return the `TOTAL` PSS line of a `dumpsys meminfo` dump, in kB."""
+    match = TOTAL_PSS_PATTERN.search(mem_output)
+    return int(match.group(1)) if match else None
+
+
+def parse_api_level(output: str) -> int:
+    """Read the SDK level from `getprop ro.build.version.sdk`, refusing anything unexpected."""
+    stripped = output.strip()
+    if not SDK_PATTERN.match(stripped):
+        detail = f"ro.build.version.sdk read back as {stripped!r}, which is not an API level"
+        raise device_layer.ProbeError(detail)
+    return int(stripped)
+
+
+def read_process_uid(device: device_layer.AdbDevice, pid: int | None) -> int | None:
+    """Read the owning UID of a process from `/proc/<pid>`."""
+    if pid is None or pid <= 0:
+        return None
+    output = device.run_adb(["shell", "stat", "-c", "%u", f"/proc/{pid}"]).decode(errors="replace").strip()
+    return int(output) if output.isdigit() else None
+
+
+def require_clk_tck(device: device_layer.AdbDevice) -> int:
+    """
+    Probe the device's kernel clock-tick rate, refusing to run without a real one.
+
+    `device_layer.read_process_cpu_clock_ticks` reads `getconf CLK_TCK`. When it cannot answer, the
+    CPU criteria cannot be scaled correctly, so the run fails loudly instead of assuming 100.
+    """
+    clk_tck = device.read_process_cpu_clock_ticks()
+    if clk_tck is None or clk_tck <= 0:
+        detail = (
+            "the device did not report its CLK_TCK rate, so process CPU ticks cannot be converted to "
+            "seconds; refusing to scale every CPU criterion by an assumed rate"
+        )
+        raise device_layer.ProbeError(detail)
+    return clk_tck
+
+
+def take_battery_sample(device: device_layer.AdbDevice, pid: int | None, clk_tck: int) -> BatterySample:
+    """Read the battery fuel gauge plus the process CPU and PSS counters."""
+    battery_output = device.run_adb(["shell", "dumpsys", "battery"]).decode(errors="replace")
+    charge_uah, level_pct, voltage_mv = parse_battery_output(battery_output)
+
+    cpu_seconds: float | None = None
+    if pid is not None and pid > 0:
+        stat_output = device.run_adb(["shell", "cat", f"/proc/{pid}/stat"]).decode(errors="replace")
+        cpu_seconds = parse_proc_stat_cpu_seconds(stat_output, clk_tck)
+
+    mem_output = device.run_adb(["shell", "dumpsys", "meminfo", device_layer.PACKAGE_NAME]).decode(errors="replace")
+    return BatterySample(
+        # Monotonic, not wall time: the window's duration and every rate derived from it come from the
+        # difference of two of these, and a clock correction during a fifteen-minute window would
+        # otherwise rescale the current or make the window negative. Wall time is for `recorded_at`.
+        timestamp=time.monotonic(),
+        charge_counter_uah=charge_uah,
+        level_pct=level_pct,
+        voltage_mv=voltage_mv,
+        process_cpu_seconds=cpu_seconds,
+        total_pss_kb=parse_total_pss_kb(mem_output),
+    )
+
+
+def census_entry_block(  # noqa: PLR0913 — the dump, the two patterns, and the three names it refuses by
+    dump: str,
+    census_pattern: re.Pattern[str],
+    entry_pattern: re.Pattern[str],
+    *,
+    probe: str,
+    census_line: str,
+    entry_shape: str,
+) -> list[str]:
+    """
+    Return the entry lines of a censused dump section, refusing unless they account for the census.
+
+    The census alone is not a check. A dump truncated after its census line still carries the count,
+    and a parser that reads only "does the census exist" then reports a legitimate zero from output
+    that lists nothing at all — a fabricated pass for the budget that measures it. Requiring the
+    enumerated entries to *equal* the declared count is what makes the census mean something, and it
+    fails in both directions: fewer entries is a truncated dump, more is a shape the probe does not
+    know that the count was never meant to include.
+
+    The block runs from the census line to the first line that is neither an entry nor indented
+    deeper than the census, so a later section cannot inflate it. That boundary is not hypothetical:
+    this device's alarm dump prints `Past-due non-wakeup alarms: 1` followed by
+    `ELAPSED #1: Alarm{...}` in exactly the entry shape, four hundred lines below the pending-alarm
+    census, and a scan of the whole dump counts it. Multi-line entries are why the boundary is drawn
+    by indentation rather than by "the first line that is not an entry": an alarm entry is an
+    `Alarm{...}` header followed by six or more `key=value` continuation lines, none of which are
+    entries.
+
+    `probe` names the dump for the message, `census_line` is the literal line required of it, and
+    `entry_shape` is what one entry looks like, so that a refusal says which of the two failures it
+    is rather than only that something was wrong.
+    """
+    census = census_pattern.search(dump)
+    if census is None:
+        detail = (
+            f"the {probe} carried no {census_line} census, so it cannot be read as a count of its "
+            f"entries; refusing to report a zero from output that lists none"
+        )
+        raise device_layer.ProbeError(detail)
+    declared = int(census.group(1))
+    lines = dump.splitlines()
+    census_index = dump.count("\n", 0, census.start())
+    census_text = lines[census_index] if census_index < len(lines) else ""
+    indent = len(census_text) - len(census_text.lstrip())
+    entries: list[str] = []
+    for line in lines[census_index + 1 :]:
+        if not line.strip():
+            continue
+        if entry_pattern.match(line):
+            entries.append(line)
+            continue
+        if len(line) - len(line.lstrip()) <= indent:
+            break
+    if len(entries) < declared:
+        detail = (
+            f"the {probe} declares {declared} entries but the block below its {census_line} census "
+            f"lists {len(entries)}: the dump is truncated, or an entry shaped like {entry_shape} was "
+            f"not recognised"
+        )
+        raise device_layer.ProbeError(detail)
+    if len(entries) > declared:
+        detail = (
+            f"the {probe} declares {declared} entries but its census block lists {len(entries)}: a "
+            f"line matching {entry_shape} that the census does not count is inside the block"
+        )
+        raise device_layer.ProbeError(detail)
+    return entries
+
+
+def parse_wakelock_count(dump: str, app_uid: int) -> int:
+    """
+    Count the wake locks a `dumpsys power` dump attributes to one UID.
+
+    The dump's own `Wake Locks: size=<n>` census is required *and* the enumerated locks must account
+    for it, for the reason `census_entry_block` gives. A dump that carries the census and no lock for
+    this UID is a real zero.
+
+    Every lock type is counted before the UID is applied, not `PARTIAL_WAKE_LOCK` alone. The census
+    counts the whole device and this device's `Wake Locks: size=1` is a `DOZE_WAKE_LOCK`, so a
+    partial-only scan could never be reconciled with the census and the census would go unchecked.
+    The B2 budget is about locks the app holds, whatever their type, so widening the predicate to
+    match the census also matches the budget.
+    """
+    entries = census_entry_block(
+        dump,
+        POWER_WAKELOCK_CENSUS_PATTERN,
+        WAKE_LOCK_ENTRY_PATTERN,
+        probe="power dump",
+        census_line="`Wake Locks: size=`",
+        entry_shape="`<TYPE>_WAKE_LOCK '<name>' ACQ=… (uid=<uid> …)`",
+    )
+    # The uid is matched as a whole token, not as a prefix of one: a lock line for uid 10026 contains
+    # the text `uid=1002`, so a prefix test would attribute another process's wake lock to an app
+    # whose own uid happens to be a prefix of it, and report a B2 failure the app did not cause.
+    uid_field = re.compile(rf"\buid={app_uid}\b")
+    return sum(1 for line in entries if uid_field.search(line))
+
+
+def parse_alarm_count(dump: str, package: str = device_layer.PACKAGE_NAME) -> int:
+    """
+    Count the pending alarms a `dumpsys alarm` dump attributes to one package.
+
+    As with the power and jobscheduler probes, the dump's own `<n> pending alarms:` census is
+    required *and* the enumerated alarms must account for it, for the reason `census_entry_block`
+    gives.
+    """
+    entries = census_entry_block(
+        dump,
+        ALARM_CENSUS_PATTERN,
+        ALARM_ENTRY_PATTERN,
+        probe="alarm dump",
+        census_line="`pending alarms:`",
+        entry_shape="`<TYPE> #<n>: Alarm{…}`",
+    )
+    # The package is matched as a whole token, not as a substring, for the reason the uid is: an alarm
+    # owned by a package such as `…astronomicalclockswallpaper.debug2` contains this app's name as a
+    # prefix, and counting it would report a B2 failure the app did not cause. The dump prints the
+    # package as the last token inside `Alarm{...}`, so it is delimited there in the text.
+    #
+    # Attribution runs over the census block rather than the whole dump, which is what stops an alarm
+    # that is *not* pending from counting as one: this device's `Past-due non-wakeup alarms:` section
+    # lists fired alarms that still name their owner in the same `Alarm{...}` shape.
+    package_field = re.compile(rf"(?<![\w.]){re.escape(package)}(?![\w.])")
+    return sum(1 for line in entries if package_field.search(line))
+
+
+def count_held_wakelocks(device: device_layer.AdbDevice, app_uid: int | None) -> int:
+    """Count the partial wake locks `dumpsys power` attributes to the app's UID."""
+    if app_uid is None:
+        detail = "no UID was resolved for the wallpaper process, so wake locks cannot be attributed"
+        raise device_layer.ProbeError(detail)
+    output = device.run_adb(["shell", "dumpsys", "power"]).decode(errors="replace")
+    return parse_wakelock_count(output, app_uid)
+
+
+def count_alarms(device: device_layer.AdbDevice) -> int:
+    """Count the pending alarms `dumpsys alarm` attributes to the wallpaper package."""
+    output = device.run_adb(["shell", "dumpsys", "alarm"]).decode(errors="replace")
+    return parse_alarm_count(output)
+
+
+def parse_job_count(dump: str, package: str = device_layer.PACKAGE_NAME) -> int:
+    """
+    Count the JobScheduler jobs a package holds in a `dumpsys jobscheduler` dump.
+
+    The dump's own `Registered <n> jobs:` census is required *and* the enumerated jobs must account
+    for it, for the reason `census_entry_block` gives. A dump that carries the census and no job for
+    the package is a real zero.
+
+    Every job line must also be attributable to a package. The census check counts entries, so a job
+    line the attribution cannot parse would otherwise be counted towards the census, dropped from the
+    per-package total, and reported as "the app holds no such job" — the silent drop this refusal
+    replaces.
+    """
+    entries = census_entry_block(
+        dump,
+        JOBSCHEDULER_CENSUS_PATTERN,
+        JOB_ENTRY_PATTERN,
+        probe="jobscheduler dump",
+        census_line="`Registered <n> jobs:`",
+        entry_shape="`JOB [<namespace>:]#<uid>/<id>: <hash> <component>`",
+    )
+    unattributable = [line for line in entries if JOB_LINE_PATTERN.match(line) is None]
+    if unattributable:
+        detail = (
+            f"the jobscheduler dump lists {len(unattributable)} job lines whose component cannot be "
+            f"attributed to a package, so the per-package count would silently drop them; the first "
+            f"is {unattributable[0].strip()!r}"
+        )
+        raise device_layer.ProbeError(detail)
+    # Every entry line was shown above to match exactly once, so counting over the rejoined block is
+    # the same as counting per line, and it keeps the pattern's own match object for the package.
+    return sum(1 for match in JOB_LINE_PATTERN.finditer("\n".join(entries)) if match.group(1) == package)
+
+
+def count_jobs(device: device_layer.AdbDevice) -> int:
+    """Count the JobScheduler jobs `dumpsys jobscheduler` attributes to the wallpaper package."""
+    output = device.run_adb(["shell", "dumpsys", "jobscheduler"]).decode(errors="replace")
+    return parse_job_count(output)
+
+
+def read_batterystats_summary(device: device_layer.AdbDevice) -> str | None:
+    """Read the historical per-app CPU lines from `dumpsys batterystats` as corroborating evidence."""
+    output = device.run_adb(["shell", "dumpsys", "batterystats", device_layer.PACKAGE_NAME]).decode(errors="replace")
+    keys = ("Total cpu time:", "Fg Service for:", "Total running:")
+    lines = [line.strip() for line in output.splitlines() if any(key in line for key in keys)]
+    return ", ".join(lines) if lines else None
+
+
+def simulate_unplug(device: device_layer.AdbDevice) -> None:
+    """Make the device report itself as running on battery while it stays on USB for telemetry."""
+    device.run_adb(["shell", "cmd", "battery", "unplug"])
+
+
+def reset_battery_simulation(device: device_layer.AdbDevice) -> None:
+    """Clear any `cmd battery` override so the device reports its real state again."""
+    device.run_adb(["shell", "cmd", "battery", "reset"])
+
+
+def read_source_revision() -> str:
+    """Read the source revision of this working tree."""
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],  # noqa: S607
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def read_apk_sha256(device: device_layer.AdbDevice) -> str:
+    """
+    Read the SHA-256 of the APK as it is *installed on the device*, or refuse.
+
+    The record's `apk_sha256` is the identity of the build a window measured, and every report row
+    that aggregates windows is gated on it: `check_measurement_identity` refuses a set that mixes
+    two. Hashing the host checkout's `app/build/outputs/apk/debug/app-debug.apk` answered a
+    different question — the digest of the artifact on this machine, which need not be the build the
+    device is running — and answered it with `None` on a machine that never built the APK, so a
+    record could carry "unknown build" as though that were an identity.
+
+    Both steps are required to answer: a package that is not installed has no `base.apk` to hash, and
+    a device without `sha256sum` returns a shell error that is not a digest. Either is a refusal
+    rather than a null, because a null is what the field must never carry for a window that ran.
+    """
+    digest = device.read_installed_apk_sha256()
+    if digest is None:
+        detail = (
+            f"the SHA-256 of {device_layer.PACKAGE_NAME}'s installed base.apk could not be read, so the "
+            f"record cannot say which build this window measured"
+        )
+        raise device_layer.ProbeError(detail)
+    return digest
+
+
+def device_identity(device: device_layer.AdbDevice) -> str:
+    """
+    Name the device a record was measured on, without naming the device.
+
+    The serial is the only stable handle the harness has on which physical device a window ran on,
+    and it cannot be recorded as it stands: `docs/device-testing.md` keeps the model, OEM, and serial
+    off public surfaces, and `phase_report` prints every identity field. A salted digest distinguishes
+    one device from another while disclosing neither, and it is what stops two devices' records from
+    aggregating into one verdict.
+    """
+    serial = device.serial
+    if not serial:
+        detail = "the target device reported no serial, so a record cannot say which device it measured"
+        raise device_layer.ProbeError(detail)
+    return hashlib.sha256(f"{DEVICE_ID_SALT}{serial}".encode()).hexdigest()[:DEVICE_ID_CHARS]
+
+
+def record_path(state_dir: Path) -> Path:
+    """Return the JSON Lines file the phase records accumulate in."""
+    return state_dir / RECORD_FILE_NAME
+
+
+def append_record(state_dir: Path, record: Record) -> Path:
+    """Append one record to the state file, creating the directory when it is missing."""
+    state_dir.mkdir(parents=True, exist_ok=True)
+    path = record_path(state_dir)
+    payload = {"phase": record.phase, "recorded_at": record.recorded_at, "revision": record.revision}
+    payload["apk_sha256"] = record.apk_sha256
+    payload["api_level"] = record.api_level
+    payload["duration_seconds"] = record.duration_seconds
+    payload.update(record.values)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\n")
+    return path
+
+
+def load_records(state_dir: Path) -> list[dict[str, object]]:
+    """Read back every record written so far, refusing to guess at a malformed line."""
+    path = record_path(state_dir)
+    if not path.is_file():
+        detail = f"no records at {path}; run the measurement phases before the report"
+        raise device_layer.ProbeError(detail)
+    records: list[dict[str, object]] = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError as error:
+            # A truncated write is a state file the run can be told about, not a traceback: the
+            # phases append as they go, so the last line is the one an interrupted run leaves short.
+            detail = f"{path}:{number} is not valid JSON ({error.msg}); the record is truncated or corrupt"
+            raise device_layer.ProbeError(detail) from error
+        if not isinstance(parsed, dict):
+            detail = f"{path}:{number} is not a JSON object"
+            raise device_layer.ProbeError(detail)
+        records.append(parsed)
+    return records
+
+
+class Recorder:
+    """
+    Writes each record to the state file as it is produced, and keeps them for the caller.
+
+    Persisting per record is what makes the phases resumable: a phase interrupted part-way leaves the
+    records it completed on disk rather than holding them in a list until a `main` that may never
+    reach its append loop.
+    """
+
+    def __init__(self, state_dir: Path) -> None:
+        """Bind the recorder to the state directory its records accumulate in."""
+        self.state_dir = state_dir
+        self.records: list[Record] = []
+
+    def emit(self, record: Record) -> Record:
+        """Append one record, print where it went, and return it for the caller to keep using."""
+        path = append_record(self.state_dir, record)
+        self.records.append(record)
+        print(f"recorded {record.phase} -> {path}")
+        return record
+
+
+def build_record(device: device_layer.AdbDevice, phase: str, duration_seconds: float, **values: object) -> Record:
+    """Assemble one record, stamping the device and build identity every report row has to carry."""
+    api_level = parse_api_level(device.run_adb(["shell", "getprop", "ro.build.version.sdk"]).decode(errors="replace"))
+    return Record(
+        phase=phase,
+        recorded_at=dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+        revision=read_source_revision(),
+        apk_sha256=read_apk_sha256(device),
+        api_level=api_level,
+        duration_seconds=duration_seconds,
+        # The device is stamped here rather than passed in: every record has to carry it, so there is
+        # no call site that could forget it.
+        values={**values, "device_id": device_identity(device)},
+    )
+
+
+def emit_aborted_restore_record(
+    recorder: Recorder,
+    device: device_layer.AdbDevice,
+    phase: str,
+    error: BaseException,
+    problems: Sequence[str],
+) -> None:
+    """
+    Persist a failed phase's restore problems when it aborted before building its own record.
+
+    A phase collects its restore problems in a `finally` so that a failing write cannot skip the rest,
+    but an exception raised by the measurement itself leaves through that same `finally` and takes the
+    collected problems with it: the device is left changed and nothing on disk says so, so `report`
+    cannot flag it and the next phase measures a device nobody restored. This writes the problems as a
+    record of their own, named for the phase that did not finish, which is all `report` needs to print
+    its device-restore failure.
+
+    A record is written only when there is at least one problem: the record exists to carry them, and
+    an empty one would look like a measurement of a phase that never ran. Building it can itself fail
+    when the abort was the device going away, so that is swallowed — the original error is the one
+    worth reporting, and `main` still exits non-zero on it.
+    """
+    if not problems:
+        return
+    try:
+        record = build_record(
+            device,
+            f"{phase}_aborted",
+            0.0,
+            aborted=str(error),
+            restore_problems=list(problems),
+        )
+    except (device_layer.ProbeError, subprocess.SubprocessError, OSError):
+        print(f"restore problems could not be persisted for the aborted {phase} phase: {problems}", file=sys.stderr)
+        return
+    recorder.emit(record)
+
+
+def median_luma(device: device_layer.AdbDevice) -> float:
+    """
+    Return the median luminance of a freshly captured screen, a bounded proxy for what is shown.
+
+    This reads the raw screencap rather than the dial-validated capture, because a baseline arm has
+    no dial to validate: the validated read raises when the live wallpaper is not the one on screen,
+    which is exactly the state the baseline arms are in.
+    """
+    _, _, pixels = device_layer.decode_frame(device.run_adb(["exec-out", "screencap"]))
+    luma = sorted(
+        sum(weight * pixel for weight, pixel in zip(LUMA_WEIGHTS, pixels[index : index + 3], strict=True))
+        for index in range(0, len(pixels) - 2, device_layer.PIXEL_STRIDE * LUMA_STRIDE)
+    )
+    if not luma:
+        detail = "the captured frame carried no pixels to measure"
+        raise device_layer.ProbeError(detail)
+    middle = len(luma) // 2
+    return luma[middle] if len(luma) % 2 else (luma[middle - 1] + luma[middle]) / 2.0
+
+
+def component_name(component: str) -> str:
+    """Return the `package/class` inside a `ComponentInfo{...}` wrapper, or the text unchanged."""
+    stripped = component.strip()
+    match = COMPONENT_INFO_PATTERN.match(stripped)
+    # `captured_text` is the shared helper for this: a match group is `Any`, and returning it
+    # unchanged would let a non-string through a function the arm guard depends on.
+    return device_layer.captured_text(match, 1) if match else stripped
+
+
+def component_is_live(component: str) -> bool:
+    """
+    Report whether a home-wallpaper component is exactly this app's live service.
+
+    The comparison is on the whole `package/class`, not on whether the text contains the service's
+    class name: `ComponentInfo{other.pkg/…AstronomicalClocksWallpaperService}` is a different
+    wallpaper, and admitting it as arm A would attribute its CPU and drain to this app.
+    """
+    return component_name(component) == device_layer.SERVICE_NAME
+
+
+def component_is_static(component: str) -> bool:
+    """
+    Report whether a home-wallpaper component is the platform's own static wallpaper engine.
+
+    Arm B accepts a component on the strength of it not being this app's live service, which admits
+    *another package's* live wallpaper: a third-party live service is neither this app nor a static
+    image, and a window measured on one would be recorded as the stock or black baseline while
+    draining whatever that service costs. Requiring the platform engine closes that, and it is the
+    strongest statement the component supports — which static *image* the engine carries is a
+    separate, undecidable question, so this predicate does not claim one.
+    """
+    return component_name(component) == device_layer.PLATFORM_STATIC_WALLPAPER
+
+
+def verify_arm(device: device_layer.AdbDevice, arm: Arm, baseline: Baseline | None) -> str:
+    """
+    Refuse a window whose device does not match the arm it is about to be recorded against.
+
+    The component is the fact that decides the arm, and it is decidable: the home slot names the live
+    service when the app is bound and the platform's static engine when it is not. Arm B therefore
+    requires the platform engine by name rather than accepting anything that is not this app's
+    service — a third-party live wallpaper satisfies "not this app" and would be recorded as the
+    stock or black baseline. Which *static* image a baseline carries is not decidable this way, and
+    the screen's own luminance does not decide it either — this device's OEM stock wallpaper is a
+    dark starfield, so a brightness threshold would refuse valid stock windows while still not
+    separating the two baselines. The luminance is recorded with every window as an observation and
+    is not used to admit one.
+    """
+    component = device_layer.read_wallpaper_component(device.serial)
+    if arm is Arm.LIVE:
+        if not component_is_live(component):
+            detail = (
+                f"arm A was requested but the home wallpaper is {component_name(component)}, not "
+                f"{device_layer.SERVICE_NAME}"
+            )
+            raise device_layer.ProbeError(detail)
+        return component
+    if baseline is None:
+        detail = "arm B needs --baseline stock or --baseline black to say which static wallpaper is bound"
+        raise device_layer.ProbeError(detail)
+    if component_is_live(component):
+        detail = f"arm B was requested but the live service is still bound as {component_name(component)}"
+        raise device_layer.ProbeError(detail)
+    if not component_is_static(component):
+        detail = (
+            f"arm B was requested but the bound wallpaper is {component_name(component)}, which is "
+            f"neither this app's service nor the platform's static engine "
+            f"({device_layer.PLATFORM_STATIC_WALLPAPER}); another package's live wallpaper is not a "
+            f"baseline"
+        )
+        raise device_layer.ProbeError(detail)
+    return component
+
+
+def arm_conditions(device: device_layer.AdbDevice, arm: Arm, baseline: Baseline | None) -> dict[str, object]:
+    """Describe the verified arm for the record, including the luminance recorded for it."""
+    return {
+        "arm": arm.value,
+        "baseline": baseline.value if baseline else None,
+        "wallpaper_component": device_layer.read_wallpaper_component(device.serial),
+        "median_luma": round(median_luma(device), 2),
+        "median_luma_note": MEDIAN_LUMA_NOTE,
+    }
+
+
+def sample_window_states(device: device_layer.AdbDevice, seconds: float) -> tuple[list[bool | None], list[bool]]:
+    """Sample the display state and the power source across a window and return every reading."""
+    states: list[bool | None] = []
+    on_battery: list[bool] = []
+    remaining = seconds
+    while remaining > 0:
+        interval = min(SAMPLE_INTERVAL_SECONDS, remaining)
+        time.sleep(interval)
+        remaining -= interval
+        states.append(device.read_screen_on())
+        on_battery.append(device_on_own_battery(device))
+        print(f"  {seconds - remaining:6.0f}s: screen_on={states[-1]} on_battery={on_battery[-1]}", flush=True)
+    return states, on_battery
+
+
+def power_source_problem(on_battery: Sequence[bool]) -> str | None:
+    """
+    Return why a window is not a discharge measurement, or None when every sample was on battery.
+
+    The same shape as the arm guard: a window whose device ended up on a charger is not a measurement
+    of discharge, and recording it as one would be a fabricated result.
+    """
+    if not on_battery:
+        return "the window took no power-source sample, so it is not known to have run on battery"
+    if not all(on_battery):
+        return f"the device reported a charger connected inside the window: {list(on_battery)}"
+    return None
+
+
+def wait_home_in_front(device: device_layer.AdbDevice) -> bool | None:
+    """
+    Read back that the home screen is in front, bounded the way the service-log confirmations are.
+
+    `show_home` sends an input event and reports nothing about what it did; an event the system drops
+    leaves the previous app in front, and every other check in `ensure_visible_home` still passes —
+    the display is on, the keyguard is not locked, and the bound wallpaper component is the one the
+    arm requested. The surface measured would then be that other app's, and the wallpaper the window
+    claims to measure would not be the wallpaper on screen. The launcher takes a moment to come
+    forward, so this re-reads a bounded number of times rather than once.
+
+    Returns None when no read succeeded, which the caller must treat as a refusal: "could not be
+    read" is not "the home screen is there".
+    """
+    saw_not_in_front = False
+    for attempt in range(HOME_CONFIRM_ATTEMPTS):
+        reading = device.read_home_in_front()
+        if reading is True:
+            return True
+        # A `False` is the device saying some other package is in front, which no later reading
+        # retracts; a `None` is a read that said nothing. They are kept apart so that a run of
+        # unreadable dumps is not reported as "another app is in front", and vice versa.
+        saw_not_in_front = saw_not_in_front or reading is False
+        if attempt + 1 < HOME_CONFIRM_ATTEMPTS:
+            time.sleep(HOME_CONFIRM_INTERVAL_SECONDS)
+    return False if saw_not_in_front else None
+
+
+def ensure_visible_home(device: device_layer.AdbDevice) -> None:
+    """
+    Put the device on the home screen with the display on, or refuse the window.
+
+    A visible window means the home screen with the wallpaper showing. `wake_screen()` only confirms
+    the display is lit — it does not dismiss a keyguard or bring the launcher forward — so a device
+    that started locked, or with another app in front, would have its lock screen or that app measured
+    while the bound component still matched the requested arm. The qualification harness establishes
+    this state explicitly before its own screen-on phases, and this one now does too.
+
+    The two checks after `show_home()` are what make the state *established* rather than requested,
+    and they cover different failures: the keyguard read says no lock surface is covering the home
+    screen, and the foreground read says the home screen is the thing in front at all. Neither
+    implies the other — a device unlocked on another app's activity passes the first and fails the
+    second — and both are three-valued, so an unreadable device is refused rather than assumed.
+    """
+    if not device.wake_screen():
+        detail = "the display could not be woken for a visible window"
+        raise device_layer.ProbeError(detail)
+    device.dismiss_keyguard()
+    device.show_home()
+    if device.read_screen_on() is not True:
+        detail = "the display did not read back as on while the home screen was being established"
+        raise device_layer.ProbeError(detail)
+    # The keyguard read is three-valued — locked, unlocked, and could not be determined — and only a
+    # positive *unlocked* reading shows the home screen is what the window will measure. Treating an
+    # unreadable dump as "not locked" is the same defect as reading an unparsable probe as a zero: a
+    # locked device would have its lock screen measured for the whole window while the bound home
+    # component still matched the requested arm.
+    keyguard = device.read_keyguard_locked()
+    if keyguard is True:
+        detail = "the device is still locked after dismissing the keyguard, so the home screen is not displayed"
+        raise device_layer.ProbeError(detail)
+    if keyguard is None:
+        detail = "the keyguard state could not be read, so it cannot be shown that the home screen is displayed"
+        raise device_layer.ProbeError(detail)
+    # `show_home()` above sent the event; this is what says it landed. The keyguard and the display
+    # can both read as the visible home state wants while another app is still in front, because
+    # neither of them names the surface: KEYCODE_HOME is an input event the system may drop, and a
+    # dropped one leaves the previous app in front with the bound home component still matching the
+    # requested arm. The readback is three-valued for the same reason the keyguard's is.
+    in_front = wait_home_in_front(device)
+    if in_front is False:
+        detail = (
+            f"another package is in front after KEYCODE_HOME: the device reports "
+            f"{device.read_foreground_package()} where it resolves {device.read_home_package()} as home, "
+            f"so the wallpaper is not the surface this window would measure"
+        )
+        raise device_layer.ProbeError(detail)
+    if in_front is None:
+        detail = "the foreground package could not be read, so it cannot be shown that the home screen is displayed"
+        raise device_layer.ProbeError(detail)
+
+
+def run_window(
+    device: device_layer.AdbDevice,
+    pid: int | None,
+    minutes: float,
+    *,
+    screen_on: bool,
+    clk_tck: int,
+) -> tuple[Window, list[bool | None], list[bool]]:
+    """Sample a bounded window, holding the requested display state for its whole duration."""
+    if not screen_on:
+        device.run_adb(["shell", "input", "keyevent", "KEYCODE_SLEEP"])
+        time.sleep(2.0)
+    start = take_battery_sample(device, pid, clk_tck)
+    seconds = minutes * 60.0
+    states, on_battery = sample_window_states(device, seconds)
+    end = take_battery_sample(device, pid, clk_tck)
+    window = Window(start_sample=start, end_sample=end, duration_seconds=end.timestamp - start.timestamp)
+    return window, states, on_battery
+
+
+def phase_resources(device: device_layer.AdbDevice) -> Record:
+    """Record B2: the partial wake locks, alarms, and jobs the app holds, with their commands."""
+    pid = device.get_wallpaper_pid()
+    uid = read_process_uid(device, pid)
+    print(f"$ adb -s {device.serial} shell pidof {device_layer.PACKAGE_NAME} -> {pid}")
+    print(f"$ adb -s {device.serial} shell stat -c %u /proc/{pid} -> {uid}")
+    if uid is None:
+        detail = "the wallpaper has no live process, so its wake locks cannot be attributed"
+        raise device_layer.ProbeError(detail)
+    wake_locks = count_held_wakelocks(device, uid)
+    alarms = count_alarms(device)
+    jobs = count_jobs(device)
+    print(f"$ adb -s {device.serial} shell dumpsys power   (every wake-lock type, uid={uid}) -> {wake_locks}")
+    print(f"$ adb -s {device.serial} shell dumpsys alarm   ({device_layer.PACKAGE_NAME}) -> {alarms}")
+    print(f"$ adb -s {device.serial} shell dumpsys jobscheduler   ({device_layer.PACKAGE_NAME}) -> {jobs}")
+    summary = read_batterystats_summary(device)
+    print(f"  batterystats corroboration: {summary or 'no matching lines'}")
+    record = build_record(
+        device,
+        "resources",
+        0.0,
+        wake_locks=wake_locks,
+        alarms=alarms,
+        jobs=jobs,
+        wallpaper_pid=pid,
+        wallpaper_uid=uid,
+        batterystats_summary=summary,
+    )
+    print(f"wake locks={wake_locks} (budget 0), alarms={alarms} (budget 0), jobs={jobs} (budget 0)")
+    return record
+
+
+def require_hidden_measurement(
+    window: Window,
+    states: Sequence[bool | None],
+    on_battery: Sequence[bool],
+) -> float:
+    """
+    Refuse a hidden window that is not a B3 measurement, returning the CPU it measured.
+
+    A window whose display came on, that saw a charger, or whose process CPU could not be read is not
+    the measurement B3 is defined on. These checks run after the phase's restore has been attempted,
+    so each refusal is raised from here rather than beside that path: the caller runs this inside the
+    `try` that persists the restore problems, and a refusal means the phase aborted with the device
+    possibly still changed.
+    """
+    if not states or not all(state is False for state in states):
+        detail = f"the display was not off for the whole window: {states}"
+        raise device_layer.ProbeError(detail)
+    charging = power_source_problem(on_battery)
+    if charging is not None:
+        detail = f"this window is not a valid measurement: {charging}"
+        raise device_layer.ProbeError(detail)
+    cpu_pct = window.cpu_pct
+    if cpu_pct is None:
+        detail = "the wallpaper process's CPU counters could not be read over the hidden window"
+        raise device_layer.ProbeError(detail)
+    return cpu_pct
+
+
+def require_visible_measurement(
+    window: Window,
+    states: Sequence[bool | None],
+    on_battery: Sequence[bool],
+    arm: Arm,
+) -> float:
+    """
+    Refuse a visible window that is not a B4/B5 measurement, returning its discharge rate.
+
+    `Window.discharge_rate_ua` is one of the refusals — it raises when the pack gained charge across
+    the window — so it is read here, inside the same path as the others, rather than at the print that
+    happens to need it first.
+    """
+    if states and not all(state is True for state in states):
+        detail = f"the display was not on for the whole visible window: {states}"
+        raise device_layer.ProbeError(detail)
+    charging = power_source_problem(on_battery)
+    if charging is not None:
+        detail = f"this is not a discharge measurement: {charging}"
+        raise device_layer.ProbeError(detail)
+    if arm is Arm.LIVE and window.cpu_pct is None:
+        detail = "the live wallpaper's CPU counters could not be read over a visible window"
+        raise device_layer.ProbeError(detail)
+    return window.discharge_rate_ua
+
+
+def require_memory_measurement(
+    states: Sequence[bool | None],
+    on_battery: Sequence[bool],
+    before: BatterySample,
+    after: BatterySample,
+) -> int:
+    """Refuse a memory window that is not a B6 measurement, returning the total-PSS growth in kB."""
+    if states and not all(state is True for state in states):
+        detail = f"the display was not on for the whole memory window: {states}"
+        raise device_layer.ProbeError(detail)
+    charging = power_source_problem(on_battery)
+    if charging is not None:
+        detail = f"this window is not a valid measurement: {charging}"
+        raise device_layer.ProbeError(detail)
+    if before.total_pss_kb is None or after.total_pss_kb is None:
+        detail = "a total-PSS sample could not be parsed, so growth has no value"
+        raise device_layer.ProbeError(detail)
+    return after.total_pss_kb - before.total_pss_kb
+
+
+def phase_hidden(device: device_layer.AdbDevice, minutes: float, *, recorder: Recorder) -> Record:
+    """Record B3: hidden-state CPU over a screen-off window, with the visibility sampled."""
+    clk_tck = require_clk_tck(device)
+    snapshot = DeviceStateSnapshot.capture(device)
+    problems: list[str] = []
+    prior_power = read_power_source_lines(device)
+    power_source = POWER_SOURCE_DEVICE
+    simulated = False
+    # The restore sits in its own `finally` inside the outer `try`, so it runs before the abort is
+    # handled and the problems it collected are in hand when the record is written.
+    try:
+        try:
+            # The live arm is verified here too. A hidden window is B3 evidence for the live engine, so
+            # a static wallpaper bound at the time would make the CPU this window measures the
+            # launcher's; `phase_visible` and `phase_memory` guard their arms and this phase used to
+            # take the pid and open the window without asking what was bound.
+            verify_arm(device, Arm.LIVE, None)
+            pid = device.get_wallpaper_pid()
+            snapshot.pin()
+            power_source = apply_power_mode(device)
+            simulated = power_source == POWER_SOURCE_SIMULATED
+            window, states, on_battery = run_window(device, pid, minutes, screen_on=False, clk_tck=clk_tck)
+        finally:
+            problems = undo_phase_changes(device, snapshot, prior_power, simulated=simulated)
+        # The acceptance checks and the record build sit inside this `try`, after the restore, rather
+        # than after the `except`: a window this phase refuses once the restore has already run is
+        # still an abort, and the restore problems it collected have to reach disk with it instead of
+        # leaving the shared device changed with nothing saying so. That is why the checks are a
+        # function of their own — they belong to that path rather than sitting beside it.
+        cpu_pct = require_hidden_measurement(window, states, on_battery)
+        print(f"hidden window {window.duration_seconds:.1f}s: screen_on readings={states}")
+        print(f"CPU {cpu_pct:.4f}% of one core against the {MAX_HIDDEN_CPU_PCT}% budget")
+        record = build_record(
+            device,
+            "hidden",
+            window.duration_seconds,
+            window_minutes=minutes,
+            cpu_pct=cpu_pct,
+            hidden_cpu_budget_pct=MAX_HIDDEN_CPU_PCT,
+            clk_tck=clk_tck,
+            power_source=power_source,
+            screen_on_samples=states,
+            on_battery_samples=on_battery,
+            wall_clock_seconds=round(window.duration_seconds, 1),
+            restore_problems=problems,
+        )
+    except Exception as error:
+        emit_aborted_restore_record(recorder, device, "hidden", error, problems)
+        raise
+    return record
+
+
+def phase_visible(
+    device: device_layer.AdbDevice,
+    *,
+    arm: Arm,
+    baseline: Baseline | None,
+    minutes: float,
+    recorder: Recorder,
+) -> Record:
+    """Record one B4/B5 window on the home screen after the arm guard admits it."""
+    clk_tck = require_clk_tck(device)
+    # The snapshot is taken before the display is woken: a phase that starts with the display off has
+    # to record that state, so its restore can put the device back to sleep instead of leaving it on.
+    snapshot = DeviceStateSnapshot.capture(device)
+    prior_power = read_power_source_lines(device)
+    problems: list[str] = []
+    power_source = POWER_SOURCE_DEVICE
+    simulated = False
+    # The restore sits in its own `finally` inside the outer `try`, so it runs before the abort is
+    # handled and the problems it collected are in hand when the record is written.
+    try:
+        try:
+            # The wake and the arm guard sit inside the try with the window, so a refusal after the
+            # display has already been woken still runs the restore below.
+            ensure_visible_home(device)
+            verify_arm(device, arm, baseline)
+            pid = device.get_wallpaper_pid() if arm is Arm.LIVE else None
+            conditions = arm_conditions(device, arm, baseline)
+            print(f"arm guard admitted {conditions['wallpaper_component']} (median luma {conditions['median_luma']})")
+            snapshot.pin()
+            power_source = apply_power_mode(device)
+            simulated = power_source == POWER_SOURCE_SIMULATED
+            window, states, on_battery = run_window(device, pid, minutes, screen_on=True, clk_tck=clk_tck)
+        finally:
+            problems = undo_phase_changes(device, snapshot, prior_power, simulated=simulated)
+        # The acceptance checks and the record build sit inside this `try`, after the restore, rather
+        # than after the `except`: a window this phase refuses once the restore has already run is
+        # still an abort, and the restore problems it collected have to reach disk with it instead of
+        # leaving the shared device changed with nothing saying so. That is why the checks are a
+        # function of their own — they belong to that path rather than sitting beside it.
+        discharge_rate_ua = require_visible_measurement(window, states, on_battery, arm)
+        print(f"window {window.duration_seconds:.1f}s: discharge {window.discharge_uah} uAh")
+        print(f"discharge rate {discharge_rate_ua:.0f} uA, CPU {window.cpu_pct}% of one core")
+        record = build_record(
+            device,
+            "visible",
+            window.duration_seconds,
+            window_minutes=minutes,
+            discharge_uah=window.discharge_uah,
+            discharge_rate_ua=discharge_rate_ua,
+            cpu_pct=window.cpu_pct,
+            charge_counter_start_uah=window.start_sample.charge_counter_uah,
+            charge_counter_end_uah=window.end_sample.charge_counter_uah,
+            clk_tck=clk_tck,
+            power_source=power_source,
+            screen_on_samples=states,
+            on_battery_samples=on_battery,
+            restore_problems=problems,
+            **conditions,
+        )
+    except Exception as error:
+        emit_aborted_restore_record(recorder, device, "visible", error, problems)
+        raise
+    return record
+
+
+def phase_memory(device: device_layer.AdbDevice, minutes: float, *, recorder: Recorder) -> Record:
+    """Record B6: the total-PSS growth over a long window on the live wallpaper."""
+    clk_tck = require_clk_tck(device)
+    # Captured before the wake, like the visible phase: a phase that found the display off records it
+    # so its restore can put the device back the way it was.
+    snapshot = DeviceStateSnapshot.capture(device)
+    prior_power = read_power_source_lines(device)
+    problems: list[str] = []
+    states: list[bool | None] = []
+    on_battery: list[bool] = []
+    power_source = POWER_SOURCE_DEVICE
+    simulated = False
+    # The restore sits in its own `finally` inside the outer `try`, so it runs before the abort is
+    # handled and the problems it collected are in hand when the record is written.
+    try:
+        try:
+            ensure_visible_home(device)
+            verify_arm(device, Arm.LIVE, None)
+            pid = device.get_wallpaper_pid()
+            snapshot.pin()
+            power_source = apply_power_mode(device)
+            simulated = power_source == POWER_SOURCE_SIMULATED
+            before = take_battery_sample(device, pid, clk_tck)
+            seconds = minutes * 60.0
+            states, on_battery = sample_window_states(device, seconds)
+            after = take_battery_sample(device, pid, clk_tck)
+        finally:
+            problems = undo_phase_changes(device, snapshot, prior_power, simulated=simulated)
+        # The acceptance checks and the record build sit inside this `try`, after the restore, rather
+        # than after the `except`: a window this phase refuses once the restore has already run is
+        # still an abort, and the restore problems it collected have to reach disk with it instead of
+        # leaving the shared device changed with nothing saying so. That is why the checks are a
+        # function of their own — they belong to that path rather than sitting beside it.
+        growth_kb = require_memory_measurement(states, on_battery, before, after)
+        print(f"total PSS {before.total_pss_kb} -> {after.total_pss_kb} kB over {minutes:.1f} min")
+        print(f"growth {growth_kb} kB against the {MAX_PSS_GROWTH_KB} kB budget")
+        record = build_record(
+            device,
+            "memory",
+            seconds,
+            window_minutes=minutes,
+            pss_start_kb=before.total_pss_kb,
+            pss_end_kb=after.total_pss_kb,
+            pss_growth_kb=growth_kb,
+            pss_budget_kb=MAX_PSS_GROWTH_KB,
+            clk_tck=clk_tck,
+            power_source=power_source,
+            screen_on_samples=states,
+            on_battery_samples=on_battery,
+            restore_problems=problems,
+        )
+    except Exception as error:
+        emit_aborted_restore_record(recorder, device, "memory", error, problems)
+        raise
+    return record
+
+
+def phase_pilot(  # noqa: PLR0913 — the arms, the window shape, and the sink are all its inputs
+    device: device_layer.AdbDevice,
+    *,
+    arm: Arm,
+    baseline: Baseline | None,
+    runs: int,
+    minutes: float,
+    recorder: Recorder,
+) -> list[Record]:
+    """
+    Record the repeated windows whose spread is the device's noise floor.
+
+    Each window is persisted as soon as it completes, and the floor is emitted as its own record
+    rather than merged into the first window's. Persisting per window is what makes the phase
+    resumable: a pilot interrupted at window three keeps the windows it completed, instead of
+    returning them to a `main` that never got to append them.
+    """
+    rates: list[float] = []
+    cpu_values: list[float] = []
+    for run in range(1, runs + 1):
+        print(f"\n--- pilot window {run}/{runs} ---")
+        record = phase_visible(device, arm=arm, baseline=baseline, minutes=minutes, recorder=recorder)
+        record.values["run"] = run
+        record.values["pilot"] = True
+        record.values["runs"] = runs
+        recorder.emit(record)
+        rate = record.values.get("discharge_rate_ua")
+        if not isinstance(rate, int | float):
+            detail = "a visible window recorded no discharge rate, so the noise floor has no input"
+            raise device_layer.ProbeError(detail)
+        rates.append(float(rate))
+        cpu_pct = record.values["cpu_pct"]
+        if isinstance(cpu_pct, int | float):
+            cpu_values.append(float(cpu_pct))
+    mean, deviation, half_width = two_sigma_noise_floor(rates)
+    channel_measured = mean > 0
+    values: dict[str, object] = {
+        "run": 0,
+        "pilot": True,
+        "runs": runs,
+        "discharge_channel_measured": channel_measured,
+        "baseline_mean_rate_ua": mean,
+    }
+    if channel_measured:
+        floor_pct = (half_width / mean) * 100.0
+        values["noise_floor_pct"] = floor_pct
+        values["noise_floor_rate_ua"] = half_width
+        print(f"\nwindow discharge rate: mean {mean:.0f} uA, sigma {deviation:.0f} uA, 2 sigma {half_width:.0f} uA")
+        print(f"noise floor as a share of the mean: {floor_pct:.2f}%")
+    else:
+        # A gauge that did not move across every window is the frozen counter the reports describe,
+        # not a device with no noise: half-width zero divided by a zero mean says nothing at all, and
+        # recording it as a 0% floor would let a later report present an unmeasured channel as a
+        # perfectly quiet one. No floor is emitted and the channel is marked unmeasured instead.
+        print(
+            f"\nthe discharge channel did not move across {runs} windows (mean {mean:.0f} uA), so it is "
+            "unmeasured and no noise floor is emitted for it; a threshold cannot be calibrated from a "
+            "counter that never changed"
+        )
+    if cpu_values:
+        cpu_mean, cpu_deviation, cpu_half_width = two_sigma_noise_floor(cpu_values)
+        values["cpu_mean_pct"] = cpu_mean
+        values["cpu_noise_floor_pct"] = cpu_half_width
+        print(f"CPU: mean {cpu_mean:.4f}%, sigma {cpu_deviation:.4f}, 2 sigma {cpu_half_width:.4f}")
+    return [build_record(device, "pilot_floor", 0.0, **values)]
+
+
+def add_window_arguments(parser: argparse.ArgumentParser, minimum_minutes: float) -> None:
+    """
+    Add the duration option shared by the windowed phases, floored at the documented length.
+
+    The default is the minimum: the matrix states the window each criterion is defined over, so a
+    shorter one is a different measurement and is refused rather than silently accepted. Recording a
+    six-second "window" and reporting it as B3 would be the same defect as reading an unparsable probe
+    as zero — a number that looks like a measurement and is not one.
+    """
+    parser.add_argument(
+        "--minutes",
+        type=minutes_at_least(minimum_minutes),
+        default=minimum_minutes,
+        help=f"Length of each measurement window in minutes (at least {minimum_minutes:g})",
+    )
+
+
+def add_arm_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add the arm and baseline options shared by the visible and pilot phases."""
+    parser.add_argument("--arm", choices=[arm.value for arm in Arm], required=True, help="A live, B baseline")
+    parser.add_argument(
+        "--baseline",
+        choices=[baseline.value for baseline in Baseline],
+        default=None,
+        help="Which static wallpaper arm B is bound to; required for arm B",
+    )
+
+
+def positive_float(raw: str) -> float:
+    """
+    Parse a finite, strictly positive number for the command line.
+
+    `inf` is refused along with zero and the negatives: it is not a large window, it is a number the
+    phase can never reach, and `sample_window_states` would subtract its 30-second interval from it
+    forever, turning a bounded phase into an unbounded one. `nan` compares false against everything, so
+    it slips past a `<= 0` test and has to be refused by name.
+    """
+    value = float(raw)
+    if not math.isfinite(value):
+        message = f"{raw} is not a finite duration"
+        raise argparse.ArgumentTypeError(message)
+    if value <= 0:
+        message = f"{raw} is not a positive duration"
+        raise argparse.ArgumentTypeError(message)
+    return value
+
+
+def minutes_at_least(minimum: float) -> Callable[[str], float]:
+    """Build the `--minutes` parser for one phase, refusing a window below that phase's minimum."""
+
+    def parse_minutes(raw: str) -> float:
+        value = positive_float(raw)
+        if value < minimum:
+            message = (
+                f"{raw} minutes is below the {minimum:g} minutes the acceptance matrix documents for "
+                "this criterion, so the window would not be the measurement the budget is defined on"
+            )
+            raise argparse.ArgumentTypeError(message)
+        return value
+
+    return parse_minutes
+
+
+def nonblank_reason(raw: str) -> str:
+    """
+    Parse the reason a run declares one of the document's baselines unavailable.
+
+    The declaration is what earns the exemption, so a blank one declares nothing and is refused rather
+    than stored: an empty string would print a device-limited line that names no reason, which reads as
+    exactly the silent omission the declaration exists to replace.
+    """
+    reason = raw.strip()
+    if not reason:
+        message = "an empty reason declares nothing; say why the device cannot set the baseline"
+        raise argparse.ArgumentTypeError(message)
+    return reason
+
+
+def positive_int(raw: str) -> int:
+    """Parse a strictly positive integer for the command line."""
+    value = int(raw)
+    if value <= 0:
+        message = f"{raw} is not a positive count"
+        raise argparse.ArgumentTypeError(message)
+    return value
+
+
+def build_argument_parser() -> argparse.ArgumentParser:
+    """Build the command line: one bounded phase per subcommand."""
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("-s", "--serial", help="Target ADB serial", default=None)
+    parser.add_argument(
+        "--state",
+        type=Path,
+        default=DEFAULT_STATE_DIR,
+        help="Directory the phase records are written to",
+    )
+    subcommands = parser.add_subparsers(dest="command", required=True)
+    subcommands.add_parser("resources", help="B2: wake locks and alarms the app holds")
+
+    hidden = subcommands.add_parser("hidden", help="B3: hidden-state CPU over a screen-off window")
+    add_window_arguments(hidden, MINIMUM_HIDDEN_MINUTES)
+
+    visible = subcommands.add_parser("visible", help="B4/B5: one visible window")
+    add_arm_arguments(visible)
+    add_window_arguments(visible, MINIMUM_WINDOW_MINUTES)
+
+    pilot = subcommands.add_parser("pilot", help="Repeated windows whose spread is the noise floor")
+    add_arm_arguments(pilot)
+    add_window_arguments(pilot, MINIMUM_WINDOW_MINUTES)
+    pilot.add_argument("--runs", type=positive_int, default=MIN_PAIRED_SAMPLES, help="Windows to run")
+
+    memory = subcommands.add_parser("memory", help="B6: total-PSS growth over a long window")
+    add_window_arguments(memory, MINIMUM_MEMORY_MINUTES)
+
+    report = subcommands.add_parser("report", help="Aggregate the records the phases wrote")
+    report.add_argument(
+        "--black-unavailable",
+        type=nonblank_reason,
+        default=None,
+        metavar="REASON",
+        help=(
+            "Declare that this device cannot set a static wallpaper, so B4's black baseline is "
+            "device-limited rather than an unmeasured criterion"
+        ),
+    )
+    return parser
+
+
+def dispatch(args: argparse.Namespace, device: device_layer.AdbDevice, recorder: Recorder) -> list[Record]:
+    """Run the requested phase, writing each record to the state file as it is produced."""
+    if args.command == "resources":
+        return [recorder.emit(phase_resources(device))]
+    if args.command == "hidden":
+        return [recorder.emit(phase_hidden(device, args.minutes, recorder=recorder))]
+    if args.command == "visible":
+        return [
+            recorder.emit(
+                phase_visible(
+                    device,
+                    arm=Arm(args.arm),
+                    baseline=baseline_of(args),
+                    minutes=args.minutes,
+                    recorder=recorder,
+                )
+            )
+        ]
+    if args.command == "pilot":
+        # `phase_pilot` emits its windows itself as each completes and returns only the floor record.
+        return [
+            recorder.emit(record)
+            for record in phase_pilot(
+                device,
+                arm=Arm(args.arm),
+                baseline=baseline_of(args),
+                runs=args.runs,
+                minutes=args.minutes,
+                recorder=recorder,
+            )
+        ]
+    if args.command == "memory":
+        return [recorder.emit(phase_memory(device, args.minutes, recorder=recorder))]
+    return []
+
+
+def baseline_of(args: argparse.Namespace) -> Baseline | None:
+    """Read the requested baseline, as `None` when the arm does not need one."""
+    return Baseline(args.baseline) if args.baseline else None
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Parse the command line, run one bounded phase, and write its record."""
+    args = build_argument_parser().parse_args(argv)
+    state_dir = Path(args.state)
+    if args.command == "report":
+        try:
+            records = load_records(state_dir)
+        except device_layer.ProbeError as error:
+            print(f"ERROR: {device_layer.error_detail(error)}", file=sys.stderr)
+            return 1
+        try:
+            return phase_report(records, black_unavailable=args.black_unavailable)
+        except device_layer.ProbeError as error:
+            print(f"ERROR: {device_layer.error_detail(error)}", file=sys.stderr)
+            return 1
+    serial = device_layer.select_target_serial(args.serial)
+    device = device_layer.AdbDevice(serial)
+    recorder = Recorder(state_dir)
+    try:
+        sdk = device.run_adb(["shell", "getprop", "ro.build.version.sdk"]).decode(errors="replace")
+        print(f"$ adb -s {serial}  (API {parse_api_level(sdk)})")
+        dispatch(args, device, recorder)
+    except (subprocess.SubprocessError, OSError, device_layer.ProbeError) as error:
+        print(f"ERROR: {device_layer.error_detail(error)}", file=sys.stderr)
+        return 1
+    restore_failures = collect_restore_problems([record.values for record in recorder.records])
+    if restore_failures:
+        print("DEVICE RESTORE FAILURES:", file=sys.stderr)
+        for failure in restore_failures:
+            print(f"  - FAIL: {failure}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
