@@ -187,17 +187,21 @@ launcher-crop case the #5 pass could not reproduce is tracked in #122.
 ## Tablet and foldable layout acceptance (#86)
 
 Android tablets and foldables introduce aspect ratios and dynamic surface changes not present on
-portrait phones (landscape 16:10, tablet portrait 10:16, and unfolded near-square ~1:1).
+portrait phones (landscape 16:10 and 4:3, tablet portrait 10:16, and unfolded near-square ~1:1).
 
-Host tests in `WallpaperLayoutTabletTest` and `SettingsActivityLayoutTest` verify:
+Host tests in `WallpaperLayoutTabletTest`, `WallpaperTabletRenderTest`, and `SettingsActivityLayoutTest` verify:
 1. **Proportional scaling and safe bounds**: Dial radius scales by `minOf(width, height) * RADIUS_FRACTION`,
    leaving balanced letterbox margins along the larger dimension and avoiding rim clipping across
-   2560x1600 (landscape), 1600x2560 (portrait), and 2208x1768 (unfolded near-square).
+   2560x1600 (16:10 landscape), 2048x1536 (4:3 landscape), 1600x2560 (10:16 portrait), and
+   2208x1768 (unfolded near-square). Native graphics mode in `WallpaperTabletRenderTest` renders onto real
+   Bitmaps across all candidate aspect ratios, validating layer compositions and confirming background pixel
+   purity on margins with zero rim clipping.
 2. **Display settings extremes**: Size (50% to 115%) and horizontal/vertical placement (0% to 100%)
    remain strictly within screen bounds across all tablet and foldable aspect ratios.
 3. **Dynamic fold/unfold transitions**: Dynamic surface recreation via `onSurfaceChanged` between
    cover display (1080x2400) and unfolded display (2208x1768) immediately updates dial geometry,
-   preserves saved observing location and astronomical state, and resumes 1.000 Hz ticking.
+   preserves saved observing location and astronomical state, and resumes exact 1.000 Hz ticking
+   verified by advancing the looper (999 ms / 1 ms / 1 s interval checks).
 4. **SettingsActivity wide-display ergonomics**: The settings screen layout is constrained to a readable
    560dp maximum width centered horizontally on `sw600dp+` displays via `res/values-sw600dp/styles.xml`,
    preventing inputs from stretching across wide tablet viewports.

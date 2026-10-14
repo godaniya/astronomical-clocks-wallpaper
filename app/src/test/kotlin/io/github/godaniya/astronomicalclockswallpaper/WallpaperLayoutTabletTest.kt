@@ -1,12 +1,11 @@
 package io.github.godaniya.astronomicalclockswallpaper
 
 import android.content.pm.ApplicationInfo
-import android.graphics.Canvas
 import android.os.Looper
+import android.os.SystemClock
 import android.service.wallpaper.WallpaperService
 import android.view.SurfaceView
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -20,7 +19,6 @@ import org.robolectric.shadows.ShadowLooper
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
-import java.time.LocalTime
 import java.time.ZoneOffset
 
 /**
@@ -33,19 +31,37 @@ class WallpaperLayoutTabletTest {
     @Test
     @Config(qualifiers = "sw1600dp-w2560dp-h1600dp-land-mdpi")
     fun landscapeTabletDialFits() {
-        assertDialFitsWithinDimensions(width = TABLET_LAND_WIDTH, height = TABLET_LAND_HEIGHT)
+        assertDialFitsWithinDimensions(
+            width = TabletSurfaces.LANDSCAPE_16_10.width,
+            height = TabletSurfaces.LANDSCAPE_16_10.height,
+        )
+    }
+
+    @Test
+    @Config(qualifiers = "sw1536dp-w2048dp-h1536dp-land-mdpi")
+    fun fourToThreeTabletDialFits() {
+        assertDialFitsWithinDimensions(
+            width = TabletSurfaces.LANDSCAPE_4_3.width,
+            height = TabletSurfaces.LANDSCAPE_4_3.height,
+        )
     }
 
     @Test
     @Config(qualifiers = "sw1600dp-w1600dp-h2560dp-port-mdpi")
     fun portraitTabletDialFits() {
-        assertDialFitsWithinDimensions(width = TABLET_PORT_WIDTH, height = TABLET_PORT_HEIGHT)
+        assertDialFitsWithinDimensions(
+            width = TabletSurfaces.PORTRAIT_10_16.width,
+            height = TabletSurfaces.PORTRAIT_10_16.height,
+        )
     }
 
     @Test
     @Config(qualifiers = "sw1768dp-w2208dp-h1768dp-mdpi")
     fun foldableUnfoldedDialFits() {
-        assertDialFitsWithinDimensions(width = FOLDABLE_UNFOLDED_WIDTH, height = FOLDABLE_UNFOLDED_HEIGHT)
+        assertDialFitsWithinDimensions(
+            width = TabletSurfaces.FOLDABLE_UNFOLDED.width,
+            height = TabletSurfaces.FOLDABLE_UNFOLDED.height,
+        )
     }
 
     @Test
@@ -57,27 +73,22 @@ class WallpaperLayoutTabletTest {
 
         LocationStore(service) { ZoneOffset.UTC }.save(PRAGUE_LOCATION)
 
-        val holder =
-            ReadyFrameHolder(
-                delegate = SurfaceView(service).holder,
-                width = maxOf(a = FOLDABLE_UNFOLDED_WIDTH, b = FOLDABLE_FOLDED_WIDTH),
-                height = maxOf(a = FOLDABLE_UNFOLDED_HEIGHT, b = FOLDABLE_FOLDED_HEIGHT),
-            )
-        val looper = shadowOf(Looper.getMainLooper())
         var lastViewport: DialViewport? = null
         var lastGeometry: DialGeometry? = null
         var frameCount = 0
-
-        val engine =
-            service.createEngine(
-                draw = { _, _, geometry, _, _, _, usable ->
-                    frameCount++
-                    lastViewport = usable
-                    lastGeometry = geometry
-                },
-                holder = holder,
-                clock = Clock.fixed(Instant.parse("2026-03-21T12:00:00Z"), ZoneOffset.UTC),
+        val expectedGeometry =
+            AstronomyEngineCalculator().dialGeometry(
+                time = TEST_INSTANT,
+                location = PRAGUE_LOCATION,
             )
+
+        val (holder, engine) =
+            createFoldableTestHarness(service) { geometry, usable ->
+                frameCount++
+                lastViewport = usable
+                lastGeometry = geometry
+            }
+        val looper = shadowOf(Looper.getMainLooper())
 
         try {
             assertFoldedPhase(
@@ -86,7 +97,11 @@ class WallpaperLayoutTabletTest {
                 looper = looper,
                 frameCount = { frameCount },
             )
-            assertNotNull("Observing site geometry must be computed from saved site", lastGeometry)
+            assertEquals(
+                "Observing site geometry must match calculated astronomical frame",
+                expectedGeometry,
+                lastGeometry,
+            )
 
             assertUnfoldedPhase(
                 engine = engine,
@@ -95,7 +110,11 @@ class WallpaperLayoutTabletTest {
                 frameCount = { frameCount },
                 viewport = { lastViewport },
             )
-            assertNotNull("Observing site geometry must persist across surface resize", lastGeometry)
+            assertEquals(
+                "Observing site geometry must persist across surface resize",
+                expectedGeometry,
+                lastGeometry,
+            )
 
             assertFoldRecovery(
                 engine = engine,
@@ -111,16 +130,40 @@ class WallpaperLayoutTabletTest {
         }
     }
 
+    private fun createFoldableTestHarness(
+        service: AstronomicalClocksWallpaperService,
+        onFrame: (DialGeometry?, DialViewport?) -> Unit,
+    ): Pair<ReadyFrameHolder, WallpaperService.Engine> {
+        val holder =
+            ReadyFrameHolder(
+                delegate = SurfaceView(service).holder,
+                width = maxOf(a = TabletSurfaces.FOLDABLE_UNFOLDED.width, b = TabletSurfaces.FOLDABLE_FOLDED.width),
+                height = maxOf(a = TabletSurfaces.FOLDABLE_UNFOLDED.height, b = TabletSurfaces.FOLDABLE_FOLDED.height),
+            )
+        val engine =
+            service.createEngine(
+                draw = { _, _, geometry, _, _, _, usable -> onFrame(geometry, usable) },
+                holder = holder,
+                clock = Clock.fixed(TEST_INSTANT, ZoneOffset.UTC),
+            )
+        return holder to engine
+    }
+
     private fun assertFoldedPhase(
         engine: WallpaperService.Engine,
         holder: ReadyFrameHolder,
         looper: ShadowLooper,
         frameCount: () -> Int,
     ) {
-        engine.onSurfaceChanged(holder, 0, FOLDABLE_FOLDED_WIDTH, FOLDABLE_FOLDED_HEIGHT)
+        engine.onSurfaceChanged(
+            holder,
+            0,
+            TabletSurfaces.FOLDABLE_FOLDED.width,
+            TabletSurfaces.FOLDABLE_FOLDED.height,
+        )
         engine.onVisibilityChanged(true)
         assertEquals(1, frameCount())
-        assertTrue(looper.nextScheduledTaskTime > Duration.ZERO)
+        assertTicksOncePerSecond(looper = looper, frameCount = frameCount)
     }
 
     private fun assertUnfoldedPhase(
@@ -131,19 +174,24 @@ class WallpaperLayoutTabletTest {
         viewport: () -> DialViewport?,
     ) {
         RuntimeEnvironment.setQualifiers("sw1768dp-w2208dp-h1768dp-mdpi")
-        engine.onSurfaceChanged(holder, 0, FOLDABLE_UNFOLDED_WIDTH, FOLDABLE_UNFOLDED_HEIGHT)
+        engine.onSurfaceChanged(
+            holder,
+            0,
+            TabletSurfaces.FOLDABLE_UNFOLDED.width,
+            TabletSurfaces.FOLDABLE_UNFOLDED.height,
+        )
 
-        assertEquals(2, frameCount())
-        assertTrue(looper.nextScheduledTaskTime > Duration.ZERO)
+        assertEquals(4, frameCount())
+        assertTicksOncePerSecond(looper = looper, frameCount = frameCount)
 
         val unfoldedViewport = requireNotNull(viewport())
-        assertEquals(FOLDABLE_UNFOLDED_WIDTH.toFloat(), unfoldedViewport.right, TOLERANCE)
-        assertEquals(FOLDABLE_UNFOLDED_HEIGHT.toFloat(), unfoldedViewport.bottom, TOLERANCE)
+        assertEquals(TabletSurfaces.FOLDABLE_UNFOLDED.width.toFloat(), unfoldedViewport.right, TOLERANCE)
+        assertEquals(TabletSurfaces.FOLDABLE_UNFOLDED.height.toFloat(), unfoldedViewport.bottom, TOLERANCE)
         val placement = requireNotNull(unfoldedViewport.resolve(DialDisplaySettings()))
-        val expectedRadius = FOLDABLE_UNFOLDED_HEIGHT * DialViewport.RADIUS_FRACTION
+        val expectedRadius = TabletSurfaces.FOLDABLE_UNFOLDED.height * DialViewport.RADIUS_FRACTION
         assertEquals(expectedRadius, placement.radius, TOLERANCE)
-        assertEquals(FOLDABLE_UNFOLDED_WIDTH / 2f, placement.centerX, TOLERANCE)
-        assertEquals(FOLDABLE_UNFOLDED_HEIGHT / 2f, placement.centerY, TOLERANCE)
+        assertEquals(TabletSurfaces.FOLDABLE_UNFOLDED.width / 2f, placement.centerX, TOLERANCE)
+        assertEquals(TabletSurfaces.FOLDABLE_UNFOLDED.height / 2f, placement.centerY, TOLERANCE)
     }
 
     private fun assertFoldRecovery(
@@ -154,44 +202,32 @@ class WallpaperLayoutTabletTest {
         viewport: () -> DialViewport?,
     ) {
         RuntimeEnvironment.setQualifiers("sw1080dp-w1080dp-h2400dp-port-mdpi")
-        engine.onSurfaceChanged(holder, 0, FOLDABLE_FOLDED_WIDTH, FOLDABLE_FOLDED_HEIGHT)
-        assertEquals(3, frameCount())
-        assertTrue(looper.nextScheduledTaskTime > Duration.ZERO)
+        engine.onSurfaceChanged(
+            holder,
+            0,
+            TabletSurfaces.FOLDABLE_FOLDED.width,
+            TabletSurfaces.FOLDABLE_FOLDED.height,
+        )
+        assertEquals(7, frameCount())
+        assertTicksOncePerSecond(looper = looper, frameCount = frameCount)
         val recovered = requireNotNull(requireNotNull(viewport()).resolve(DialDisplaySettings()))
-        val expectedRadius = FOLDABLE_FOLDED_WIDTH * DialViewport.RADIUS_FRACTION
+        val expectedRadius = TabletSurfaces.FOLDABLE_FOLDED.width * DialViewport.RADIUS_FRACTION
         assertEquals(expectedRadius, recovered.radius, TOLERANCE)
     }
 
-    @Test
-    fun renderLayersAcrossRatios() {
-        val renderer = DialRenderer()
-        val calculator = AstronomyEngineCalculator()
-        val instant = Instant.parse("2026-06-21T12:00:00Z")
-        val geometry = calculator.dialGeometry(instant, PRAGUE_LOCATION)
-        val state = clockState(LocalTime.of(12, 0))
-        val allLayers = DialLayers(isZodiacRingEnabled = true, isSunEnabled = true, isMoonEnabled = true)
+    private fun assertTicksOncePerSecond(looper: ShadowLooper, frameCount: () -> Int) {
+        val delay = looper.nextScheduledTaskTime.toMillis() - SystemClock.uptimeMillis()
+        assertEquals(1000L, delay)
 
-        listOf(
-            TABLET_LAND_WIDTH to TABLET_LAND_HEIGHT,
-            TABLET_PORT_WIDTH to TABLET_PORT_HEIGHT,
-            FOLDABLE_UNFOLDED_WIDTH to FOLDABLE_UNFOLDED_HEIGHT,
-            FOLDABLE_FOLDED_WIDTH to FOLDABLE_FOLDED_HEIGHT,
-        ).forEach { (w, h) ->
-            val canvas = Canvas()
-            val viewport = DialViewport.full(width = w, height = h)
-            renderer.renderDisplay(
-                canvas = canvas,
-                state = state,
-                geometry = geometry,
-                layers = allLayers,
-                style =
-                    DialRenderStyle(
-                        palette = DialStyle.DARK_PALETTE,
-                        display = DialDisplaySettings(),
-                        viewport = viewport,
-                    ),
-            )
-        }
+        val beforeCount = frameCount()
+        looper.idleFor(Duration.ofMillis(999))
+        assertEquals("Frame count must not increment before tick interval", beforeCount, frameCount())
+
+        looper.idleFor(Duration.ofMillis(1))
+        assertEquals("Frame count must increment exactly at 1 second mark", beforeCount + 1, frameCount())
+
+        looper.idleFor(Duration.ofSeconds(1))
+        assertEquals("Frame count must increment on subsequent 1 second tick", beforeCount + 2, frameCount())
     }
 
     private fun assertDialFitsWithinDimensions(width: Int, height: Int) {
@@ -276,15 +312,9 @@ class WallpaperLayoutTabletTest {
     }
 
     private companion object {
-        const val TABLET_LAND_WIDTH = 2560
-        const val TABLET_LAND_HEIGHT = 1600
-        const val TABLET_PORT_WIDTH = 1600
-        const val TABLET_PORT_HEIGHT = 2560
-        const val FOLDABLE_UNFOLDED_WIDTH = 2208
-        const val FOLDABLE_UNFOLDED_HEIGHT = 1768
-        const val FOLDABLE_FOLDED_WIDTH = 1080
-        const val FOLDABLE_FOLDED_HEIGHT = 2400
         const val TOLERANCE = 0.5f
+
+        val TEST_INSTANT: Instant = Instant.parse("2026-03-21T12:00:00Z")
 
         val PRAGUE_LOCATION =
             ObservingLocation(
