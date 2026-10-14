@@ -294,14 +294,34 @@ def two_sigma_noise_floor(values: Sequence[float]) -> tuple[float, float, float]
 
 
 def numeric_values(records: Sequence[Mapping[str, object]], phase: str, key: str) -> list[float]:
-    """Collect one numeric field across a phase's records, skipping records that never carried it."""
+    """
+    Collect one numeric field across a phase's records, refusing a value that is not a number.
+
+    A record of another phase is not asked for the field, and a record that does not carry it at all
+    does not bound it — an older revision that never recorded the field has nothing to say. A record
+    that *does* carry the field with something else is a different thing: corrupt or hand-edited
+    state. Skipping it would judge the budget on whichever records happened to parse, so a set
+    holding one valid zero and one unreadable value would report a pass, and the unreadable record
+    would be hidden behind the readable one rather than named.
+
+    `bool` is an `int` in Python, so `"wake_locks": true` would otherwise read as one lock, and a
+    non-finite value is refused for the same reason `short_window_reason` refuses one: `-inf` sorts
+    below every budget, so it would pass a maximum-is-zero check it never measured.
+    """
     values: list[float] = []
     for record in records:
         if record.get("phase") != phase:
             continue
-        value = record.get(key)
-        if isinstance(value, int | float):
-            values.append(float(value))
+        if key not in record:
+            continue
+        value = record[key]
+        if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+            detail = (
+                f"a {phase} record carries {value!r} for `{key}`, which is not a finite number, so the "
+                f"budget cannot be judged from this state file"
+            )
+            raise device_layer.ProbeError(detail)
+        values.append(float(value))
     return values
 
 
@@ -368,6 +388,18 @@ def check_measurement_identity(records: Sequence[Mapping[str, object]]) -> None:
     """
     for identity_field in IDENTITY_FIELDS:
         values = {record.get(identity_field) for record in records if identity_field in record}
+        if not values:
+            continue
+        if values == {None}:
+            # Every record that carries the field says "unknown", which is not an identity any more
+            # than two disagreements are: the set is homogeneous and still cannot say which build it
+            # measured, so aggregating it would produce a verdict whose subject is unnamed.
+            detail = (
+                f"every record that carries {identity_field} records no value for it, so the set cannot "
+                "say which measurement identity it was taken under; re-run the phases against one build "
+                "and configuration"
+            )
+            raise device_layer.ProbeError(detail)
         if len(values) > 1:
             named = ", ".join("unknown" if value is None else str(value) for value in sorted(values, key=str))
             detail = (
@@ -390,12 +422,27 @@ def check_budget(label: str, value: float | None, budget: float, unit: str) -> V
 
 
 def collect_restore_problems(records: Sequence[Mapping[str, object]]) -> list[str]:
-    """Collect every restore problem the records carry, so a failed restore is never silent."""
+    """
+    Collect every restore problem the records carry, so a failed restore is never silent.
+
+    A record that does not carry the field is a record whose phase collected no problems, which is
+    what the field being absent means. A record that carries it with something other than a list is
+    refused rather than ignored: a failed restore is the one thing on a record that says the device
+    was left changed, and reading `"airplane mode was not restored"` — a string where the phases
+    write a list — as no problem would let the report exit zero over an explicitly recorded one.
+    """
     problems: list[str] = []
     for record in records:
         found = record.get("restore_problems")
-        if isinstance(found, list):
-            problems.extend(str(problem) for problem in found)
+        if found is None:
+            continue
+        if not isinstance(found, list):
+            detail = (
+                f"a {record.get('phase')!r} record carries restore_problems={found!r}, which is not a "
+                "list, so whether its restore succeeded cannot be read from this state file"
+            )
+            raise device_layer.ProbeError(detail)
+        problems.extend(str(problem) for problem in found)
     return problems
 
 

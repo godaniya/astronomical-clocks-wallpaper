@@ -488,3 +488,80 @@ class AlarmBudgetWordingTest(unittest.TestCase):
         row = self.b2_row()
         self.assertIn("0 JobScheduler jobs", row)
         self.assertIn("dumpsys jobscheduler", row)
+
+
+class CorruptRecordTest(unittest.TestCase):
+    """
+    A state file the report did not write is refused, not read around.
+
+    Every one of these is a field that is *present* and unreadable. The distinction matters: a field
+    a record does not carry at all says an older revision had nothing to record, and the report must
+    keep working on those. A field that is present and wrong is a corrupt or hand-edited file, and
+    skipping it hides the record behind the ones that parsed.
+    """
+
+    def test_a_non_numeric_resource_field_is_refused(self) -> None:
+        # One valid zero and one unreadable value would otherwise report B2 as PASS, judged on the
+        # records that happened to parse.
+        records = [
+            {"phase": "resources", "wake_locks": 0, "alarms": 0, "jobs": 0},
+            {"phase": "resources", "wake_locks": "corrupt", "alarms": 0, "jobs": 0},
+        ]
+        with self.assertRaises(device_layer.ProbeError) as raised:
+            report.report_lines(records)
+        self.assertIn("wake_locks", str(raised.exception))
+
+    def test_a_boolean_is_not_a_count(self) -> None:
+        # `True` is an `int` in Python, so an unchecked reader takes `"wake_locks": true` for one
+        # lock — or, worse here, for a value that sorts under the zero budget as `1` does not.
+        records = [{"phase": "resources", "wake_locks": True, "alarms": 0, "jobs": 0}]
+        with self.assertRaises(device_layer.ProbeError):
+            report.report_lines(records)
+
+    def test_a_non_finite_value_is_refused(self) -> None:
+        # `-inf` sorts below every budget, so it would pass a maximum-is-zero check it never measured.
+        records = [
+            {
+                "phase": "hidden",
+                "cpu_pct": float("-inf"),
+                "duration_seconds": 600.0,
+                "apk_sha256": "a",
+                "api_level": 36,
+            }
+        ]
+        with self.assertRaises(device_layer.ProbeError):
+            report.report_lines(records)
+
+    def test_a_field_no_record_carries_is_still_not_bounded(self) -> None:
+        # The refusal above must not extend to an absent field: a revision that never recorded one
+        # has nothing to say about it, and a report over its records has to keep working.
+        records = [{"phase": "resources", "wake_locks": 0, "alarms": 0, "jobs": 0}]
+        lines = [verdict.line for verdict in report.report_lines(records)]
+        self.assertTrue(any(line.startswith("B2 wake locks: PASS") for line in lines))
+
+    def test_a_wholly_unknown_identity_is_refused(self) -> None:
+        # A set whose every record says "unknown build" is homogeneous and still cannot name what it
+        # measured, so aggregating it produces a verdict whose subject is unnamed. The rule reads
+        # each identity field, so one field is enough to refuse the set.
+        records = [{"apk_sha256": None, "api_level": 36}, {"apk_sha256": None, "api_level": 36}]
+        with self.assertRaises(device_layer.ProbeError) as raised:
+            report.check_measurement_identity(records)
+        self.assertIn("apk_sha256", str(raised.exception))
+
+    def test_an_identity_field_no_record_carries_is_still_not_bounded(self) -> None:
+        # The refusal above must not extend to an absent field, or the `resources` census — which
+        # carries neither `power_source` nor `clk_tck` — would stop being reportable.
+        report.check_measurement_identity([{"api_level": 36}, {"api_level": 36}])
+
+    def test_a_non_list_restore_problems_is_refused(self) -> None:
+        # A failed restore is the one thing on a record that says the device was left changed, and
+        # reading a string where the phases write a list as "no problems" would let the report exit
+        # zero over an explicitly recorded failure.
+        records = [{"phase": "hidden", "restore_problems": "airplane mode was not restored"}]
+        with self.assertRaises(device_layer.ProbeError) as raised:
+            report.collect_restore_problems(records)
+        self.assertIn("not a list", str(raised.exception))
+
+    def test_an_absent_restore_problems_is_no_problem(self) -> None:
+        self.assertEqual([], report.collect_restore_problems([{"phase": "hidden"}]))
+        self.assertEqual(["x"], report.collect_restore_problems([{"phase": "hidden", "restore_problems": ["x"]}]))
