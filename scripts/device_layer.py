@@ -580,23 +580,32 @@ def read_keyguard_locked(serial: str) -> bool | None:
 
 def read_foreground_package(serial: str) -> str | None:
     """
-    Read the package in front from `dumpsys window`, or None when no focus line names one.
+    Read the package in front from `dumpsys window`, or None when it cannot be read as one.
 
-    `mCurrentFocus` is asked first and `mFocusedApp` is the fallback, because the two answer
-    different questions and only the second always names a package. `mCurrentFocus` is the window
-    that has input focus, which may be a system window with no package — this device prints
-    `Window{39e680d u0 NotificationShade}` while the shade is down — so a reading that stopped there
-    would have no package to report for a device that is plainly showing an app.
+    `mCurrentFocus` is the window with input focus and is asked first. `mFocusedApp` is the resumed
+    activity and is the fallback, but only when `mCurrentFocus` names no window at all — `null`, or
+    no such line — because the two answer different questions and a gap in one is not the other.
+
+    A `mCurrentFocus` that names a window carrying no package is not a gap to be filled in from the
+    line below it. That is a system window holding the focus, and this device prints exactly that —
+    `Window{39e680d u0 NotificationShade}` — while the shade is down. Falling through to
+    `mFocusedApp` there would report the resumed app as the surface in front while an overlay covers
+    it, which is precisely the reading `read_home_in_front` must not be given: a visible window would
+    be measured on the shade rather than on the wallpaper it claims to measure, with the display and
+    the keyguard both reading as the visible home state. Returning None instead makes the caller
+    refuse, which is what "the foreground could not be read" is for.
 
     Only the package is returned. The activity class after the `/` is not, because it varies between
     launcher builds while the package that owns the home screen does not.
     """
     output = run_adb(["shell", "dumpsys", "window"], serial=serial).decode("utf-8", errors="replace")
-    for pattern in (FOCUS_WINDOW_PATTERN, FOCUSED_APP_PATTERN):
-        match = pattern.search(output)
-        if match is None:
-            continue
-        component = FOCUS_COMPONENT_PATTERN.search(match.group(0))
+    focus = FOCUS_WINDOW_PATTERN.search(output)
+    if focus is not None:
+        component = FOCUS_COMPONENT_PATTERN.search(focus.group(0))
+        return captured_text(component, 1) if component is not None else None
+    resumed = FOCUSED_APP_PATTERN.search(output)
+    if resumed is not None:
+        component = FOCUS_COMPONENT_PATTERN.search(resumed.group(0))
         if component is not None:
             return captured_text(component, 1)
     return None

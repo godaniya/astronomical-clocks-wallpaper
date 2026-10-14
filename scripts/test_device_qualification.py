@@ -2799,16 +2799,17 @@ class ForegroundProbeTest(unittest.TestCase):
         output = "  mCurrentFocus=Window{a1b2c3d u0 com.example.app/com.example.app.MainActivity}\n"
         self.assertEqual("com.example.app", self.read(output))
 
-    def test_a_focus_window_without_a_package_falls_back_to_the_resumed_app(self) -> None:
+    def test_a_focus_window_without_a_package_is_undecidable_not_a_fallthrough(self) -> None:
         # This device's own state while the shade is down: the focused *window* is a system window
-        # with no package in it, and the package is only on the line below. Stopping at the first
-        # line would report no foreground package for a device that is plainly showing an app.
+        # with no package in it. Reading the resumed activity from the line below would report the
+        # launcher as the surface in front while an overlay covers it, and `read_home_in_front`
+        # would then admit a window measured on the shade as a visible home-screen window.
         output = (
             "  mCurrentFocus=Window{39e680d u0 NotificationShade}\n"
             "  mFocusedApp=ActivityRecord{111535639 u0 com.sec.android.app.launcher/"
             ".activities.LauncherActivity t6685}\n"
         )
-        self.assertEqual("com.sec.android.app.launcher", self.read(output))
+        self.assertIsNone(self.read(output))
 
     def test_a_null_focus_reads_the_resumed_app(self) -> None:
         output = "  mCurrentFocus=null\n  mFocusedApp=ActivityRecord{1 u0 com.example.app/.Main t1}\n"
