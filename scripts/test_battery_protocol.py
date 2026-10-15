@@ -101,6 +101,16 @@ ON_BATTERY_POWER_LINES = (
 OVERSIZED_DIGITS = "9" * 5000
 
 
+# The same four fields with a charger on USB: the state that puts a window under the `cmd battery
+# unplug` override rather than leaving it on the device's own gauge.
+ON_CHARGER_POWER_LINES = (
+    "AC powered: false",
+    "USB powered: true",
+    "Wireless powered: false",
+    "Dock powered: false",
+)
+
+
 def recorder() -> subject.Recorder:
     """Return a recorder bound to a throwaway state directory, for the phases that persist to one."""
     return subject.Recorder(Path(tempfile.mkdtemp()))
@@ -215,7 +225,7 @@ class ClkTckProbeTest(unittest.TestCase):
             patch.object(subject, "arm_conditions", return_value={"wallpaper_component": "c", "median_luma": 0.0}),
             patch.object(subject, "run_window", return_value=(_window(cpu=1.0), (True,), (True,), (True,))),
             patch.object(subject, "undo_phase_changes", return_value=[]),
-            patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
+            patch.object(subject, "power_mode_for", return_value=subject.POWER_SOURCE_DEVICE),
         ):
             record = subject.phase_visible(device, arm=report.Arm.LIVE, baseline=None, minutes=1.0, recorder=recorder())
         self.assertEqual(250, record.values["clk_tck"])
@@ -606,8 +616,9 @@ class PowerSourceProbeTest(unittest.TestCase):
     def test_a_truncated_battery_dump_is_refused_before_the_mode_is_chosen(self) -> None:
         device = MagicMock()
         device.run_adb.return_value = b"  AC powered: false\n  USB powered: false\n"
-        with self.assertRaises(device_layer.ProbeError):
-            subject.apply_power_mode(device)
+        with patch.object(subject, "simulate_unplug") as unplug, self.assertRaises(device_layer.ProbeError):
+            subject.power_mode_for(device)
+        unplug.assert_not_called()
 
     def test_a_device_on_its_own_battery_is_not_put_under_the_override(self) -> None:
         device = MagicMock()
@@ -615,7 +626,8 @@ class PowerSourceProbeTest(unittest.TestCase):
             b"  AC powered: false\n  USB powered: false\n  Wireless powered: false\n  Dock powered: false\n"
         )
         with patch.object(subject, "simulate_unplug") as unplug:
-            mode = subject.apply_power_mode(device)
+            mode = subject.power_mode_for(device)
+            subject.apply_power_mode(device, mode)
         self.assertEqual(subject.POWER_SOURCE_DEVICE, mode)
         unplug.assert_not_called()
 
@@ -625,9 +637,31 @@ class PowerSourceProbeTest(unittest.TestCase):
             b"  AC powered: false\n  USB powered: true\n  Wireless powered: false\n  Dock powered: false\n"
         )
         with patch.object(subject, "simulate_unplug") as unplug:
-            mode = subject.apply_power_mode(device)
+            mode = subject.power_mode_for(device)
+            subject.apply_power_mode(device, mode)
         self.assertEqual(subject.POWER_SOURCE_SIMULATED, mode)
         unplug.assert_called_once()
+
+    def test_a_failed_unplug_still_marks_the_override_as_applied(self) -> None:
+        # `cmd battery unplug` is a mutating command, and a timeout or a dropped transport leaves the
+        # override on the device while the call raises. Deciding and applying are separate now, and the
+        # phase records the decision before the write, so the restore still resets — reading the flag
+        # back after the call would leave `simulated` False and skip the reset on a device that is
+        # still simulated.
+        device = self.device_on_the_home_screen()
+        with (
+            patch.object(subject, "DeviceStateSnapshot"),
+            patch.object(subject, "read_power_source_lines", return_value=ON_CHARGER_POWER_LINES),
+            patch.object(subject, "verify_arm"),
+            patch.object(subject, "arm_conditions", return_value={"wallpaper_component": "c", "median_luma": 0.0}),
+            patch.object(subject, "simulate_unplug", side_effect=subprocess.CalledProcessError(1, "unplug")),
+            patch.object(subject, "undo_phase_changes", return_value=[]) as undo,
+            contextlib.redirect_stdout(io.StringIO()),
+            self.assertRaises(subprocess.CalledProcessError),
+        ):
+            subject.phase_visible(device, arm=report.Arm.LIVE, baseline=None, minutes=1.0, recorder=recorder())
+        undo.assert_called_once()
+        self.assertTrue(undo.call_args.kwargs["simulated"])
 
     def device_on_the_home_screen(self) -> MagicMock:
         """Return a device that satisfies the home-screen guard, so a window can actually start."""
@@ -650,7 +684,7 @@ class PowerSourceProbeTest(unittest.TestCase):
             patch.object(subject, "arm_conditions", return_value={"wallpaper_component": "c", "median_luma": 0.0}),
             patch.object(subject, "run_window", return_value=(_window(cpu=1.0), (True,), (True, False), (True,))),
             patch.object(subject, "undo_phase_changes", return_value=[]),
-            patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
+            patch.object(subject, "power_mode_for", return_value=subject.POWER_SOURCE_DEVICE),
             self.assertRaises(device_layer.ProbeError) as raised,
         ):
             subject.phase_visible(device, arm=report.Arm.LIVE, baseline=None, minutes=1.0, recorder=recorder())
@@ -667,7 +701,7 @@ class PowerSourceProbeTest(unittest.TestCase):
                 subject, "run_window", return_value=(_window(cpu=1.0), (True, False), (True, True), (True, True))
             ),
             patch.object(subject, "undo_phase_changes", return_value=[]),
-            patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
+            patch.object(subject, "power_mode_for", return_value=subject.POWER_SOURCE_DEVICE),
             self.assertRaises(device_layer.ProbeError) as raised,
         ):
             subject.phase_visible(device, arm=report.Arm.LIVE, baseline=None, minutes=1.0, recorder=recorder())
@@ -689,7 +723,7 @@ class PowerSourceProbeTest(unittest.TestCase):
             patch.object(subject, "arm_conditions", return_value={"wallpaper_component": "c", "median_luma": 0.0}),
             patch.object(subject, "run_window", return_value=(gained, (True,), (True,), (True,))),
             patch.object(subject, "undo_phase_changes", return_value=[]),
-            patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
+            patch.object(subject, "power_mode_for", return_value=subject.POWER_SOURCE_DEVICE),
             self.assertRaises(device_layer.ProbeError) as raised,
         ):
             subject.phase_visible(device, arm=report.Arm.LIVE, baseline=None, minutes=1.0, recorder=recorder())
@@ -710,7 +744,7 @@ class PowerSourceProbeTest(unittest.TestCase):
             patch.object(subject, "take_battery_sample", side_effect=[sample, sample]),
             patch.object(subject, "run_window", return_value=(_window(cpu=1.0), (False, False), (False, True), [])),
             patch.object(subject, "undo_phase_changes", return_value=[]),
-            patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
+            patch.object(subject, "power_mode_for", return_value=subject.POWER_SOURCE_DEVICE),
             self.assertRaises(device_layer.ProbeError),
         ):
             subject.phase_hidden(device, minutes=1.0, recorder=recorder())
@@ -727,7 +761,7 @@ class PowerSourceProbeTest(unittest.TestCase):
             patch.object(subject, "take_battery_sample", side_effect=[sample, sample]),
             patch.object(subject, "sample_window_states", return_value=([True, True], [True, False], [True, True])),
             patch.object(subject, "undo_phase_changes", return_value=[]),
-            patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
+            patch.object(subject, "power_mode_for", return_value=subject.POWER_SOURCE_DEVICE),
             self.assertRaises(device_layer.ProbeError) as raised,
         ):
             subject.phase_memory(device, minutes=1.0, recorder=recorder())
@@ -994,7 +1028,7 @@ class VisiblePhaseGuardTest(unittest.TestCase):
             patch.object(subject, "arm_conditions", return_value={"wallpaper_component": "static", "median_luma": 0.0}),
             patch.object(subject, "run_window", return_value=(_window(cpu=1.0), (True,), (True,), (True,))),
             patch.object(subject, "undo_phase_changes", return_value=[]),
-            patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
+            patch.object(subject, "power_mode_for", return_value=subject.POWER_SOURCE_DEVICE),
         ):
             subject.phase_visible(
                 device, arm=report.Arm.BASELINE, baseline=report.Baseline.STOCK, minutes=1.0, recorder=recorder()
@@ -1052,7 +1086,7 @@ class AbortedRestoreTest(unittest.TestCase):
             patch.object(subject, "DeviceStateSnapshot"),
             patch.object(subject, "read_power_source_lines", return_value=ON_BATTERY_POWER_LINES),
             patch.object(subject, "verify_arm"),
-            patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
+            patch.object(subject, "power_mode_for", return_value=subject.POWER_SOURCE_DEVICE),
             patch.object(subject, "run_window", side_effect=device_layer.ProbeError("the window died")),
             patch.object(subject, "undo_phase_changes", return_value=["airplane_mode_on did not read back as 0"]),
             contextlib.redirect_stdout(io.StringIO()),
@@ -1078,7 +1112,7 @@ class AbortedRestoreTest(unittest.TestCase):
             patch.object(subject, "DeviceStateSnapshot"),
             patch.object(subject, "read_power_source_lines", return_value=ON_BATTERY_POWER_LINES),
             patch.object(subject, "verify_arm"),
-            patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
+            patch.object(subject, "power_mode_for", return_value=subject.POWER_SOURCE_DEVICE),
             patch.object(subject, "run_window", side_effect=device_layer.ProbeError("the window died")),
             patch.object(subject, "undo_phase_changes", return_value=[]),
             self.assertRaises(device_layer.ProbeError),
@@ -1101,7 +1135,7 @@ class AbortedRestoreTest(unittest.TestCase):
             patch.object(subject, "DeviceStateSnapshot"),
             patch.object(subject, "read_power_source_lines", return_value=ON_BATTERY_POWER_LINES),
             patch.object(subject, "verify_arm"),
-            patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
+            patch.object(subject, "power_mode_for", return_value=subject.POWER_SOURCE_DEVICE),
             patch.object(subject, "run_window", return_value=(_window(cpu=1.0), (True, True), (True, True), [])),
             patch.object(subject, "undo_phase_changes", return_value=["airplane_mode_on did not read back as 0"]),
             contextlib.redirect_stdout(io.StringIO()),
@@ -1129,7 +1163,7 @@ class AbortedRestoreTest(unittest.TestCase):
             patch.object(subject, "read_power_source_lines", return_value=ON_BATTERY_POWER_LINES),
             patch.object(subject, "verify_arm"),
             patch.object(subject, "arm_conditions", return_value={"wallpaper_component": "c", "median_luma": 0.0}),
-            patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
+            patch.object(subject, "power_mode_for", return_value=subject.POWER_SOURCE_DEVICE),
             patch.object(subject, "run_window", return_value=(_window(cpu=1.0), (True,), (True, False), (True,))),
             patch.object(subject, "undo_phase_changes", return_value=["screen_brightness did not read back as 128"]),
             contextlib.redirect_stdout(io.StringIO()),
@@ -1158,7 +1192,7 @@ class AbortedRestoreTest(unittest.TestCase):
             patch.object(subject, "DeviceStateSnapshot"),
             patch.object(subject, "read_power_source_lines", return_value=ON_BATTERY_POWER_LINES),
             patch.object(subject, "verify_arm"),
-            patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
+            patch.object(subject, "power_mode_for", return_value=subject.POWER_SOURCE_DEVICE),
             patch.object(subject, "take_battery_sample", side_effect=[unparsable, unparsable]),
             patch.object(subject, "sample_window_states", return_value=([True], [True], [True])),
             patch.object(subject, "undo_phase_changes", return_value=["the display could not be restored"]),
@@ -1196,7 +1230,7 @@ class MemoryPhaseTest(unittest.TestCase):
             patch.object(subject, "take_battery_sample", side_effect=[sample, sample]),
             patch.object(subject, "sample_window_states", return_value=([True, False], [True, True], [True, True])),
             patch.object(subject, "undo_phase_changes", return_value=[]),
-            patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
+            patch.object(subject, "power_mode_for", return_value=subject.POWER_SOURCE_DEVICE),
             self.assertRaises(device_layer.ProbeError),
         ):
             subject.phase_memory(device, minutes=1.0, recorder=recorder())
@@ -1221,7 +1255,7 @@ class MemoryPhaseTest(unittest.TestCase):
             patch.object(subject, "take_battery_sample", side_effect=[before, after]),
             patch.object(subject, "sample_window_states", return_value=([True], [True], [True])),
             patch.object(subject, "undo_phase_changes", return_value=[]),
-            patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
+            patch.object(subject, "power_mode_for", return_value=subject.POWER_SOURCE_DEVICE),
             contextlib.redirect_stdout(io.StringIO()),
         ):
             record = subject.phase_memory(device, minutes=30.0, recorder=recorder())
@@ -1247,7 +1281,7 @@ class HiddenPhaseTest(unittest.TestCase):
             patch.object(subject, "DeviceStateSnapshot"),
             patch.object(subject, "read_power_source_lines", return_value=ON_BATTERY_POWER_LINES),
             patch.object(subject, "verify_arm"),
-            patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
+            patch.object(subject, "power_mode_for", return_value=subject.POWER_SOURCE_DEVICE),
             patch.object(subject, "run_window", return_value=(_window(cpu=0.5), [False, False], [True, True], [])),
             patch.object(subject, "undo_phase_changes", return_value=[]),
             contextlib.redirect_stdout(io.StringIO()),
@@ -1267,7 +1301,7 @@ class HiddenPhaseTest(unittest.TestCase):
             patch.object(subject, "DeviceStateSnapshot"),
             patch.object(subject, "read_power_source_lines", return_value=ON_BATTERY_POWER_LINES),
             patch.object(subject, "verify_arm"),
-            patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
+            patch.object(subject, "power_mode_for", return_value=subject.POWER_SOURCE_DEVICE),
             patch.object(subject, "run_window", return_value=(_window(cpu=0.5), (False, True), (True, True), [])),
             patch.object(subject, "undo_phase_changes", return_value=[]),
             contextlib.redirect_stdout(io.StringIO()),

@@ -603,19 +603,27 @@ def device_on_own_battery(device: device_layer.AdbDevice) -> bool:
     return power_lines_show_battery(read_power_source_lines(device))
 
 
-def apply_power_mode(device: device_layer.AdbDevice) -> str:
+def power_mode_for(device: device_layer.AdbDevice) -> str:
     """
-    Put the device in the discharge state a window needs, and name the mode it is in.
+    Name the discharge state a window needs, reading the device without changing it.
 
     A device that is genuinely discharging already has the live fuel gauge this measurement wants,
     and `cmd battery unplug` would replace that with a frozen override — the very artefact the
-    simulation was invented to work around. The override is therefore applied only when the device
-    is on a charger, and the mode it chose is recorded in the window as part of its identity.
+    simulation was invented to work around. The override is therefore chosen only when the device is
+    on a charger, and the mode is recorded in the window as part of its identity.
+
+    Deciding is separate from applying because applying can fail *after* the device has obeyed: a
+    dropped transport or a timeout on `cmd battery unplug` leaves the override on the device while the
+    call raises. The caller records what this returned before anything is written, so the restore
+    knows a reset is owed even when the call that applied it came back with an error.
     """
-    if device_on_own_battery(device):
-        return POWER_SOURCE_DEVICE
-    simulate_unplug(device)
-    return POWER_SOURCE_SIMULATED
+    return POWER_SOURCE_DEVICE if device_on_own_battery(device) else POWER_SOURCE_SIMULATED
+
+
+def apply_power_mode(device: device_layer.AdbDevice, mode: str) -> None:
+    """Apply the mode `power_mode_for` named, which its caller has already recorded."""
+    if mode == POWER_SOURCE_SIMULATED:
+        simulate_unplug(device)
 
 
 def parse_battery_output(output: str) -> tuple[int, int, int]:
@@ -1568,8 +1576,12 @@ def phase_hidden(device: device_layer.AdbDevice, minutes: float, *, recorder: Re
             verify_arm(device, Arm.LIVE, None)
             pid = device.get_wallpaper_pid()
             snapshot.pin()
-            power_source = apply_power_mode(device)
+            # The decision is recorded before the override is applied: `cmd battery unplug` can take
+            # effect and still fail on the way back, and a restore that read the flag afterwards would
+            # skip the reset and leave the shared device simulated.
+            power_source = power_mode_for(device)
             simulated = power_source == POWER_SOURCE_SIMULATED
+            apply_power_mode(device, power_source)
             window, states, on_battery, _ = run_window(device, pid, minutes, screen_on=False, clk_tck=clk_tck)
         finally:
             problems = undo_phase_changes(device, snapshot, prior_power, simulated=simulated)
@@ -1629,8 +1641,12 @@ def phase_visible(
             conditions = arm_conditions(device, arm, baseline)
             print(f"arm guard admitted {conditions['wallpaper_component']} (median luma {conditions['median_luma']})")
             snapshot.pin()
-            power_source = apply_power_mode(device)
+            # The decision is recorded before the override is applied: `cmd battery unplug` can take
+            # effect and still fail on the way back, and a restore that read the flag afterwards would
+            # skip the reset and leave the shared device simulated.
+            power_source = power_mode_for(device)
             simulated = power_source == POWER_SOURCE_SIMULATED
+            apply_power_mode(device, power_source)
             window, states, on_battery, homes = run_window(device, pid, minutes, screen_on=True, clk_tck=clk_tck)
         finally:
             problems = undo_phase_changes(device, snapshot, prior_power, simulated=simulated)
@@ -1687,8 +1703,12 @@ def phase_memory(device: device_layer.AdbDevice, minutes: float, *, recorder: Re
             verify_arm(device, Arm.LIVE, None)
             pid = device.get_wallpaper_pid()
             snapshot.pin()
-            power_source = apply_power_mode(device)
+            # The decision is recorded before the override is applied: `cmd battery unplug` can take
+            # effect and still fail on the way back, and a restore that read the flag afterwards would
+            # skip the reset and leave the shared device simulated.
+            power_source = power_mode_for(device)
             simulated = power_source == POWER_SOURCE_SIMULATED
+            apply_power_mode(device, power_source)
             before = take_battery_sample(device, pid, clk_tck)
             seconds = minutes * 60.0
             states, on_battery, homes = sample_window_states(device, seconds, home_required=True)
