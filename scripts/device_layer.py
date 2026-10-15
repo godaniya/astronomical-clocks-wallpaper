@@ -68,8 +68,9 @@ KEYGUARD_SHOWING_PATTERN: Final = re.compile(r"\bisKeyguardShowing[ \t]*=[ \t]*(
 WALLPAPER_VISIBLE_PATTERN: Final = re.compile(r"\bmVisible=([^\s,;}]*)")
 # The two lines `dumpsys window` uses to name what is in front. Either may be absent or carry no
 # package: this device's Android 16 build prints `mCurrentFocus=Window{39e680d u0 NotificationShade}`
-# while the shade is down, which names a window and no package at all. They are read in this order
-# and the first one that yields a package wins.
+# while the shade is down, which names a window and no package at all. They are read in this order,
+# and `mCurrentFocus` is the answer whenever it names a window: `mFocusedApp` is consulted only when
+# no focused window is reported at all, never to fill a package into one that carries none.
 FOCUS_WINDOW_PATTERN: Final = re.compile(r"\bmCurrentFocus=Window\{[^}]*\}")
 FOCUSED_APP_PATTERN: Final = re.compile(r"\bmFocusedApp=ActivityRecord\{[^}]*\}")
 # The `package/class` token inside those bodies. The package is captured and the class is not,
@@ -171,6 +172,7 @@ MIN_SPLIT_FIELDS: Final = 2
 HOME_WALLPAPER_SECTION: Final = "mLastWallpaper state:"
 HOME_WALLPAPER_COMPONENT_FIELD: Final = "mInfo.component="
 LOCK_WALLPAPER_SECTION: Final = "mLastLockWallpaper state:"
+PER_FILE_WALLPAPER_SECTION: Final = "Wallpaper per-file components:"
 STATIC_WALLPAPER_COMPONENT_FIELD: Final = "mWallpaperComponent="
 
 
@@ -194,10 +196,11 @@ def read_wallpaper_component(serial: str | None = None) -> str:
     Return the home-screen wallpaper component from `dumpsys wallpaper`.
 
     The `mLastWallpaper` section names the live home component, and that read is bounded to its own
-    section because the lock slot that follows it reports the same field — reading past the boundary
-    would silently report the lock wallpaper. When nothing live is bound the home section has no
-    component at all, and the dump then falls back to the per-file components, where the first
-    `mWallpaperComponent` line is the home slot; that fallback is what a static baseline reports.
+    section: the lock slot that follows it reports the same field, and the per-file list beyond that
+    names components of its own, so reading past either boundary would silently report another slot's
+    component. When nothing live is bound the home section has no component at all, and the dump then
+    falls back to the per-file components, where the first `mWallpaperComponent` line is the home
+    slot; that fallback is what a static baseline reports.
 
     A field that is present but empty is skipped rather than returned. `mInfo.component=` with nothing
     after it parses to `""`, which `component_is_live` reports as not-live, so a truncated or reshaped
@@ -213,7 +216,7 @@ def read_wallpaper_component(serial: str | None = None) -> str:
             (
                 index
                 for index, line in enumerate(lines[section + 1 :], start=section + 1)
-                if line.strip() == LOCK_WALLPAPER_SECTION
+                if line.strip() in (LOCK_WALLPAPER_SECTION, PER_FILE_WALLPAPER_SECTION)
             ),
             len(lines),
         )
@@ -658,8 +661,13 @@ def read_home_in_front(serial: str) -> bool | None:
     `com.example.launcher/.activities.LauncherActivity` and to a different class on another build of
     the same launcher.
     """
-    foreground = read_foreground_package(serial)
+    # The `HOME` resolution is the more stable of the two and is read first, so the foreground
+    # snapshot that decides the answer is taken as late as possible and a switch away from home
+    # during the first round trip is less likely to be read as the state at this point. The two reads
+    # are still not atomic, so a caller measuring a window must verify the surface at the points it
+    # requires rather than trusting this one answer for the whole window.
     home = read_home_package(serial)
+    foreground = read_foreground_package(serial)
     if foreground is None or home is None:
         return None
     return foreground == home
@@ -667,7 +675,7 @@ def read_home_in_front(serial: str) -> bool | None:
 
 def read_installed_apk_sha256(serial: str) -> str | None:
     """
-    Read the SHA-256 of the installed APK from the device, or None when either step cannot answer.
+    Read the SHA-256 of the installed APK from the device, or None when the installed build is unnamed.
 
     Hashing the host checkout's build output was a different measurement from the one the window
     ran against: the APK on the device may be an older install, and the artifact is absent on a
@@ -675,8 +683,14 @@ def read_installed_apk_sha256(serial: str) -> str | None:
     standing in for an identity. Reading the installed file is what the identity field claims.
 
     `pm path` lists the split APKs of the package, and `base.apk` is the one whose digest identifies
-    the build. Neither step is allowed to fall back to a zero: a package that is not installed and a
-    device without `sha256sum` are both refusals.
+    the build. Neither step is allowed to fall back to a zero, so None is returned when there is no
+    installed build to name: the listing carries no `base.apk`, the shell cannot find `sha256sum`, or
+    the answer's first token is not a digest.
+
+    A step that *failed* is a different reading and does not return None. A `pm path` that exits
+    non-zero, a `sha256sum` that exits with anything other than the shell's command-not-found, and a
+    transport that drops all propagate `CalledProcessError`, so a caller cannot mistake a probe that
+    failed for a device that has no installed build.
     """
     paths = run_adb(["shell", "pm", "path", PACKAGE_NAME], serial=serial).decode("utf-8", errors="replace")
     base_apk = next(

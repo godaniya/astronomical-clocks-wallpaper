@@ -1124,6 +1124,23 @@ class WallpaperComponentParsingTest(unittest.TestCase):
         )
         self.assertEqual(self.STATIC, self.read(dump))
 
+    def test_the_home_scan_stops_at_the_per_file_components(self) -> None:
+        # With no lock section to bound it the home scan would run to the end of the dump, where a
+        # later `mInfo.component=` — another slot's, or a reshaped per-file entry's — would be
+        # reported as the home component and admit a window against an arm the device is not in. The
+        # per-file header bounds it the way the lock header does, so the static fallback still wins.
+        dump = (
+            "System wallpaper state:\n"
+            "  mLastWallpaper state:\n"
+            "    mName=ImageWallpaper\n"
+            "Wallpaper per-file components:\n"
+            "  Wallpaper #0:\n"
+            f"    mWallpaperComponent={self.STATIC}\n"
+            "  Wallpaper #1:\n"
+            f"    mInfo.component={self.LOCK}\n"
+        )
+        self.assertEqual(self.STATIC, self.read(dump))
+
     def test_the_static_fallback_reports_the_first_per_file_component(self) -> None:
         # With nothing live bound the home section carries no component, and the per-file list is what
         # names the static wallpaper a baseline arm is recorded against.
@@ -2873,6 +2890,17 @@ class ForegroundProbeTest(unittest.TestCase):
 
     def test_home_in_front_is_undecidable_when_the_home_package_cannot_be_resolved(self) -> None:
         self.assertIs(self.read_home_in_front("Window{1 u0 com.example.app/.Main}", ""), None)
+
+    def test_the_stable_home_read_is_taken_before_the_foreground_snapshot(self) -> None:
+        # The ordering is the point of the fix: resolving `HOME` first leaves the foreground read as
+        # late as possible before the comparison, narrowing the window in which a switch away from
+        # home could be read as the state now. Later rounds must not put the snapshot back in front.
+        with patch.object(device_layer, "run_adb", return_value=b"  mCurrentFocus=null\n") as run_adb:
+            device_layer.read_home_in_front("device")
+        self.assertEqual(
+            [call.args[0][:2] for call in run_adb.call_args_list],
+            [["shell", "cmd"], ["shell", "dumpsys"]],
+        )
 
 
 class InstalledApkDigestTest(unittest.TestCase):
