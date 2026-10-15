@@ -1076,22 +1076,42 @@ class SharedDeviceLayerTest(unittest.TestCase):
 class WallpaperComponentParsingTest(unittest.TestCase):
     """The arm-critical `dumpsys wallpaper` read, parsed directly rather than through a mock."""
 
-    LIVE = (
-        "ComponentInfo{io.github.godaniya.astronomicalclockswallpaper.debug/"
-        "io.github.godaniya.astronomicalclockswallpaper.AstronomicalClocksWallpaperService}"
-    )
-    LOCK = "ComponentInfo{com.example.lock/com.example.LockWallpaper}"
-    STATIC = "ComponentInfo{com.android.systemui/com.android.systemui.wallpapers.ImageWallpaper}"
+    # The read's expected values are the identifiers the harness itself names — `SERVICE_NAME` and
+    # `PLATFORM_STATIC_WALLPAPER` — while the dump prints each of them inside a `ComponentInfo{}`
+    # wrapper. The two must be equal for an arm check to compare a reading against a named component
+    # at all, so the parser strips the wrapper and these fixtures keep both forms apart on purpose.
+    LIVE = device_layer.SERVICE_NAME
+    LOCK = "com.example.lock/com.example.LockWallpaper"
+    STATIC = device_layer.PLATFORM_STATIC_WALLPAPER
+
+    def wrapped(self, component: str) -> str:
+        """Return a component as `dumpsys wallpaper` prints it, inside the `ComponentInfo{}` wrapper."""
+        return f"ComponentInfo{{{component}}}"
 
     def read(self, output: str) -> str:
         """Parse a wallpaper dump through the real parser."""
         with patch.object(device_layer, "run_adb", return_value=output.encode()):
             return device_layer.read_wallpaper_component("device")
 
+    def test_the_component_wrapper_is_stripped(self) -> None:
+        # The normalization the arm check rests on, and the one case it must not admit: a wrapper with
+        # nothing inside it names no component, so it normalizes to the empty string the parser skips
+        # rather than to a component with no name in it.
+        cases = (
+            ("ComponentInfo{com.example.app/.Main}", "com.example.app/.Main"),
+            ("com.example.app/.Main", "com.example.app/.Main"),
+            ("  ComponentInfo{com.example.app/.Main}  ", "com.example.app/.Main"),
+            ("ComponentInfo{}", ""),
+            ("", ""),
+        )
+        for value, expected in cases:
+            with self.subTest(value=value):
+                self.assertEqual(expected, device_layer.component_identifier(value))
+
     def test_the_device_forwards_the_readback(self) -> None:
         # The follow-on arm check reads through `AdbDevice` as every other probe in the harness does,
         # so the parser is reachable as a method and not only as a module function.
-        dump = f"  mLastWallpaper state:\n    mInfo.component={self.LIVE}\n"
+        dump = f"  mLastWallpaper state:\n    mInfo.component={self.wrapped(self.LIVE)}\n"
         with patch.object(device_layer, "run_adb", return_value=dump.encode()):
             self.assertEqual(self.LIVE, device_layer.AdbDevice("device").read_wallpaper_component())
 
@@ -1101,9 +1121,9 @@ class WallpaperComponentParsingTest(unittest.TestCase):
             "  mLastWallpaper state:\n"
             "    mName=null\n"
             "    mWallpaperId=57\n"
-            f"    mInfo.component={self.LIVE}\n"
+            f"    mInfo.component={self.wrapped(self.LIVE)}\n"
             "  mLastLockWallpaper state:\n"
-            f"    mInfo.component={self.LOCK}\n"
+            f"    mInfo.component={self.wrapped(self.LOCK)}\n"
         )
         self.assertEqual(self.LIVE, self.read(dump))
 
@@ -1117,10 +1137,10 @@ class WallpaperComponentParsingTest(unittest.TestCase):
             "    mName=ImageWallpaper\n"
             "    mWallpaperId=57\n"
             "  mLastLockWallpaper state:\n"
-            f"    mInfo.component={self.LOCK}\n"
+            f"    mInfo.component={self.wrapped(self.LOCK)}\n"
             "Wallpaper per-file components:\n"
             "  Wallpaper #0:\n"
-            f"    mWallpaperComponent={self.STATIC}\n"
+            f"    mWallpaperComponent={self.wrapped(self.STATIC)}\n"
         )
         self.assertEqual(self.STATIC, self.read(dump))
 
@@ -1135,9 +1155,9 @@ class WallpaperComponentParsingTest(unittest.TestCase):
             "    mName=ImageWallpaper\n"
             "Wallpaper per-file components:\n"
             "  Wallpaper #0:\n"
-            f"    mWallpaperComponent={self.STATIC}\n"
+            f"    mWallpaperComponent={self.wrapped(self.STATIC)}\n"
             "  Wallpaper #1:\n"
-            f"    mInfo.component={self.LOCK}\n"
+            f"    mInfo.component={self.wrapped(self.LOCK)}\n"
         )
         self.assertEqual(self.STATIC, self.read(dump))
 
@@ -1150,9 +1170,9 @@ class WallpaperComponentParsingTest(unittest.TestCase):
             "    mName=ImageWallpaper\n"
             "Wallpaper per-file components:\n"
             "  Wallpaper #0:\n"
-            f"    mWallpaperComponent={self.STATIC}\n"
+            f"    mWallpaperComponent={self.wrapped(self.STATIC)}\n"
             "  Wallpaper #1:\n"
-            f"    mWallpaperComponent={self.LOCK}\n"
+            f"    mWallpaperComponent={self.wrapped(self.LOCK)}\n"
         )
         self.assertEqual(self.STATIC, self.read(dump))
 
@@ -1191,7 +1211,7 @@ class WallpaperComponentParsingTest(unittest.TestCase):
             "    mInfo.component=\n"
             "Wallpaper per-file components:\n"
             "  Wallpaper #0:\n"
-            f"    mWallpaperComponent={self.STATIC}\n"
+            f"    mWallpaperComponent={self.wrapped(self.STATIC)}\n"
         )
         self.assertEqual(self.STATIC, self.read(dump))
 

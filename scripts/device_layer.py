@@ -174,6 +174,10 @@ HOME_WALLPAPER_COMPONENT_FIELD: Final = "mInfo.component="
 LOCK_WALLPAPER_SECTION: Final = "mLastLockWallpaper state:"
 PER_FILE_WALLPAPER_SECTION: Final = "Wallpaper per-file components:"
 STATIC_WALLPAPER_COMPONENT_FIELD: Final = "mWallpaperComponent="
+# The dump prints a component as `ComponentInfo{package/class}`, while the identifiers this harness
+# compares against — `SERVICE_NAME` and `PLATFORM_STATIC_WALLPAPER` — are written without the wrapper,
+# as `am` and `dumpsys activity service` take them.
+COMPONENT_INFO_WRAPPER: Final = re.compile(r"^ComponentInfo\{(.*)\}$")
 
 
 class ScreencapError(RuntimeError):
@@ -191,9 +195,28 @@ def component_value(line: str, field: str) -> str:
     return line.split(field, 1)[1].strip()
 
 
+def component_identifier(value: str) -> str:
+    """
+    Return the `package/class` identifier a wallpaper dump's component field carries.
+
+    The field holds `ComponentInfo{package/class}`, and stripping the wrapper is what makes the
+    reading comparable to the identifiers this harness names: `SERVICE_NAME` and
+    `PLATFORM_STATIC_WALLPAPER` are written unwrapped, as `am` and `dumpsys activity service` take
+    them, so an arm check comparing this reading against either name would otherwise reject both.
+    Normalizing here keeps that to one representation, at the single place that knows the dump's
+    format.
+
+    A value that carries no wrapper is returned trimmed, and `ComponentInfo{}` normalizes to the
+    empty string so that the caller's emptiness check refuses it rather than admitting a component
+    with no name in it.
+    """
+    match = COMPONENT_INFO_WRAPPER.match(value.strip())
+    return captured_text(match, 1) if match is not None else value.strip()
+
+
 def read_wallpaper_component(serial: str | None = None) -> str:
     """
-    Return the home-screen wallpaper component from `dumpsys wallpaper`.
+    Return the home-screen wallpaper component from `dumpsys wallpaper`, as `package/class`.
 
     The `mLastWallpaper` section names the live home component, and that read is bounded to its own
     section: the lock slot that follows it reports the same field, and the per-file list beyond that
@@ -201,6 +224,11 @@ def read_wallpaper_component(serial: str | None = None) -> str:
     component. When nothing live is bound the home section has no component at all, and the dump then
     falls back to the per-file components, where the first `mWallpaperComponent` line is the home
     slot; that fallback is what a static baseline reports.
+
+    The dump wraps both fields as `ComponentInfo{package/class}`, and the wrapper is stripped by
+    `component_identifier` so the reading is directly comparable to `SERVICE_NAME` and
+    `PLATFORM_STATIC_WALLPAPER`, which are written unwrapped. A caller that compares this value to a
+    component it named itself therefore compares like with like.
 
     A field that is present but empty is skipped rather than returned. `mInfo.component=` with nothing
     after it parses to `""`, which `component_is_live` reports as not-live, so a truncated or reshaped
@@ -221,11 +249,11 @@ def read_wallpaper_component(serial: str | None = None) -> str:
             len(lines),
         )
         for line in lines[section + 1 : boundary]:
-            value = component_value(line, HOME_WALLPAPER_COMPONENT_FIELD)
+            value = component_identifier(component_value(line, HOME_WALLPAPER_COMPONENT_FIELD))
             if value:
                 return value
     for line in lines:
-        value = component_value(line, STATIC_WALLPAPER_COMPONENT_FIELD)
+        value = component_identifier(component_value(line, STATIC_WALLPAPER_COMPONENT_FIELD))
         if value:
             return value
     detail = "dumpsys wallpaper reported no home-screen wallpaper component"
