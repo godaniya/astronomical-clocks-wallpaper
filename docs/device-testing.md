@@ -194,8 +194,9 @@ Host tests in `WallpaperLayoutTabletTest`, `WallpaperTabletRenderTest`, and `Set
    leaving balanced letterbox margins along the larger dimension and avoiding rim clipping across
    2560x1600 (16:10 landscape), 2048x1536 (4:3 landscape), 1600x2560 (10:16 portrait), and
    2208x1768 (unfolded near-square). Native graphics mode in `WallpaperTabletRenderTest` renders onto real
-   Bitmaps across all candidate aspect ratios, validating layer compositions and confirming background pixel
-   purity on margins with zero rim clipping.
+   Bitmaps across all candidate aspect ratios, validating independent layer compositions (isolated zodiac
+   ring, moon marker, and sun marker against constant plate shading) and confirming full-perimeter background
+   pixel purity across all four screen edges with zero rim clipping.
 2. **Display settings extremes**: Size (50% to 115%) and horizontal/vertical placement (0% to 100%)
    remain strictly within screen bounds across all tablet and foldable aspect ratios.
 3. **Dynamic fold/unfold transitions**: Dynamic surface recreation via `onSurfaceChanged` between
