@@ -400,6 +400,36 @@ class ReportTest(unittest.TestCase):
         self.assertFalse(any(line.startswith("B5 visible CPU") and "NOT MEASURED" in line for line in lines))
         self.assertTrue(any(line.startswith("B5 visible CPU (mean)") and "FAIL" in line for line in lines))
 
+    def test_b5_weights_each_window_by_its_length(self) -> None:
+        # B5 is a rate — CPU at 1 Hz over at least 15 minutes — so the aggregate has to estimate one.
+        # Three 15-minute windows at 1% of one core beside one 60-minute window at 8% is 2.75% counted
+        # per window, which passed the 3% budget, and 5% over the time the readings came from, which is
+        # what the device was doing across the run.
+        records = [visible_record("A", 1000.0, cpu=1.0, duration=900.0) for _ in range(3)]
+        records.append(visible_record("A", 1000.0, cpu=8.0, duration=3600.0))
+        mean = next(line for line in self.lines(records) if line.startswith("B5 visible CPU (mean)"))
+        self.assertIn("FAIL", mean)
+        self.assertIn("5.0000%", mean)
+
+    def test_b5_is_unchanged_when_every_window_is_the_same_length(self) -> None:
+        # The weighting exists for the windows whose lengths differ, not to move the ordinary case: a
+        # run whose windows all ran their documented length must report exactly what it reported
+        # before, since that equal-length shape is the one the committed threshold was derived from.
+        records = [visible_record("A", 1000.0, cpu=1.0, duration=900.0) for _ in range(4)]
+        lines = self.lines(records)
+        self.assertTrue(any(line.startswith("B5 visible CPU (mean)") and "PASS — 1.0000%" in line for line in lines))
+
+    def test_an_unreadable_cpu_reading_is_not_reported_as_no_live_window(self) -> None:
+        # Two verdicts for one criterion used to be emitted: the refusal naming the reading, and then
+        # the absence message, which says no live window was recorded over a file that recorded one.
+        # The second contradicts the input, and it is the line a reader would take as the reason.
+        records = pairs(4, 1000.0, 1000.0, cpu=1.0)
+        records[0]["cpu_pct"] = float("-inf")
+        lines = [line for line in self.lines(records) if line.startswith("B5 visible CPU")]
+        self.assertEqual(1, len(lines))
+        self.assertIn("not finite", lines[0])
+        self.assertNotIn("no live window was recorded", lines[0])
+
     def test_a_boolean_discharge_rate_leaves_b4_unmeasured(self) -> None:
         # `True` is an `int`, so it passed the reader's `isinstance` and, being neither negative nor
         # non-finite to a comparison, produced a numeric comparison out of `true` in both arms: four
@@ -590,6 +620,50 @@ class BaselineLabelTest(unittest.TestCase):
         with self.assertRaises(device_layer.ProbeError) as raised:
             report.report_lines(records)
         self.assertIn("baseline", str(raised.exception))
+
+
+class PilotFlagTest(unittest.TestCase):
+    """
+    Finding: a `pilot` flag that is not a boolean is truthy, so it files the record as calibration.
+
+    Both selectors filter on truthiness, and `"false"` is a truthy string in Python. Four live windows
+    at 1% of one core beside four at 10% reported B5 PASS at 1% when the hot four carried one, and the
+    same flag on a failing pair removed it from the alternation: with a complete record set and the
+    black baseline declared device-limited, the report exited 0 over a live arm recording 9000 uA
+    against a 1000 uA baseline.
+    """
+
+    def test_a_non_boolean_pilot_flag_is_refused(self) -> None:
+        # `0` and `null` are not booleans either. The flag is written as a boolean by the phase that
+        # writes it at all, so a value that is not one is a corrupt record rather than a third way of
+        # saying "not a pilot".
+        for value in ("false", 0, None):
+            with self.subTest(pilot=value):
+                records = [visible_record("A", 1000.0, cpu=1.0) for _ in range(4)]
+                hot = [visible_record("A", 1000.0, cpu=10.0) for _ in range(4)]
+                for record in hot:
+                    record["pilot"] = value
+                with self.assertRaises(device_layer.ProbeError) as raised:
+                    report.report_lines(records + hot)
+                self.assertIn("pilot", str(raised.exception))
+
+    def test_a_non_boolean_pilot_flag_hides_no_b4_pair(self) -> None:
+        failing = pairs(1, 9000.0, 1000.0, cpu=1.0)
+        for record in failing:
+            record["pilot"] = "false"
+        with self.assertRaises(device_layer.ProbeError) as raised:
+            report.report_lines(pairs(4, 1000.0, 1000.0, cpu=1.0) + failing)
+        self.assertIn("pilot", str(raised.exception))
+
+    def test_an_absent_pilot_flag_is_not_a_pilot(self) -> None:
+        # The visible phase does not write the flag at all — only the pilot phase does — so a record
+        # that does not carry it is an ordinary measurement, and the refusal must not reach it.
+        records = pairs(4, 1000.0, 1000.0, cpu=1.0)
+        for record in records:
+            del record["pilot"]
+        lines = [verdict.line for verdict in report.report_lines(records)]
+        self.assertTrue(any(line.startswith("B4 vs stock point estimate") and "PASS" in line for line in lines))
+        self.assertTrue(any(line.startswith("B5 visible CPU (mean)") and "PASS" in line for line in lines))
 
 
 class AlarmBudgetWordingTest(unittest.TestCase):

@@ -354,6 +354,27 @@ def numeric_values(
     return values
 
 
+def is_pilot(record: Mapping[str, object]) -> bool:
+    """
+    Return whether a visible record is a pilot window, refusing a `pilot` flag that is not a boolean.
+
+    A record that does not carry the flag is a measurement. The flag is written by the pilot phase and
+    not by the visible phase, so an absent key is the ordinary shape of a visible record rather than a
+    revision that had nothing to record, and it means "not a pilot". A record that carries the flag
+    with anything but a boolean is refused, because both selectors below filter on truthiness and
+    `"false"` is a truthy string in Python: a hot live window carrying one would be filed as
+    calibration and dropped from B4 and B5 alike, and a failing pair carrying one would leave the
+    report exiting zero over measurements it never judged.
+    """
+    if "pilot" not in record:
+        return False
+    pilot = record["pilot"]
+    if not isinstance(pilot, bool):
+        detail = f"a {record.get('phase')!r} record carries pilot={pilot!r}, which is not a boolean"
+        raise device_layer.ProbeError(detail)
+    return pilot
+
+
 def alternation_pairs(
     records: Sequence[Mapping[str, object]],
 ) -> list[tuple[Mapping[str, object], Mapping[str, object]]]:
@@ -363,9 +384,10 @@ def alternation_pairs(
     Pairing the nth baseline window with the nth live window by file order would silently pair
     windows that were not taken under the same conditions; the sequence has to be an alternation
     before that pairing means anything. Pilot windows are excluded: they are the calibration, not
-    the comparison.
+    the comparison, and `is_pilot` is what decides that — a flag that is not a boolean is refused
+    there rather than read as one.
     """
-    sequence = [record for record in records if record.get("phase") == "visible" and not record.get("pilot")]
+    sequence = [record for record in records if record.get("phase") == "visible" and not is_pilot(record)]
     if not sequence:
         return []
     arms = [str(record.get("arm")) for record in sequence]
@@ -419,27 +441,66 @@ def live_windows(records: Sequence[Mapping[str, object]]) -> list[Mapping[str, o
     return [
         record
         for record in records
-        if record.get("phase") == "visible" and not record.get("pilot") and record.get("arm") == Arm.LIVE.value
+        if record.get("phase") == "visible" and not is_pilot(record) and record.get("arm") == Arm.LIVE.value
     ]
 
 
-def live_cpu_values(windows: Sequence[Mapping[str, object]]) -> list[float]:
+@dataclass(frozen=True)
+class CpuSample:
+    """One live window's CPU reading, with the length of time that reading was averaged over."""
+
+    cpu_pct: float
+    duration_seconds: float
+
+
+def live_cpu_values(windows: Sequence[Mapping[str, object]]) -> list[CpuSample]:
     """
-    Collect the CPU readings of the qualifying live windows, refusing an unreadable one.
+    Collect each qualifying live window's CPU reading together with the window it was measured over.
+
+    The window's length travels with the reading because B5 is a rate and the windows need not be the
+    same length: the pilot's own four recorded windows ran 918.7 s, 919.8 s, 917.8 s and 914.7 s, and
+    a run may ask for a different `--minutes` per window. `duration_weighted_mean` is what turns the
+    samples back into the share of one core the budget is stated in.
 
     A percentage of one core cannot be negative, so this reader asks `finite_number` for that refusal
     too. The case that matters most here is the non-finite one: `-inf` satisfies an `isinstance`
     check and sorts below the budget, so three real readings beside one `-inf` used to average to a
     pass over a reading nothing measured.
     """
-    values: list[float] = []
+    samples: list[CpuSample] = []
     for window in windows:
         cpu = window.get("cpu_pct")
         if cpu is None:
             detail = "a live window recorded no CPU reading, so B5 has no input"
             raise device_layer.ProbeError(detail)
-        values.append(finite_number(cpu, what="a live window's `cpu_pct`", non_negative=True))
-    return values
+        duration = window.get("duration_seconds")
+        if duration is None:
+            detail = "a live window recorded no `duration_seconds`, so its CPU reading cannot be weighed"
+            raise device_layer.ProbeError(detail)
+        samples.append(
+            CpuSample(
+                cpu_pct=finite_number(cpu, what="a live window's `cpu_pct`", non_negative=True),
+                duration_seconds=finite_number(duration, what="a live window's `duration_seconds`", non_negative=True),
+            )
+        )
+    return samples
+
+
+def duration_weighted_mean(samples: Sequence[CpuSample]) -> float:
+    """
+    Return the share of one core the live windows were used at, each reading weighted by its window.
+
+    A mean over the windows counts a 60-minute window the same as a 15-minute one, which is not the
+    quantity the budget is stated in: three 15-minute windows at 1% beside one 60-minute window at 8%
+    is 2.75% counted per window and 5% over the time the readings came from. The criterion is a rate —
+    CPU at 1 Hz over at least 15 minutes — so the aggregate has to be the one that estimates a rate
+    from windows of different lengths, and the unweighted mean does not.
+    """
+    total_seconds = sum(sample.duration_seconds for sample in samples)
+    if total_seconds <= 0.0:
+        detail = "the live windows add up to no measured time, so B5 has no rate to average"
+        raise device_layer.ProbeError(detail)
+    return sum(sample.cpu_pct * sample.duration_seconds for sample in samples) / total_seconds
 
 
 def check_measurement_identity(records: Sequence[Mapping[str, object]]) -> None:
@@ -722,27 +783,11 @@ def report_lines(records: Sequence[Mapping[str, object]], *, black_unavailable: 
 
     verdicts.extend(b4_baseline_verdicts(pairs, black_unavailable=black_unavailable))
 
-    # B5 is the average visible CPU of the document's matrix, so the average is what is checked; the
-    # worst window is reported beside it as the observation it is.
-    try:
-        cpu_values = live_cpu_values(live_windows(measured))
-    except device_layer.ProbeError as error:
-        verdicts.append(
-            Verdict("B5 visible CPU", VerdictStatus.NOT_MEASURED, f"B5 visible CPU: NOT MEASURED - {error}")
-        )
-        cpu_values = []
-    if cpu_values:
-        verdicts.append(
-            check_budget("B5 visible CPU (mean)", sum(cpu_values) / len(cpu_values), FINAL_MAX_VISIBLE_CPU_PCT, "%")
-        )
-        verdicts.append(
-            Verdict(
-                "B5 worst window",
-                VerdictStatus.INFO,
-                f"B5 worst window observed: {max(cpu_values):.4f}% over {len(cpu_values)} windows",
-            )
-        )
-    else:
+    # B5 is the average visible CPU of the document's matrix, so the average is what is checked — one
+    # line per outcome, so an unreadable reading and an absent window cannot both be reported as the
+    # reason B5 has no verdict. The worst window is reported beside the mean as the observation it is.
+    windows = live_windows(measured)
+    if not windows:
         verdicts.append(
             Verdict(
                 "B5 visible CPU",
@@ -750,6 +795,24 @@ def report_lines(records: Sequence[Mapping[str, object]], *, black_unavailable: 
                 "B5 visible CPU: NOT MEASURED - no live window was recorded",
             )
         )
+    else:
+        try:
+            samples = live_cpu_values(windows)
+            mean_cpu_pct = duration_weighted_mean(samples)
+        except device_layer.ProbeError as error:
+            verdicts.append(
+                Verdict("B5 visible CPU", VerdictStatus.NOT_MEASURED, f"B5 visible CPU: NOT MEASURED - {error}")
+            )
+        else:
+            verdicts.append(check_budget("B5 visible CPU (mean)", mean_cpu_pct, FINAL_MAX_VISIBLE_CPU_PCT, "%"))
+            verdicts.append(
+                Verdict(
+                    "B5 worst window",
+                    VerdictStatus.INFO,
+                    f"B5 worst window observed: {max(sample.cpu_pct for sample in samples):.4f}% "
+                    f"over {len(samples)} windows",
+                )
+            )
 
     # B6's growth is signed on purpose — memory can shrink over a window, and a negative growth is the
     # best result the criterion can have — so this reader is the one that does not ask for the
