@@ -157,6 +157,12 @@ COMMAND_TIMEOUT_SECONDS: Final = 60
 # through, and it is also about two billion years of thirty-second samples on a device the project
 # treats as a shared resource. Progress is necessary and not sufficient, so there is a maximum.
 MAXIMUM_WINDOW_MINUTES: Final = 24 * 60.0
+# The most windows the pilot will run, for the same reason and on the same terms. A noise floor is
+# defined from `MIN_PAIRED_SAMPLES` windows and the recorded passes took four and six; this is four times
+# the largest of them, which at the shortest window is six hours on the device. Like the bound above it
+# is not a claim about a useful pilot — it is what keeps the phase bounded, since `--runs 1000000000` is
+# otherwise fifteen billion minutes of windows, with the rates and CPU lists growing alongside them.
+MAXIMUM_PILOT_RUNS: Final = 24
 
 PROC_STAT_UTIME_INDEX: Final = 11
 PROC_STAT_INDEX_STIME: Final = 12
@@ -1890,8 +1896,14 @@ def positive_int(raw: str) -> int:
     return value
 
 
-def positive_int_at_least(minimum: int) -> Callable[[str], int]:
-    """Build a count parser that refuses a value below the minimum the phase can use."""
+def positive_int_between(minimum: int, maximum: int) -> Callable[[str], int]:
+    """
+    Build a count parser that refuses a value outside the range the phase can use.
+
+    Both ends are the same rule stated twice: a count the phase cannot make a measurement from is
+    refused before the device work rather than after it. The lower bound is what a noise floor needs,
+    and the upper one is what a phase will hold the device for.
+    """
 
     def parse_count(raw: str) -> int:
         value = positive_int(raw)
@@ -1899,6 +1911,13 @@ def positive_int_at_least(minimum: int) -> Callable[[str], int]:
             message = (
                 f"{raw} windows is below the {minimum} a noise floor needs, so the run would measure "
                 "no floor at all; the refusal is here rather than after the windows have been run"
+            )
+            raise argparse.ArgumentTypeError(message)
+        if value > maximum:
+            message = (
+                f"{raw} windows is more than the {maximum} a pilot will hold the device for; a noise "
+                "floor does not need that many, and the phase would still be opening windows long "
+                "after the floor was established"
             )
             raise argparse.ArgumentTypeError(message)
         return value
@@ -1931,9 +1950,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
     add_window_arguments(pilot, MINIMUM_WINDOW_MINUTES)
     pilot.add_argument(
         "--runs",
-        type=positive_int_at_least(MIN_PAIRED_SAMPLES),
+        type=positive_int_between(MIN_PAIRED_SAMPLES, MAXIMUM_PILOT_RUNS),
         default=MIN_PAIRED_SAMPLES,
-        help=f"Windows to run (at least {MIN_PAIRED_SAMPLES}, which is what a noise floor needs)",
+        help=(
+            f"Windows to run (between {MIN_PAIRED_SAMPLES}, which is what a noise floor needs, and "
+            f"{MAXIMUM_PILOT_RUNS}, which is what the device will be held for)"
+        ),
     )
 
     memory = subcommands.add_parser("memory", help="B6: total-PSS growth over a long window")

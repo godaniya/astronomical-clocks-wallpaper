@@ -1957,6 +1957,16 @@ class DurationArgumentTest(unittest.TestCase):
         self.assertEqual(4, self.parse("pilot", "--arm", "A").runs)
         self.assertEqual(5, self.parse("pilot", "--arm", "A", "--runs", "5").runs)
 
+    def test_the_pilot_refuses_more_runs_than_a_phase_will_hold_the_device_for(self) -> None:
+        # The lower bound was the only one, so `--runs 1000000000` was accepted and bought one billion
+        # fifteen-minute windows — fifteen billion minutes on a device the project treats as a shared
+        # resource, with the rate and CPU lists growing beside them. Same rule as the window bound, at
+        # the other end.
+        for runs in ("25", "1000000000"):
+            with self.subTest(runs=runs):
+                self.parse_refusing("pilot", "--arm", "A", "--runs", runs)
+        self.assertEqual(24, self.parse("pilot", "--arm", "A", "--runs", "24").runs)
+
     def test_a_longer_window_is_still_offered(self) -> None:
         # The minimum is a floor, not a fixed length: a longer window is a legitimate measurement.
         self.assertEqual(45.0, self.parse("memory", "--minutes", "45").minutes)
