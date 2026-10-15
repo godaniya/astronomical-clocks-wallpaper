@@ -293,7 +293,42 @@ def two_sigma_noise_floor(values: Sequence[float]) -> tuple[float, float, float]
     return mean, deviation, 2.0 * deviation
 
 
-def numeric_values(records: Sequence[Mapping[str, object]], phase: str, key: str) -> list[float]:
+def finite_number(value: object, *, what: str, non_negative: bool = False) -> float:
+    """
+    Return one recorded field as a float, refusing a value that cannot be a measurement of it.
+
+    Every reader in this module reads numbers out of a state file it did not write, and every one of
+    them has to refuse the same things. Four of them used to hand-roll a partially overlapping guard
+    of their own, and three of those were weaker than the others, so the rule lives here instead —
+    one place that can be read, tested, and cannot drift from itself.
+
+    `bool` is refused first because it is an `int` in Python: `"wake_locks": true` would otherwise
+    read as one lock, and `"discharge_rate_ua": true` as a 1 uA rate. A non-number is refused because
+    there is no measurement in it. A non-finite value is refused because it is the dangerous kind of
+    wrong rather than merely absent: `-inf` sorts below every budget, so it passes a maximum-is-zero
+    check it never measured, and `nan` is not above anything.
+
+    `non_negative` is off by default and has to be asked for at each call site, because a signed
+    quantity is the commoner case here: B6's PSS growth is signed because memory can legitimately
+    shrink, and B4's verdict is a relative increase that may legitimately be negative. Only a field
+    that cannot go below zero — a wake-lock count, a percentage of one core — asks for the refusal,
+    so leaving it off is the default an unsigned caller gets by saying nothing.
+    """
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        detail = f"{what} is {value!r}, which is not a number, so it cannot be read as a measurement"
+        raise device_layer.ProbeError(detail)
+    if not math.isfinite(value):
+        detail = f"{what} is {value!r}, which is not finite, so it cannot be read as a measurement"
+        raise device_layer.ProbeError(detail)
+    if non_negative and value < 0:
+        detail = f"{what} is {value!r}, which is negative, and this field cannot be below zero"
+        raise device_layer.ProbeError(detail)
+    return float(value)
+
+
+def numeric_values(
+    records: Sequence[Mapping[str, object]], phase: str, key: str, *, non_negative: bool = False
+) -> list[float]:
     """
     Collect one numeric field across a phase's records, refusing a value that is not a number.
 
@@ -304,9 +339,10 @@ def numeric_values(records: Sequence[Mapping[str, object]], phase: str, key: str
     holding one valid zero and one unreadable value would report a pass, and the unreadable record
     would be hidden behind the readable one rather than named.
 
-    `bool` is an `int` in Python, so `"wake_locks": true` would otherwise read as one lock, and a
-    non-finite value is refused for the same reason `short_window_reason` refuses one: `-inf` sorts
-    below every budget, so it would pass a maximum-is-zero check it never measured.
+    What "not a number" means is `finite_number`'s rule, so this reader, the visible-window readers,
+    and the duration reader refuse the same values for the same reasons. `non_negative` is passed
+    through rather than decided here, because it is a property of the field and not of the phase: B2's
+    counts and B3's percentage ask for it, and B6's signed growth does not.
     """
     values: list[float] = []
     for record in records:
@@ -314,14 +350,7 @@ def numeric_values(records: Sequence[Mapping[str, object]], phase: str, key: str
             continue
         if key not in record:
             continue
-        value = record[key]
-        if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
-            detail = (
-                f"a {phase} record carries {value!r} for `{key}`, which is not a finite number, so the "
-                f"budget cannot be judged from this state file"
-            )
-            raise device_layer.ProbeError(detail)
-        values.append(float(value))
+        values.append(finite_number(record[key], what=f"a {phase} record's `{key}`", non_negative=non_negative))
     return values
 
 
@@ -348,29 +377,48 @@ def alternation_pairs(
 
 
 def window_rate(record: Mapping[str, object]) -> float:
-    """Read one window's discharge rate, refusing a record that has none or a negative one."""
+    """
+    Read one window's discharge rate, refusing a record that has none or a negative one.
+
+    An absent field and an unreadable one are separate cases because they are separate things in the
+    state file: a window that recorded no rate at all — the field deleted, or written null — is one
+    an older revision or a silent gauge wrote, while `true`, `-inf`, or a string is a corrupt field.
+    Both refuse, and each says which it saw rather than sharing one message. The
+    negative case keeps a branch of its own rather than taking `finite_number`'s, because the reason
+    it is refused is this reader's: a rate below zero means the pack gained charge across the window,
+    so the record is not a discharge comparison at all. That is a different statement from "this is
+    not a number", and `NegativeDischargeRecordTest` pins it.
+    """
     rate = record.get("discharge_rate_ua")
-    if not isinstance(rate, int | float):
+    if rate is None:
         detail = "a visible window recorded no discharge rate, so no comparison can be computed"
         raise device_layer.ProbeError(detail)
-    if rate < 0:
+    value = finite_number(rate, what="a visible window's `discharge_rate_ua`")
+    if value < 0:
         detail = (
-            f"a visible window recorded a negative discharge rate ({rate:.0f} uA), which means the pack "
+            f"a visible window recorded a negative discharge rate ({value:.0f} uA), which means the pack "
             "gained charge across it; a state file carrying one is not a discharge comparison"
         )
         raise device_layer.ProbeError(detail)
-    return float(rate)
+    return value
 
 
 def live_cpu_values(pairs: Sequence[tuple[Mapping[str, object], Mapping[str, object]]]) -> list[float]:
-    """Collect the CPU readings of the live windows of each pair."""
+    """
+    Collect the CPU readings of the live windows of each pair, refusing an unreadable one.
+
+    A percentage of one core cannot be negative, so this reader asks `finite_number` for that refusal
+    too. The case that matters most here is the non-finite one: `-inf` satisfies an `isinstance`
+    check and sorts below the budget, so three real readings beside one `-inf` used to average to a
+    pass over a reading nothing measured.
+    """
     values: list[float] = []
     for live, _ in pairs:
         cpu = live.get("cpu_pct")
-        if not isinstance(cpu, int | float):
+        if cpu is None:
             detail = "a live window recorded no CPU reading, so B5 has no input"
             raise device_layer.ProbeError(detail)
-        values.append(float(cpu))
+        values.append(finite_number(cpu, what="a live window's `cpu_pct`", non_negative=True))
     return values
 
 
@@ -426,16 +474,21 @@ def collect_restore_problems(records: Sequence[Mapping[str, object]]) -> list[st
     Collect every restore problem the records carry, so a failed restore is never silent.
 
     A record that does not carry the field is a record whose phase collected no problems, which is
-    what the field being absent means. A record that carries it with something other than a list is
-    refused rather than ignored: a failed restore is the one thing on a record that says the device
-    was left changed, and reading `"airplane mode was not restored"` — a string where the phases
-    write a list — as no problem would let the report exit zero over an explicitly recorded one.
+    what the field being absent means. That absence is a membership test and not `record.get(...) is
+    None`, because `dict.get` conflates the two cases: it answers `None` for a record that never had
+    the key and for an explicit `"restore_problems": null` alike, so a null would have been skipped as
+    though the phase had written a list of no problems. The key being present is what makes its value
+    readable, and a present value has to be a list. A record that carries it with something other than
+    a list is refused rather than ignored: a failed restore is the one thing on a record that says the
+    device was left changed, and reading `"airplane mode was not restored"` — a string where the
+    phases write a list — as no problem would let the report exit zero over an explicitly recorded
+    one.
     """
     problems: list[str] = []
     for record in records:
-        found = record.get("restore_problems")
-        if found is None:
+        if "restore_problems" not in record:
             continue
+        found = record["restore_problems"]
         if not isinstance(found, list):
             detail = (
                 f"a {record.get('phase')!r} record carries restore_problems={found!r}, which is not a "
@@ -462,10 +515,17 @@ def short_window_reason(record: Mapping[str, object]) -> str | None:
         return None
     duration = record.get("duration_seconds")
     threshold = minimum * MINIMUM_DURATION_TOLERANCE
-    if not isinstance(duration, int | float):
+    # This reader is deliberately not routed through `finite_number`: its refusal is a returned reason
+    # rather than a raised `ProbeError`, and a negative duration is a legitimate input that the
+    # below-threshold branch already names. The `bool` check is still `finite_number`'s first rule, for
+    # the same reason — `true` is an `int`, so it would reach the threshold comparison below as a
+    # 1.0-second window and be reported as a window that ran one second, a length the record does not
+    # record. The guard covers absence and a value that is not a length of time alike, so its message
+    # names the value it saw rather than asserting the field is missing.
+    if isinstance(duration, bool) or not isinstance(duration, int | float):
         return (
-            f"a {phase} record carries no `duration_seconds`, so its window cannot be shown to be the "
-            f"documented {minimum / 60.0:.0f} minutes"
+            f"a {phase} record carries {duration!r} for `duration_seconds`, which is not a length of "
+            f"time, so its window cannot be shown to be the documented {minimum / 60.0:.0f} minutes"
         )
     # `inf` and `nan` are written by a hand-edit or a corrupt record and neither is below the
     # threshold — `nan` is not below anything — so a comparison alone would admit them as windows of
@@ -605,11 +665,14 @@ def report_lines(records: Sequence[Mapping[str, object]], *, black_unavailable: 
 
     # B2 is a maximum across every resources record, not the last one: the state file is append-only,
     # so a rerun after a nonzero census must not hide the earlier failure behind a later clean run.
+    # A count and a percentage of one core are non-negative, so `-1` is a corrupt reading rather than a
+    # comfortably passing one: it sorts under B2's zero budget and under B3's 0.1% alike, so an
+    # otherwise clean set carrying one would exit zero over a value the device cannot have produced.
     for label, key in (("B2 wake locks", "wake_locks"), ("B2 alarms", "alarms"), ("B2 jobs", "jobs")):
-        values = numeric_values(measured, "resources", key)
+        values = numeric_values(measured, "resources", key, non_negative=True)
         verdicts.append(check_budget(label, max(values) if values else None, 0.0, ""))
 
-    hidden = numeric_values(measured, "hidden", "cpu_pct")
+    hidden = numeric_values(measured, "hidden", "cpu_pct", non_negative=True)
     verdicts.append(check_budget("B3 hidden CPU", max(hidden) if hidden else None, MAX_HIDDEN_CPU_PCT, "%"))
 
     try:
@@ -649,6 +712,9 @@ def report_lines(records: Sequence[Mapping[str, object]], *, black_unavailable: 
             )
         )
 
+    # B6's growth is signed on purpose — memory can shrink over a window, and a negative growth is the
+    # best result the criterion can have — so this reader is the one that does not ask for the
+    # non-negative refusal.
     growth_values = numeric_values(measured, "memory", "pss_growth_kb")
     verdicts.append(
         check_budget(

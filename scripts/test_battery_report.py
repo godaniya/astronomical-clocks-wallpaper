@@ -270,6 +270,22 @@ class ReportTest(unittest.TestCase):
         ]
         self.assertTrue(any(line.startswith("B6 PSS growth") and "PASS" in line for line in self.lines(records)))
 
+    def test_a_negative_pss_growth_still_passes(self) -> None:
+        # Memory can shrink over a window, so B6's growth is signed, and the non-negative refusal the
+        # other numeric readers now take must not reach it: a memory record whose PSS fell says the
+        # criterion is met, not that the file is corrupt. This passes before and after the refusal,
+        # which is the point of it — it is the guard against the refusal overshooting.
+        records = [
+            {
+                "phase": "memory",
+                "pss_growth_kb": -512,
+                "duration_seconds": 1800.0,
+                "revision": "rev",
+                "api_level": 36,
+            }
+        ]
+        self.assertTrue(any(line.startswith("B6 PSS growth") and "PASS" in line for line in self.lines(records)))
+
     def test_a_six_second_window_fails_and_does_not_qualify(self) -> None:
         # The CLI refuses `--minutes 0.1`, but the report reads a state file it did not write: a window
         # that ran for six seconds is not the fifteen minutes B4 is defined over, so it is named and
@@ -309,6 +325,18 @@ class ReportTest(unittest.TestCase):
         self.assertIn(("B4 vs stock point estimate", report.VerdictStatus.PASS), statuses)
         self.assertIn(("B4 vs stock CI upper bound", report.VerdictStatus.PASS), statuses)
 
+    def test_a_negative_point_estimate_and_interval_still_pass(self) -> None:
+        # B4's verdict is a relative *increase*, and a decrease is the best result the criterion can
+        # have: the recorded evidence in docs/battery-budget.md carries a -30.775% point estimate with
+        # a -11.615% upper bound against the 12.0123% threshold. The rate reader's refusal of a
+        # negative *rate* is a different statement from a refusal of a negative *verdict*, and this is
+        # the guard that keeps the two apart: live 900 uA against a stock 1000 uA is a -10% point
+        # estimate and a -10% interval upper bound, and both must pass. It passes before and after the
+        # refusals, which is the point of it.
+        statuses = {(verdict.label, verdict.status) for verdict in report.report_lines(pairs(4, 900.0, 1000.0))}
+        self.assertIn(("B4 vs stock point estimate", report.VerdictStatus.PASS), statuses)
+        self.assertIn(("B4 vs stock CI upper bound", report.VerdictStatus.PASS), statuses)
+
     def test_a_sequence_that_is_not_an_ab_alternation_is_refused(self) -> None:
         # The document names this refusal as the reason the pairing means anything: pairing the nth
         # baseline with the nth live window by file order would pair windows taken under different
@@ -333,11 +361,50 @@ class ReportTest(unittest.TestCase):
         lines = self.lines(records)
         self.assertTrue(any(line.startswith("B5 visible CPU") and "NOT MEASURED" in line for line in lines))
 
+    def test_an_unreadable_visible_cpu_reading_leaves_b5_unmeasured(self) -> None:
+        # `-inf` is the case the finding names: it satisfies the `isinstance` the reader checked and is
+        # below every budget, so three real readings beside one `-inf` averaged to "PASS — -inf%". A
+        # boolean reads as 1.0% and a negative percentage as a value below the budget, so all three
+        # used to leave B5 reported as measured. None of them is a reading, so B5 has no input.
+        for cpu in (float("-inf"), True, -1):
+            with self.subTest(cpu=cpu):
+                records = pairs(4, 1000.0, 1000.0, cpu=1.0)
+                records[0]["cpu_pct"] = cpu
+                lines = self.lines(records)
+                self.assertTrue(any(line.startswith("B5 visible CPU") and "NOT MEASURED" in line for line in lines))
+                self.assertFalse(any(line.startswith("B5 visible CPU (mean)") for line in lines))
+
     def test_a_window_with_no_discharge_rate_leaves_b4_unmeasured(self) -> None:
         records = pairs(4, 1000.0, 1000.0, cpu=1.0)
         del records[1]["discharge_rate_ua"]
         lines = self.lines(records)
         self.assertTrue(any(line.startswith("B4 vs stock") and "NOT MEASURED" in line for line in lines))
+
+    def test_a_boolean_discharge_rate_leaves_b4_unmeasured(self) -> None:
+        # `True` is an `int`, so it passed the reader's `isinstance` and, being neither negative nor
+        # non-finite to a comparison, produced a numeric comparison out of `true` in both arms: four
+        # pairs of `discharge_rate_ua: true` reported passing B4 point-estimate and interval lines.
+        records = pairs(4, 1000.0, 1000.0, cpu=1.0)
+        for record in records:
+            record["discharge_rate_ua"] = True
+        lines = self.lines(records)
+        self.assertTrue(any(line.startswith("B4 vs stock") and "NOT MEASURED" in line for line in lines))
+        self.assertFalse(any(line.startswith("B4 vs stock point estimate") for line in lines))
+
+    def test_a_non_finite_discharge_rate_leaves_b4_unmeasured(self) -> None:
+        # Neither `inf` nor `nan` is a discharge measurement, so neither can be compared, and neither
+        # is below a threshold, so both reached the arithmetic: an infinite rate made the baseline mean
+        # infinite and every delta `nan`, and B4 reported `FAIL — nan%` on both lines. That is a failed
+        # comparison over rates no window recorded, rather than the unmeasurable one this is, so the
+        # verdict was wrong in the other direction from the boolean's.
+        for rate in (float("inf"), float("nan")):
+            with self.subTest(rate=rate):
+                records = pairs(4, 1000.0, 1000.0, cpu=1.0)
+                for record in records:
+                    record["discharge_rate_ua"] = rate
+                lines = self.lines(records)
+                self.assertTrue(any(line.startswith("B4 vs stock") and "NOT MEASURED" in line for line in lines))
+                self.assertFalse(any(line.startswith("B4 vs stock point estimate") for line in lines))
 
     def test_a_non_finite_window_length_is_not_a_long_window(self) -> None:
         # `inf` and `nan` satisfy the `isinstance` the report checks and neither is below the minimum,
@@ -350,6 +417,17 @@ class ReportTest(unittest.TestCase):
                 self.assertIsNotNone(report.short_window_reason(record))
                 lines = self.lines([record])
                 self.assertTrue(any(line.startswith("WINDOW DURATIONS: FAIL") for line in lines))
+
+    def test_a_boolean_window_length_is_not_a_long_window(self) -> None:
+        # `true` is an `int` in Python, so the threshold comparison read it as a 1.0-second window and
+        # reported the record as a window that ran one second — a length the record never recorded.
+        # It is refused as a value that is not a length of time instead, the same way `finite_number`
+        # refuses it for the readings.
+        record = visible_record("A", 1000.0, cpu=1.0, duration=True)
+        reason = report.short_window_reason(record)
+        self.assertIsNotNone(reason)
+        self.assertIn("not a length of time", str(reason))
+        self.assertTrue(any(line.startswith("WINDOW DURATIONS: FAIL") for line in self.lines([record])))
 
     def test_a_stock_only_run_reports_the_black_arm_as_unmeasured(self) -> None:
         # One block per documented baseline, not one per baseline the state file happens to carry: a
@@ -518,6 +596,18 @@ class CorruptRecordTest(unittest.TestCase):
         with self.assertRaises(device_layer.ProbeError):
             report.report_lines(records)
 
+    def test_a_negative_resource_count_is_refused(self) -> None:
+        # A count of wake locks, alarms, or jobs cannot be negative, and one that is sorts under the
+        # zero budget rather than failing it: an otherwise clean census carrying `-1` exited zero over
+        # a value the device cannot have produced.
+        for key in ("wake_locks", "alarms", "jobs"):
+            with self.subTest(key=key):
+                records = [{"phase": "resources", "wake_locks": 0, "alarms": 0, "jobs": 0}]
+                records[0][key] = -1
+                with self.assertRaises(device_layer.ProbeError) as raised:
+                    report.report_lines(records)
+                self.assertIn(key, str(raised.exception))
+
     def test_a_non_finite_value_is_refused(self) -> None:
         # `-inf` sorts below every budget, so it would pass a maximum-is-zero check it never measured.
         records = [
@@ -531,6 +621,16 @@ class CorruptRecordTest(unittest.TestCase):
         ]
         with self.assertRaises(device_layer.ProbeError):
             report.report_lines(records)
+
+    def test_a_negative_hidden_cpu_is_refused(self) -> None:
+        # The same case as the resource count, on B3: a percentage of one core cannot be negative, and
+        # one that is sits below the 0.1% budget instead of failing it. The record needs a valid
+        # `duration_seconds` to reach the reader at all, because a record dropped as short never
+        # bounds its budget.
+        records = [{"phase": "hidden", "cpu_pct": -1, "duration_seconds": 600.0, "apk_sha256": "a", "api_level": 36}]
+        with self.assertRaises(device_layer.ProbeError) as raised:
+            report.report_lines(records)
+        self.assertIn("cpu_pct", str(raised.exception))
 
     def test_a_field_no_record_carries_is_still_not_bounded(self) -> None:
         # The refusal above must not extend to an absent field: a revision that never recorded one
@@ -558,6 +658,17 @@ class CorruptRecordTest(unittest.TestCase):
         # reading a string where the phases write a list as "no problems" would let the report exit
         # zero over an explicitly recorded failure.
         records = [{"phase": "hidden", "restore_problems": "airplane mode was not restored"}]
+        with self.assertRaises(device_layer.ProbeError) as raised:
+            report.collect_restore_problems(records)
+        self.assertIn("not a list", str(raised.exception))
+
+    def test_an_explicit_null_restore_problems_is_refused(self) -> None:
+        # `dict.get` answers `None` both for a record that never carried the key and for one that
+        # carries it with a null, so the absence check was reading an explicit null as "this phase
+        # collected no problems" and skipping it — the one reading of the field that lets a report
+        # exit zero over restoration data it could not read. Absence is a membership test; a present
+        # value has to be a list.
+        records = [{"phase": "hidden", "restore_problems": None}]
         with self.assertRaises(device_layer.ProbeError) as raised:
             report.collect_restore_problems(records)
         self.assertIn("not a list", str(raised.exception))
