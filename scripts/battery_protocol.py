@@ -68,8 +68,11 @@ BATTERY_LEVEL_PATTERN: Final = re.compile(rf"^[ \t]*level:[ \t]*({DIGITS})[ \t]*
 BATTERY_VOLTAGE_PATTERN: Final = re.compile(rf"^[ \t]*voltage:[ \t]*({DIGITS})[ \t]*$", re.MULTILINE)
 # The separators are `[ \t]` and not `\s` for the reason the census patterns give: `\s` matches a
 # newline, so `\s+` after `TOTAL` would let a truncated `TOTAL` line reach the next line for its number
-# and report an unrelated figure as the app's total PSS.
-TOTAL_PSS_PATTERN: Final = re.compile(rf"^[ \t]*TOTAL[ \t]+({DIGITS})", re.MULTILINE)
+# and report an unrelated figure as the app's total PSS. The trailing lookahead is what keeps the
+# *captured* value from doing the same thing: this is the one capture with no other field name or
+# anchor after it, so without a boundary the `123` of a corrupted `TOTAL 123oops` would match and be
+# recorded as a reading. A real line continues with more columns after horizontal whitespace.
+TOTAL_PSS_PATTERN: Final = re.compile(rf"^[ \t]*TOTAL[ \t]+({DIGITS})(?=[ \t]|$)", re.MULTILINE)
 SDK_PATTERN: Final = re.compile(rf"^({DIGITS})$")
 # Every shape `dumpsys jobscheduler` prints a job line in, taken from the test device's own dump.
 # The two components at the end of a job line are a `<hash> <component>` pair; the component is
@@ -150,19 +153,21 @@ HOME_CONFIRM_INTERVAL_SECONDS: Final = 0.5
 
 SAMPLE_INTERVAL_SECONDS: Final = 30.0
 COMMAND_TIMEOUT_SECONDS: Final = 60
-# The longest a measurement phase will hold the shared device. The acceptance matrix's longest criterion
-# is thirty minutes and this is forty-eight times that, so the bound is not a statement about what a
-# *useful* window is — it is what makes the phase bounded at all. A finite duration passes every test
-# arithmetic can pose: `1e15` minutes is finite, positive, and one the sampling loop makes progress
-# through, and it is also about two billion years of thirty-second samples on a device the project
-# treats as a shared resource. Progress is necessary and not sufficient, so there is a maximum.
-MAXIMUM_WINDOW_MINUTES: Final = 24 * 60.0
-# The most windows the pilot will run, for the same reason and on the same terms. A noise floor is
-# defined from `MIN_PAIRED_SAMPLES` windows and the recorded passes took four and six; this is four times
-# the largest of them, which at the shortest window is six hours on the device. Like the bound above it
-# is not a claim about a useful pilot — it is what keeps the phase bounded, since `--runs 1000000000` is
-# otherwise fifteen billion minutes of windows, with the rates and CPU lists growing alongside them.
-MAXIMUM_PILOT_RUNS: Final = 24
+# The longest a measurement window will hold the shared device, and the longest a pilot invocation —
+# which is a run of windows rather than one — will. Both are read off `docs/battery-budget.md`, which
+# requires that "no single invocation, and above all no single window, blocks for hours": the longest
+# criterion its matrix documents is thirty minutes, so a window is bounded at forty-five, and the
+# recorded six-pair pilot took ninety minutes, so an invocation is bounded at two hours. A bound is
+# needed at all because a finite duration passes every test arithmetic can pose — `1e15` minutes is
+# finite, positive, and one the sampling loop makes progress through — so neither finiteness nor
+# progress is what makes a phase bounded.
+MAXIMUM_WINDOW_MINUTES: Final = 45.0
+MAXIMUM_PILOT_MINUTES: Final = 120.0
+# The count the pilot will accept. It cannot bound the invocation on its own — a count at the floor
+# with a window at the ceiling is far past the time bound — so `phase_pilot` checks the product as
+# well; this is what bounds the rates and CPU lists the run accumulates, and what refuses an absurd
+# count at the command line rather than after the device has been reached.
+MAXIMUM_PILOT_RUNS: Final = int(MAXIMUM_PILOT_MINUTES // MINIMUM_WINDOW_MINUTES)
 
 PROC_STAT_UTIME_INDEX: Final = 11
 PROC_STAT_INDEX_STIME: Final = 12
@@ -1765,7 +1770,18 @@ def phase_pilot(  # noqa: PLR0913 — the arms, the window shape, and the sink a
     rather than merged into the first window's. Persisting per window is what makes the phase
     resumable: a pilot interrupted at window three keeps the windows it completed, instead of
     returning them to a `main` that never got to append them.
+
+    The run is bounded before the first window opens. `--runs` has a count bound and `--minutes` a
+    length bound, but neither bounds this invocation on its own: a count at the floor with a window at
+    the ceiling is hours past what `docs/battery-budget.md` allows an invocation to take, and refusing
+    it here is refusing it before any window has been opened.
     """
+    if runs * minutes > MAXIMUM_PILOT_MINUTES:
+        detail = (
+            f"{runs} windows of {minutes:g} minutes is {runs * minutes:g} minutes, longer than the "
+            f"{MAXIMUM_PILOT_MINUTES:g} minutes a pilot invocation will hold the device for"
+        )
+        raise device_layer.ProbeError(detail)
     rates: list[float] = []
     cpu_values: list[float] = []
     for run in range(1, runs + 1):

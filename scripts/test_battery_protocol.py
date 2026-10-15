@@ -1962,21 +1962,23 @@ class DurationArgumentTest(unittest.TestCase):
         # Progress through the sampling loop is necessary and not sufficient, which is what an earlier
         # revision of this test got wrong: `1e15` minutes is finite, positive and one the loop makes
         # progress through, and it is also about two billion years of thirty-second samples on a device
-        # the project treats as a shared resource. The rule is a maximum, and a year goes with it.
-        for raw in ("1441", "525600", "1e15"):
+        # the project treats as a shared resource. The rule is a maximum, and its size is read off
+        # `docs/battery-budget.md` — a window is minutes, not hours.
+        for raw in ("46", "1440", "525600", "1e15"):
             with self.subTest(raw=raw):
                 self.parse_refusing("hidden", "--minutes", raw)
-        self.assertEqual(1440.0, self.parse("hidden", "--minutes", "1440").minutes)
+        self.assertEqual(45.0, self.parse("hidden", "--minutes", "45").minutes)
 
     def test_a_window_within_the_bound_is_still_offered(self) -> None:
         # The bound is not a single documented length: every phase's own minimum still applies and
-        # anything between it and the maximum is a legitimate measurement.
+        # anything between it and the maximum is a legitimate measurement. Forty-five minutes is the
+        # ceiling, so it has to remain reachable — the longest documented criterion is thirty.
         self.assertEqual(
-            (10.0, 30.0, 1440.0),
+            (10.0, 30.0, 45.0),
             (
                 self.parse("hidden", "--minutes", "10").minutes,
                 self.parse("memory", "--minutes", "30").minutes,
-                self.parse("memory", "--minutes", "1440").minutes,
+                self.parse("memory", "--minutes", "45").minutes,
             ),
         )
 
@@ -1994,12 +1996,33 @@ class DurationArgumentTest(unittest.TestCase):
     def test_the_pilot_refuses_more_runs_than_a_phase_will_hold_the_device_for(self) -> None:
         # The lower bound was the only one, so `--runs 1000000000` was accepted and bought one billion
         # fifteen-minute windows — fifteen billion minutes on a device the project treats as a shared
-        # resource, with the rate and CPU lists growing beside them. Same rule as the window bound, at
-        # the other end.
-        for runs in ("25", "1000000000"):
+        # resource, with the rate and CPU lists growing beside them. The count ended up derived from the
+        # invocation bound and the shortest window, so at the floor it is exactly that many.
+        for runs in ("9", "1000000000"):
             with self.subTest(runs=runs):
                 self.parse_refusing("pilot", "--arm", "A", "--runs", runs)
-        self.assertEqual(24, self.parse("pilot", "--arm", "A", "--runs", "24").runs)
+        self.assertEqual(8, self.parse("pilot", "--arm", "A", "--runs", "8").runs)
+
+    def test_a_pilot_run_longer_than_the_invocation_bound_is_refused(self) -> None:
+        # Neither bound covers this on its own, which is why the product is checked as well:
+        # `--runs 4 --minutes 45` is legal at both ends and is three hours of windows, past the two
+        # hours `docs/battery-budget.md` allows an invocation to take. The check is before the first
+        # window opens, so the refusal costs no device time.
+        for runs, minutes in ((4, 45.0), (6, 30.0), (8, 45.0)):
+            with self.subTest(runs=runs, minutes=minutes), self.assertRaises(device_layer.ProbeError) as raised:
+                subject.phase_pilot(
+                    MagicMock(), arm=report.Arm.LIVE, baseline=None, runs=runs, minutes=minutes, recorder=recorder()
+                )
+            self.assertIn("a pilot invocation will hold the device for", str(raised.exception))
+        # At the bound the run is admitted and reaches its first window, which is where this stub stops.
+        with (
+            patch.object(subject, "phase_visible", side_effect=device_layer.ProbeError("the window ran")),
+            self.assertRaises(device_layer.ProbeError) as admitted,
+        ):
+            subject.phase_pilot(
+                MagicMock(), arm=report.Arm.LIVE, baseline=None, runs=8, minutes=15.0, recorder=recorder()
+            )
+        self.assertIn("the window ran", str(admitted.exception))
 
     def test_a_longer_window_is_still_offered(self) -> None:
         # The minimum is a floor, not a fixed length: a longer window is a legitimate measurement.
@@ -2045,6 +2068,16 @@ class ParseTotalPssTest(unittest.TestCase):
             with self.subTest(dump=dump[:14]):
                 self.assertIsNone(subject.parse_total_pss_kb(dump))
         self.assertEqual(45000, subject.parse_total_pss_kb("  TOTAL   45000    46000\n"))
+
+    def test_a_total_that_is_not_a_number_is_not_a_reading(self) -> None:
+        # This is the one capture with no field name or anchor after it, so the bound alone was not
+        # enough: `(?!\d)` refuses a following *digit*, and `123` of a corrupted `TOTAL 123oops` was
+        # recorded as the figure. The value has to end at horizontal whitespace or the line end.
+        for dump in ("TOTAL 123oops\n", "  TOTAL 45000kB\n", "TOTAL 1234.5\n"):
+            with self.subTest(dump=dump[:14]):
+                self.assertIsNone(subject.parse_total_pss_kb(dump))
+        self.assertEqual(123, subject.parse_total_pss_kb("TOTAL 123\n"))
+        self.assertEqual(123, subject.parse_total_pss_kb("  TOTAL\t123  456\n"))
 
 
 class VisibleHomeStateTest(unittest.TestCase):
