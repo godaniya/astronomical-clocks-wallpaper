@@ -113,9 +113,15 @@ EXPECTED_POWER_SOURCES: Final = ("AC", "USB", "Wireless", "Dock")
 # A decimal integer as a device prints one, bounded so that a long run of digits is refused rather
 # than handed to `int()`. `str.isdigit()` is not the same question: `"²"` is a digit but not a decimal
 # one, and it reaches `int()` as a `ValueError`, as does any value of more than a few thousand digits.
-# A device setting or a UID is never 18 digits wide, so the bound costs nothing and makes "unreadable"
-# the answer for everything the pattern does not match.
+# A device setting is never 18 digits wide, so the bound costs nothing and makes "unreadable" the
+# answer for everything the pattern does not match. The sign is accepted here because
+# `screen_brightness` is legitimately `-1` on a device using automatic brightness.
 DECIMAL_INT_PATTERN: Final = re.compile(r"[+-]?\d{1,18}")
+# A UID as `stat -c %u` prints one, which is never negative. It is a pattern of its own rather than the
+# signed one above: a read that failed or was malformed can answer `-1`, and accepting it as a UID
+# would carry that through `phase_resources` — which refuses only `None` — into the wake-lock predicate
+# as `uid=-1`, matching no lock and reporting a zero, which is a B2 pass the app did not earn.
+PROCESS_UID_PATTERN: Final = re.compile(r"\d{1,18}")
 
 DEFAULT_STATE_DIR: Final = Path("build/reports/battery")
 RECORD_FILE_NAME: Final = "records.jsonl"
@@ -626,11 +632,18 @@ def parse_api_level(output: str) -> int:
 
 
 def read_process_uid(device: device_layer.AdbDevice, pid: int | None) -> int | None:
-    """Read the owning UID of a process from `/proc/<pid>`, or None when it cannot be read."""
+    """
+    Read the owning UID of a process from `/proc/<pid>`, or None when it cannot be read.
+
+    A UID is non-negative, so a negative read is a failed or malformed one rather than a process's
+    owner. Returning it would not stop at this function: `phase_resources` refuses only `None`, and the
+    wake-lock predicate would be built as `uid=-1`, which matches no lock and reports the app as
+    holding none — a B2 pass from a read that answered nothing.
+    """
     if pid is None or pid <= 0:
         return None
     output = device.run_adb(["shell", "stat", "-c", "%u", f"/proc/{pid}"]).decode(errors="replace").strip()
-    return int(output) if DECIMAL_INT_PATTERN.fullmatch(output) else None
+    return int(output) if PROCESS_UID_PATTERN.fullmatch(output) else None
 
 
 def require_clk_tck(device: device_layer.AdbDevice) -> int:

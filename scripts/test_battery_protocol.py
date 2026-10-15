@@ -1513,6 +1513,21 @@ class IntegerReadbackTest(unittest.TestCase):
                 device.run_adb.return_value = raw.encode()
                 self.assertIsNone(subject.read_process_uid(device, 1234))
 
+    def test_a_negative_uid_is_unreadable_rather_than_used(self) -> None:
+        # `stat -c %u` prints a UID, which is never negative, so `-1` is a read that failed rather
+        # than a process's owner. The setting read shares a signed pattern because `screen_brightness`
+        # is legitimately `-1`; a UID does not, because `phase_resources` refuses only `None` and the
+        # wake-lock predicate built from `-1` matches no lock and reports a zero — a B2 pass from a
+        # read that answered nothing.
+        device = MagicMock()
+        device.run_adb.return_value = b"-1"
+        self.assertIsNone(subject.read_process_uid(device, 1234))
+
+    def test_a_real_uid_still_reads(self) -> None:
+        device = MagicMock()
+        device.run_adb.return_value = b"10026"
+        self.assertEqual(10026, subject.read_process_uid(device, 1234))
+
     def test_an_unresolvable_pid_is_still_no_uid(self) -> None:
         device = MagicMock()
         for pid in (None, 0, -1):
