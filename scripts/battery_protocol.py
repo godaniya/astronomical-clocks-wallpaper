@@ -66,7 +66,10 @@ CHARGE_COUNTER_PATTERN: Final = re.compile(rf"^[ \t]*Charge counter:[ \t]*({DIGI
 BATTERY_LEVEL_PATTERN: Final = re.compile(rf"^[ \t]*level:[ \t]*({DIGITS})[ \t]*$", re.MULTILINE)
 # Anchored to the field name so that `Max charging voltage:` can never be read as the pack voltage.
 BATTERY_VOLTAGE_PATTERN: Final = re.compile(rf"^[ \t]*voltage:[ \t]*({DIGITS})[ \t]*$", re.MULTILINE)
-TOTAL_PSS_PATTERN: Final = re.compile(rf"^\s*TOTAL\s+({DIGITS})", re.MULTILINE)
+# The separators are `[ \t]` and not `\s` for the reason the census patterns give: `\s` matches a
+# newline, so `\s+` after `TOTAL` would let a truncated `TOTAL` line reach the next line for its number
+# and report an unrelated figure as the app's total PSS.
+TOTAL_PSS_PATTERN: Final = re.compile(rf"^[ \t]*TOTAL[ \t]+({DIGITS})", re.MULTILINE)
 SDK_PATTERN: Final = re.compile(rf"^({DIGITS})$")
 # Every shape `dumpsys jobscheduler` prints a job line in, taken from the test device's own dump.
 # The two components at the end of a job line are a `<hash> <component>` pair; the component is
@@ -128,11 +131,13 @@ EXPECTED_POWER_SOURCES: Final = ("AC", "USB", "Wireless", "Dock")
 # answer for everything the pattern does not match. The sign is accepted here because
 # `screen_brightness` is legitimately `-1` on a device using automatic brightness.
 DECIMAL_INT_PATTERN: Final = re.compile(rf"[+-]?{DIGITS}")
-# A UID as `stat -c %u` prints one, which is never negative. It is a pattern of its own rather than the
-# signed one above: a read that failed or was malformed can answer `-1`, and accepting it as a UID
-# would carry that through `phase_resources` — which refuses only `None` — into the wake-lock predicate
-# as `uid=-1`, matching no lock and reporting a zero, which is a B2 pass the app did not earn.
-PROCESS_UID_PATTERN: Final = re.compile(DIGITS)
+# A count a device prints that cannot be negative — a UID from `stat -c %u`, or the utime and stime
+# ticks from `/proc/<pid>/stat`. It is a pattern of its own rather than the signed one above, because a
+# read that failed or was malformed can answer `-1` and `int()` would take it. Both callers then treat a
+# negative reading as a measurement: `phase_resources` refuses only `None` and would build the wake-lock
+# predicate `uid=-1`, which matches no lock and reports a B2 pass the app did not earn, while a negative
+# utime makes a window's CPU delta larger than the CPU the process actually spent.
+UNSIGNED_INT_PATTERN: Final = re.compile(DIGITS)
 
 DEFAULT_STATE_DIR: Final = Path("build/reports/battery")
 RECORD_FILE_NAME: Final = "records.jsonl"
@@ -145,6 +150,13 @@ HOME_CONFIRM_INTERVAL_SECONDS: Final = 0.5
 
 SAMPLE_INTERVAL_SECONDS: Final = 30.0
 COMMAND_TIMEOUT_SECONDS: Final = 60
+# The longest a measurement phase will hold the shared device. The acceptance matrix's longest criterion
+# is thirty minutes and this is forty-eight times that, so the bound is not a statement about what a
+# *useful* window is — it is what makes the phase bounded at all. A finite duration passes every test
+# arithmetic can pose: `1e15` minutes is finite, positive, and one the sampling loop makes progress
+# through, and it is also about two billion years of thirty-second samples on a device the project
+# treats as a shared resource. Progress is necessary and not sufficient, so there is a maximum.
+MAXIMUM_WINDOW_MINUTES: Final = 24 * 60.0
 
 PROC_STAT_UTIME_INDEX: Final = 11
 PROC_STAT_INDEX_STIME: Final = 12
@@ -422,16 +434,37 @@ class DeviceStateSnapshot:
         return []
 
     def _restore_display(self) -> list[str]:
-        """Return the display to the power state it was found in."""
+        """
+        Return the display to the power state it was found in.
+
+        The reads are guarded the way the settings steps are, and for the same reason. `restore()` is
+        reached from `undo_phase_changes` through `problems.extend(...)`, so a read that raised here
+        would discard every problem the settings steps had already collected — `extend` never runs and
+        the caller reports one generic failure in their place — and the sleep below would be skipped.
+        """
         if self.screen_on is None:
             return ["the display state could not be read before the phase, so it cannot be restored"]
-        if self.screen_on and not self.device.wake_screen():
-            return ["the display was on before the phase and could not be woken again"]
-        if not self.screen_on and self.device.read_screen_on() is not False:
-            self.device.sleep_screen()
+        if self.screen_on:
+            if not self.device.wake_screen():
+                return ["the display was on before the phase and could not be woken again"]
+            return []
+        problem = self._sleep_display()
+        return [problem] if problem is not None else []
+
+    def _sleep_display(self) -> str | None:
+        """Put a display that started off back to sleep, or say why it could not be."""
+        try:
+            if self.device.read_screen_on() is False:
+                return None
+        except (subprocess.SubprocessError, OSError) as error:
+            return f"the display state could not be read to restore it: {device_layer.error_detail(error)}"
+        self.device.sleep_screen()
+        try:
             if self.device.read_screen_on() is not False:
-                return ["the display was off before the phase and could not be put back to sleep"]
-        return []
+                return "the display was off before the phase and could not be put back to sleep"
+        except (subprocess.SubprocessError, OSError) as error:
+            return f"the display state could not be read back after the sleep: {device_layer.error_detail(error)}"
+        return None
 
 
 def undo_phase_changes(
@@ -485,7 +518,7 @@ def read_int_setting(device: device_layer.AdbDevice, namespace: str, key: str) -
     read is `None`, which the restore already reports as a value that did not read back.
     """
     raw = device.run_adb(["shell", "settings", "get", namespace, key]).decode(errors="replace").strip()
-    return int(raw) if DECIMAL_INT_PATTERN.fullmatch(raw) else None
+    return parse_signed_int(raw)
 
 
 def require_int_setting(device: device_layer.AdbDevice, namespace: str, key: str) -> int:
@@ -600,6 +633,22 @@ def parse_battery_output(output: str) -> tuple[int, int, int]:
     return values[0], values[1], values[2]
 
 
+def parse_signed_int(raw: str) -> int | None:
+    """
+    Read a device's signed decimal integer, or None when the text is not one.
+
+    A parse rather than a `str.isdigit()` test: `isdigit()` answers a different question, and the
+    guard built on it here — `raw.lstrip("-").isdigit()` — accepted `"--5"` and `"²"`, both of which
+    then raised `ValueError` from `int()` at a call site whose caller treats "unreadable" as a value.
+    """
+    return int(raw) if DECIMAL_INT_PATTERN.fullmatch(raw) else None
+
+
+def parse_unsigned_int(raw: str) -> int | None:
+    """Read a device's non-negative decimal integer, or None when the text is not one."""
+    return int(raw) if UNSIGNED_INT_PATTERN.fullmatch(raw) else None
+
+
 def parse_proc_stat_cpu_seconds(stat_content: str, clk_tck: int) -> float | None:
     """
     Parse utime + stime from a `/proc/<pid>/stat` line and return total CPU seconds.
@@ -619,10 +668,13 @@ def parse_proc_stat_cpu_seconds(stat_content: str, clk_tck: int) -> float | None
     # the parenthesised comm field contains a space.
     if len(parts) < MIN_PROC_STAT_FIELDS:
         return None
-    try:
-        utime = int(parts[PROC_STAT_UTIME_INDEX])
-        stime = int(parts[PROC_STAT_INDEX_STIME])
-    except (ValueError, IndexError):
+    # The tokens are read as non-negative decimals, not handed to `int()`: a tick count cannot be
+    # negative, and `int()` would take one. A start below zero would make the window's delta larger
+    # than the CPU the process actually spent, and the delta is the only check downstream — it refuses
+    # a counter that went *backwards*, not one that began below the origin.
+    utime = parse_unsigned_int(parts[PROC_STAT_UTIME_INDEX])
+    stime = parse_unsigned_int(parts[PROC_STAT_INDEX_STIME])
+    if utime is None or stime is None:
         return None
     return (utime + stime) / float(clk_tck)
 
@@ -654,7 +706,7 @@ def read_process_uid(device: device_layer.AdbDevice, pid: int | None) -> int | N
     if pid is None or pid <= 0:
         return None
     output = device.run_adb(["shell", "stat", "-c", "%u", f"/proc/{pid}"]).decode(errors="replace").strip()
-    return int(output) if PROCESS_UID_PATTERN.fullmatch(output) else None
+    return parse_unsigned_int(output)
 
 
 def require_clk_tck(device: device_layer.AdbDevice) -> int:
@@ -1768,19 +1820,18 @@ def add_arm_arguments(parser: argparse.ArgumentParser) -> None:
 
 def positive_float(raw: str) -> float:
     """
-    Parse a finite, strictly positive duration the sampling loop can actually finish.
+    Parse a finite, strictly positive duration within the bound a phase will hold the device for.
 
     `inf` is refused along with zero and the negatives: it is not a large window, it is a number the
     phase can never reach, and `sample_window_states` would subtract its 30-second interval from it
     forever, turning a bounded phase into an unbounded one. `nan` compares false against everything, so
     it slips past a `<= 0` test and has to be refused by name.
 
-    Refusing `inf` is not enough on its own, because finite values behave the same way. `1e308` minutes
-    is finite and overflows to `inf` when the phase multiplies it by 60, and a window of `1e17` seconds
-    is unchanged by subtracting the interval — 30 is smaller than the gap between adjacent floats that
-    far out — so the loop would subtract forever. A duration is therefore accepted only when its
-    seconds value is finite *and* the interval actually reduces it, which is the property the loop
-    needs and the same property `inf` fails.
+    Finiteness is not enough on its own either, and neither is the arithmetic the loop needs: a window
+    is accepted against `MAXIMUM_WINDOW_MINUTES`, which is the rule that actually bounds the run.
+    `1e308` minutes overflows to `inf` seconds at `minutes * 60.0`, and `1e15` makes progress and would
+    still be about two billion years of samples — so the one thing every too-large duration has in
+    common is being larger than a window a phase will hold a device for.
     """
     value = float(raw)
     if not math.isfinite(value):
@@ -1789,12 +1840,11 @@ def positive_float(raw: str) -> float:
     if value <= 0:
         message = f"{raw} is not a positive duration"
         raise argparse.ArgumentTypeError(message)
-    seconds = value * 60.0
-    if not math.isfinite(seconds) or seconds - SAMPLE_INTERVAL_SECONDS >= seconds:
+    if value > MAXIMUM_WINDOW_MINUTES:
         message = (
-            f"{raw} minutes is not a long window but an unbounded one: the sampling loop subtracts its "
-            f"{SAMPLE_INTERVAL_SECONDS:.0f}-second interval from the duration, and this one does not "
-            f"shrink, so the phase would never return"
+            f"{raw} minutes is longer than the {MAXIMUM_WINDOW_MINUTES / 60.0:.0f} hours a measurement "
+            "phase will hold the device for; a longer window is not a longer measurement, and the "
+            "sampling loop would be running on the shared device long after the criterion was met"
         )
         raise argparse.ArgumentTypeError(message)
     return value

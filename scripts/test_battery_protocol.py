@@ -170,6 +170,17 @@ class ProcStatTest(unittest.TestCase):
             self.fail("a stat line whose comm contains a space carried no CPU time")
         self.assertAlmostEqual(2.0, cpu_seconds)
 
+    def test_negative_tick_counters_have_no_value(self) -> None:
+        # A tick count cannot be negative, so a negative token is a read that failed rather than a
+        # measurement. `int()` takes one, and the only check downstream refuses a counter that went
+        # *backwards* — it does not refuse one that began below the origin, so a negative start would
+        # make the window's delta larger than the CPU the process actually spent.
+        parts = ["S"] + ["0"] * 10 + ["-100", "-100"]
+        line = "1234 (astro) " + " ".join(parts)
+        self.assertIsNone(subject.parse_proc_stat_cpu_seconds(line, 100))
+        shifted = ["S"] + ["0"] * 10 + ["500", "-100"]
+        self.assertIsNone(subject.parse_proc_stat_cpu_seconds("1234 (astro) " + " ".join(shifted), 100))
+
     def test_lines_without_a_comm_or_with_unparsable_fields_have_no_value(self) -> None:
         self.assertIsNone(subject.parse_proc_stat_cpu_seconds("short string", 100))
         self.assertIsNone(subject.parse_proc_stat_cpu_seconds("1234 (astro) S 1 2 3 notanumber 50 0 0 0 1 2", 100))
@@ -1470,6 +1481,28 @@ class RestoreTest(unittest.TestCase):
         snapshot.restore.assert_called_once()
         self.assertTrue(any("power sources could not be read" in problem for problem in problems))
 
+    def test_a_failing_display_readback_does_not_discard_the_settings_problems(self) -> None:
+        # `restore()` is reached through `problems.extend(...)`, so a display read that raised would
+        # discard every problem the settings steps had already collected — `extend` never runs and the
+        # caller reports one generic failure in their place — and the sleep would be skipped too.
+        device = MagicMock()
+        device.run_adb.return_value = b""
+        device.read_screen_on.side_effect = subprocess.CalledProcessError(1, "dumpsys power")
+        snapshot = subject.DeviceStateSnapshot(
+            device,
+            brightness=35,
+            brightness_mode=1,
+            screen_timeout=300_000,
+            airplane_mode=0,
+            stay_on=None,
+            screen_on=False,
+        )
+        with patch.object(subject, "read_int_setting", return_value=None):
+            problems = snapshot.restore()
+        self.assertTrue(any("display state could not be read" in problem for problem in problems))
+        self.assertGreaterEqual(len(problems), 5)
+        device.sleep_screen.assert_not_called()
+
     def test_a_readback_that_is_not_a_decimal_integer_does_not_escape_the_restore(self) -> None:
         # The same readback `read_int_setting` performs runs inside the restore. Text it cannot parse
         # is now `None`, which `_apply` reports as a value that did not read back, so the steps after
@@ -1884,17 +1917,34 @@ class DurationArgumentTest(unittest.TestCase):
         # `inf` was refused by name and the *finite* values that behave the same way were not.
         # `1e308` minutes is finite and overflows to `inf` seconds when the phase multiplies it by 60;
         # at `1e17` seconds, subtracting the 30-second interval leaves the remaining time unchanged,
-        # because 30 is far below the gap between adjacent floats that far out. Either way
-        # `sample_window_states` loops forever, holding the shared device while it does not return.
+        # because 30 is far below the gap between adjacent floats that far out. `sample_window_states`
+        # would loop forever on either, holding the shared device while it did not return.
         for raw in ("1e308", "1e20", "1e17"):
             with self.subTest(raw=raw):
                 self.parse_refusing("hidden", "--minutes", raw)
         self.assertEqual(45.0, self.parse("hidden", "--minutes", "45").minutes)
 
-    def test_the_bound_is_the_loop_s_own_progress_rule_not_a_maximum(self) -> None:
-        # A year is absurd for a window and is still accepted, because the sampling loop can consume
-        # it. The refusal is about a duration the loop cannot make progress through, not about length.
-        self.assertEqual(525600.0, self.parse("hidden", "--minutes", "525600").minutes)
+    def test_a_window_longer_than_a_phase_will_hold_the_device_is_refused(self) -> None:
+        # Progress through the sampling loop is necessary and not sufficient, which is what an earlier
+        # revision of this test got wrong: `1e15` minutes is finite, positive and one the loop makes
+        # progress through, and it is also about two billion years of thirty-second samples on a device
+        # the project treats as a shared resource. The rule is a maximum, and a year goes with it.
+        for raw in ("1441", "525600", "1e15"):
+            with self.subTest(raw=raw):
+                self.parse_refusing("hidden", "--minutes", raw)
+        self.assertEqual(1440.0, self.parse("hidden", "--minutes", "1440").minutes)
+
+    def test_a_window_within_the_bound_is_still_offered(self) -> None:
+        # The bound is not a single documented length: every phase's own minimum still applies and
+        # anything between it and the maximum is a legitimate measurement.
+        self.assertEqual(
+            (10.0, 30.0, 1440.0),
+            (
+                self.parse("hidden", "--minutes", "10").minutes,
+                self.parse("memory", "--minutes", "30").minutes,
+                self.parse("memory", "--minutes", "1440").minutes,
+            ),
+        )
 
     def test_the_pilot_refuses_fewer_runs_than_a_noise_floor_needs(self) -> None:
         # The refusal used to arrive from `two_sigma_noise_floor` after every requested window had
@@ -1941,6 +1991,16 @@ class ParseTotalPssTest(unittest.TestCase):
 
     def test_an_oversized_total_is_a_refusal_rather_than_a_traceback(self) -> None:
         self.assertIsNone(subject.parse_total_pss_kb(f"  TOTAL {OVERSIZED_DIGITS}\n"))
+
+    def test_a_total_that_would_have_to_cross_a_line_is_not_a_reading(self) -> None:
+        # `\s` matches a newline, so `TOTAL` followed by `\s+` reached the *next* line for its number:
+        # a truncated `TOTAL` line above any numeric line reported that line's figure as the app's
+        # total PSS, which is B6 growth fabricated from a different part of the dump. The separators
+        # are horizontal whitespace now, and a blank line above the field is not a field either.
+        for dump in ("TOTAL\n123\n", "  TOTAL\n  45000\n", "TOTAL\n123 456\n"):
+            with self.subTest(dump=dump[:14]):
+                self.assertIsNone(subject.parse_total_pss_kb(dump))
+        self.assertEqual(45000, subject.parse_total_pss_kb("  TOTAL   45000    46000\n"))
 
 
 class VisibleHomeStateTest(unittest.TestCase):
