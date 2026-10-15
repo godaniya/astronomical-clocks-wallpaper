@@ -51,6 +51,10 @@ ADB_RESTORE_TIMEOUT_SECONDS: Final = 60
 # A trace dump moves the whole trace buffer over the transport, which a plain shell call cannot.
 ADB_TRACE_TIMEOUT_SECONDS: Final = 120
 
+# `adb shell` exits with the status of the command it ran, so a shell that cannot find that command
+# answers this status. It is how a device without `sha256sum` reports the tool's absence.
+SHELL_COMMAND_NOT_FOUND_STATUS: Final = 127
+
 # The service logs its acceptance asynchronously; a deferred or racy write can land after the
 # broadcast command returns, so the confirmation re-reads a bounded number of times.
 LOG_CONFIRM_ATTEMPTS: Final = 5
@@ -70,9 +74,9 @@ FOCUS_WINDOW_PATTERN: Final = re.compile(r"\bmCurrentFocus=Window\{[^}]*\}")
 FOCUSED_APP_PATTERN: Final = re.compile(r"\bmFocusedApp=ActivityRecord\{[^}]*\}")
 # The `package/class` token inside those bodies. The package is captured and the class is not,
 # because the class varies between launchers and Android versions while the package does not: the
-# launcher this device resolves is
-# `com.sec.android.app.launcher/.activities.LauncherActivity`, and comparing activity classes would
-# make the comparison depend on which launcher build is installed.
+# launcher the physical device resolves is `com.example.launcher/.activities.LauncherActivity` (a
+# placeholder; the resolved package is withheld per docs/device-testing.md), and comparing activity
+# classes would make the comparison depend on which launcher build is installed.
 FOCUS_COMPONENT_PATTERN: Final = re.compile(r"\b([A-Za-z][\w]*(?:\.[\w]+)+)/")
 SHA256_HEX_PATTERN: Final = re.compile(r"^[0-9a-f]{64}$")
 
@@ -651,8 +655,8 @@ def read_home_in_front(serial: str) -> bool | None:
     while the bound wallpaper component still matched the requested arm.
 
     The comparison is between packages, not activity classes: the launcher resolves to
-    `com.sec.android.app.launcher/.activities.LauncherActivity` on this device and to a different
-    class on another build of the same launcher.
+    `com.example.launcher/.activities.LauncherActivity` and to a different class on another build of
+    the same launcher.
     """
     foreground = read_foreground_package(serial)
     home = read_home_package(serial)
@@ -685,11 +689,22 @@ def read_installed_apk_sha256(serial: str) -> str | None:
     )
     if base_apk is None:
         return None
-    output = run_adb(["shell", "sha256sum", base_apk], serial=serial).decode("utf-8", errors="replace")
+    try:
+        output = run_adb(["shell", "sha256sum", base_apk], serial=serial).decode("utf-8", errors="replace")
+    except subprocess.CalledProcessError as error:
+        # `adb shell` exits with the status of the command it ran and `run_adb` checks that status,
+        # so a missing tool reaches this probe as a status rather than as error text: that status is
+        # the refusal the docstring above promises. Any other non-zero exit is this probe failing —
+        # a transport that dropped or a `pm` that could not answer — and propagating it keeps such a
+        # failure from being read as an absent tool.
+        if error.returncode == SHELL_COMMAND_NOT_FOUND_STATUS:
+            return None
+        raise
     digest = output.split(maxsplit=1)[0] if output.split() else ""
-    # `sha256sum` prints `<digest>  <path>`, and a device without the tool answers with a shell
-    # error whose first token is not a digest. Requiring the shape keeps that error from being
-    # recorded as this build's identity.
+    # `sha256sum` prints `<digest>  <path>`. A shell that reports an error while still exiting 0 —
+    # or an answer that is truncated, wrapped or otherwise reshaped — leaves a first token that is
+    # not a digest, and requiring the shape keeps that text from being recorded as the build's
+    # identity. It is a second defence, independent of the exit status handled above.
     if SHA256_HEX_PATTERN.match(digest) is None:
         return None
     return digest
@@ -1230,6 +1245,10 @@ class AdbDevice:
     def read_device_timezone(self) -> str | None:
         """Read this device's system timezone, or None."""
         return read_device_timezone(self.serial)
+
+    def read_wallpaper_component(self) -> str:
+        """Read this device's home-screen wallpaper component; raises ProbeError when none is reported."""
+        return read_wallpaper_component(self.serial)
 
     def read_wallpaper_visible(self) -> bool | None:
         """Read whether the wallpaper engine is reported visible on this device."""

@@ -1088,6 +1088,13 @@ class WallpaperComponentParsingTest(unittest.TestCase):
         with patch.object(device_layer, "run_adb", return_value=output.encode()):
             return device_layer.read_wallpaper_component("device")
 
+    def test_the_device_forwards_the_readback(self) -> None:
+        # The follow-on arm check reads through `AdbDevice` as every other probe in the harness does,
+        # so the parser is reachable as a method and not only as a module function.
+        dump = f"  mLastWallpaper state:\n    mInfo.component={self.LIVE}\n"
+        with patch.object(device_layer, "run_adb", return_value=dump.encode()):
+            self.assertEqual(self.LIVE, device_layer.AdbDevice("device").read_wallpaper_component())
+
     def test_the_live_home_component_is_returned(self) -> None:
         dump = (
             "System wallpaper state:\n"
@@ -2806,7 +2813,7 @@ class ForegroundProbeTest(unittest.TestCase):
         # would then admit a window measured on the shade as a visible home-screen window.
         output = (
             "  mCurrentFocus=Window{39e680d u0 NotificationShade}\n"
-            "  mFocusedApp=ActivityRecord{111535639 u0 com.sec.android.app.launcher/"
+            "  mFocusedApp=ActivityRecord{111535639 u0 com.example.launcher/"
             ".activities.LauncherActivity t6685}\n"
         )
         self.assertIsNone(self.read(output))
@@ -2825,10 +2832,10 @@ class ForegroundProbeTest(unittest.TestCase):
         # package in this repository would be an OEM and model statement on a public surface.
         output = (
             "priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true\n"
-            "com.sec.android.app.launcher/.activities.LauncherActivity\n"
+            "com.example.launcher/.activities.LauncherActivity\n"
         )
         with patch.object(device_layer, "run_adb", return_value=output.encode()):
-            self.assertEqual("com.sec.android.app.launcher", device_layer.read_home_package("device"))
+            self.assertEqual("com.example.launcher", device_layer.read_home_package("device"))
 
     def test_an_unresolvable_home_package_is_none(self) -> None:
         for output in ("", "No activity found\n"):
@@ -2853,12 +2860,12 @@ class ForegroundProbeTest(unittest.TestCase):
         # being read either way.
         cases = (
             (
-                "Window{1 u0 com.sec.android.app.launcher/.activities.LauncherActivity}",
-                "com.sec.android.app.launcher/.activities.OtherLauncherActivity",
+                "Window{1 u0 com.example.launcher/.activities.LauncherActivity}",
+                "com.example.launcher/.activities.OtherLauncherActivity",
                 True,
             ),
-            ("Window{1 u0 com.example.other/.MainActivity}", "com.sec.android.app.launcher/.L", False),
-            ("Window{1 u0 NotificationShade}", "com.sec.android.app.launcher/.L", None),
+            ("Window{1 u0 com.example.other/.MainActivity}", "com.example.launcher/.L", False),
+            ("Window{1 u0 NotificationShade}", "com.example.launcher/.L", None),
         )
         for focus, home, expected in cases:
             with self.subTest(focus=focus):
@@ -2901,9 +2908,41 @@ class InstalledApkDigestTest(unittest.TestCase):
     def test_a_package_that_is_not_installed_is_none(self) -> None:
         self.assertIsNone(self.run_with(b"", b""))
 
-    def test_a_device_without_sha256sum_is_none_rather_than_an_error_string(self) -> None:
-        # A `sha256sum` the device lacks answers with a shell error whose first token is not a
-        # digest; recording that token would make it look like the build's identity.
+    def test_a_device_without_sha256sum_is_none_rather_than_an_exception(self) -> None:
+        # A device lacking `sha256sum` answers 127, the shell's command-not-found, which `adb shell`
+        # propagates and `run_adb` checks. That status is the refusal the docstring promises rather
+        # than an exception escaping the probe.
+        with patch.object(
+            device_layer,
+            "run_adb",
+            side_effect=[
+                f"package:{self.BASE_APK}\n".encode(),
+                subprocess.CalledProcessError(127, ["adb"], stderr=b"/system/bin/sh: sha256sum: not found"),
+            ],
+        ):
+            self.assertIsNone(device_layer.read_installed_apk_sha256("device"))
+
+    def test_other_hash_failures_propagate(self) -> None:
+        # Only command-not-found is a refusal. A transport that dropped or a `pm` that could not
+        # answer is this probe failing, and returning None would record an unreadable identity in
+        # place of a reading.
+        with (
+            patch.object(
+                device_layer,
+                "run_adb",
+                side_effect=[
+                    f"package:{self.BASE_APK}\n".encode(),
+                    subprocess.CalledProcessError(1, ["adb"], stderr=b"device offline"),
+                ],
+            ),
+            self.assertRaises(subprocess.CalledProcessError),
+        ):
+            device_layer.read_installed_apk_sha256("device")
+
+    def test_error_text_on_stdout_is_not_read_as_a_digest(self) -> None:
+        # A shell that reports an error while still exiting 0 puts that text where the digest would
+        # be; recording its first token would make it look like the build's identity. This is the
+        # shape guard, which is independent of the exit status handled above.
         self.assertIsNone(
             self.run_with(
                 f"package:{self.BASE_APK}\n".encode(),
