@@ -353,7 +353,7 @@ class ReportTest(unittest.TestCase):
             report.alternation_pairs(records)
         self.assertIn("not an A/B alternation", str(raised.exception))
         lines = self.lines(records)
-        self.assertTrue(any(line.startswith("B4/B5") and "NOT MEASURED" in line for line in lines))
+        self.assertTrue(any(line.startswith("B4 pairing") and "NOT MEASURED" in line for line in lines))
 
     def test_a_live_window_with_no_cpu_reading_leaves_b5_unmeasured(self) -> None:
         records = pairs(4, 1000.0, 1000.0, cpu=1.0)
@@ -379,6 +379,26 @@ class ReportTest(unittest.TestCase):
         del records[1]["discharge_rate_ua"]
         lines = self.lines(records)
         self.assertTrue(any(line.startswith("B4 vs stock") and "NOT MEASURED" in line for line in lines))
+
+    def test_an_unmatched_live_window_does_not_discard_b5(self) -> None:
+        # B5 is the live arm's own channel — the document's B5 row names the process ticks during a
+        # visible window and no baseline — so it is read from the live windows and not from the A/B
+        # pairs. An unmatched final live window makes the sequence a non-alternation, and B5 used to
+        # lose every reading on the file with it: four pairs at 6.4% failed B5, and one more completed
+        # live window replaced that failure with "no live window was recorded". B4's refusal stands.
+        records = [*pairs(4, 1000.0, 1000.0, cpu=6.4), visible_record("A", 1000.0, cpu=6.4)]
+        lines = self.lines(records)
+        self.assertTrue(any(line.startswith("B4 pairing") and "NOT MEASURED" in line for line in lines))
+        self.assertFalse(any(line.startswith("B4 vs stock point estimate") for line in lines))
+        self.assertTrue(any(line.startswith("B5 visible CPU (mean)") and "FAIL" in line for line in lines))
+
+    def test_a_live_window_without_a_baseline_still_measures_b5(self) -> None:
+        # The other end of the same rule: a run that recorded live windows and no baseline has taken
+        # B5 measurements, so B5 is measured from them even though the file holds no comparison.
+        records = [visible_record("A", 1000.0, cpu=6.4) for _ in range(2)]
+        lines = self.lines(records)
+        self.assertFalse(any(line.startswith("B5 visible CPU") and "NOT MEASURED" in line for line in lines))
+        self.assertTrue(any(line.startswith("B5 visible CPU (mean)") and "FAIL" in line for line in lines))
 
     def test_a_boolean_discharge_rate_leaves_b4_unmeasured(self) -> None:
         # `True` is an `int`, so it passed the reader's `isinstance` and, being neither negative nor
@@ -541,6 +561,35 @@ class NegativeDischargeRecordTest(unittest.TestCase):
         lines = [verdict.line for verdict in report.report_lines(records)]
         self.assertTrue(any(line.startswith("B4 vs stock") and "NOT MEASURED" in line for line in lines))
         self.assertFalse(any(line.startswith("B4 vs stock point estimate") for line in lines))
+
+
+class BaselineLabelTest(unittest.TestCase):
+    """
+    Finding: a pair whose arm B window names a baseline the document does not is dropped, not judged.
+
+    The report prints one block per *documented* baseline, so a label neither block names is selected
+    by neither, and the pair — with whatever it measured — is absent from every line. Four clean stock
+    pairs plus one pair labeled `unreadable` whose live rate is eight times its baseline reported B4 as
+    PASS throughout and exited 0. It is also the one field here whose *absence* is refused: an arm B
+    window's baseline is what places the pair in a comparison at all, and reading a missing label as
+    the primary baseline would be guessing what the file meant.
+    """
+
+    def test_an_unknown_baseline_label_is_refused(self) -> None:
+        failing = pairs(1, 9000.0, 1000.0, cpu=1.0)
+        failing[1]["baseline"] = "unreadable"
+        records = pairs(4, 1000.0, 1000.0, cpu=1.0) + failing
+        with self.assertRaises(device_layer.ProbeError) as raised:
+            report.report_lines(records)
+        self.assertIn("unreadable", str(raised.exception))
+
+    def test_an_absent_baseline_label_is_refused(self) -> None:
+        failing = pairs(1, 9000.0, 1000.0, cpu=1.0)
+        del failing[1]["baseline"]
+        records = pairs(4, 1000.0, 1000.0, cpu=1.0) + failing
+        with self.assertRaises(device_layer.ProbeError) as raised:
+            report.report_lines(records)
+        self.assertIn("baseline", str(raised.exception))
 
 
 class AlarmBudgetWordingTest(unittest.TestCase):

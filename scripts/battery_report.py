@@ -403,9 +403,29 @@ def window_rate(record: Mapping[str, object]) -> float:
     return value
 
 
-def live_cpu_values(pairs: Sequence[tuple[Mapping[str, object], Mapping[str, object]]]) -> list[float]:
+def live_windows(records: Sequence[Mapping[str, object]]) -> list[Mapping[str, object]]:
     """
-    Collect the CPU readings of the live windows of each pair, refusing an unreadable one.
+    Return the visible live windows that are B5 measurements, in recorded order.
+
+    B5 is the live arm's own CPU channel — the document's B5 row names the process ticks during a
+    visible home-screen window and no baseline — so its input is the live windows and not the A/B
+    pairs. A live window's `cpu_pct` is the same reading whether or not the window it follows recorded
+    a baseline, and B4's pairing rule is a rule about what can be *compared*: reading B5 from the pairs
+    made a criterion that needs no comparison depend on one, so an unmatched final live window — which
+    makes the sequence a non-alternation — discarded every live reading on the file and left B5 saying
+    no live window had been recorded. Pilots are excluded for the same reason they are excluded from
+    the comparison: they are the calibration, not the measurement.
+    """
+    return [
+        record
+        for record in records
+        if record.get("phase") == "visible" and not record.get("pilot") and record.get("arm") == Arm.LIVE.value
+    ]
+
+
+def live_cpu_values(windows: Sequence[Mapping[str, object]]) -> list[float]:
+    """
+    Collect the CPU readings of the qualifying live windows, refusing an unreadable one.
 
     A percentage of one core cannot be negative, so this reader asks `finite_number` for that refusal
     too. The case that matters most here is the non-finite one: `-inf` satisfies an `isinstance`
@@ -413,8 +433,8 @@ def live_cpu_values(pairs: Sequence[tuple[Mapping[str, object], Mapping[str, obj
     pass over a reading nothing measured.
     """
     values: list[float] = []
-    for live, _ in pairs:
-        cpu = live.get("cpu_pct")
+    for window in windows:
+        cpu = window.get("cpu_pct")
         if cpu is None:
             detail = "a live window recorded no CPU reading, so B5 has no input"
             raise device_layer.ProbeError(detail)
@@ -586,9 +606,26 @@ def b4_baseline_verdicts(
     comparison is the one B4 is gated on. The black static baseline is the document's secondary one, so
     a run without those windows says so explicitly instead of leaving the reader to notice a missing
     block \u2014 and says whether the device or the run is the reason (see `black_baseline_verdict`).
+
+    That one-block-per-documented-baseline shape is also why a label the document does not name is
+    refused rather than skipped: an arm B window labeled something else is selected by no block, so the
+    pair and every measurement in it would be absent from the whole report. The label is the one field
+    here whose *absence* is refused too. Everywhere else a missing field means an older revision had
+    nothing to record, but an arm B window's baseline is what places the pair in a comparison at all,
+    and inferring the primary baseline from a missing label would be guessing what the file meant.
     """
     verdicts: list[Verdict] = []
-    for baseline in (Baseline.STOCK.value, Baseline.BLACK.value):
+    baseline_labels = (Baseline.STOCK.value, Baseline.BLACK.value)
+    for _, base in pairs:
+        label = base.get("baseline")
+        if label not in baseline_labels:
+            detail = (
+                f"a visible arm B window carries baseline={label!r}, which is not one of the document's "
+                f"baselines ({' and '.join(baseline_labels)}), so the pair it belongs to stands outside "
+                "every comparison this report prints"
+            )
+            raise device_layer.ProbeError(detail)
+    for baseline in baseline_labels:
         selected = [(live, base) for live, base in pairs if base.get("baseline") == baseline]
         if not selected:
             if baseline == Baseline.BLACK.value:
@@ -678,7 +715,9 @@ def report_lines(records: Sequence[Mapping[str, object]], *, black_unavailable: 
     try:
         pairs = alternation_pairs(measured)
     except device_layer.ProbeError as error:
-        verdicts.append(Verdict("B4/B5", VerdictStatus.NOT_MEASURED, f"B4/B5: NOT MEASURED - {error}"))
+        # Only B4 needs the pairing. The refusal is reported under B4's own label rather than a joint
+        # one, because B5 is measured from the live windows themselves and is reported either way.
+        verdicts.append(Verdict("B4 pairing", VerdictStatus.NOT_MEASURED, f"B4 pairing: NOT MEASURED - {error}"))
         pairs = []
 
     verdicts.extend(b4_baseline_verdicts(pairs, black_unavailable=black_unavailable))
@@ -686,7 +725,7 @@ def report_lines(records: Sequence[Mapping[str, object]], *, black_unavailable: 
     # B5 is the average visible CPU of the document's matrix, so the average is what is checked; the
     # worst window is reported beside it as the observation it is.
     try:
-        cpu_values = live_cpu_values(pairs)
+        cpu_values = live_cpu_values(live_windows(measured))
     except device_layer.ProbeError as error:
         verdicts.append(
             Verdict("B5 visible CPU", VerdictStatus.NOT_MEASURED, f"B5 visible CPU: NOT MEASURED - {error}")
