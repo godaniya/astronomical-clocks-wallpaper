@@ -2897,8 +2897,10 @@ class ForegroundProbeTest(unittest.TestCase):
         # home could be read as the state now. Later rounds must not put the snapshot back in front.
         with patch.object(device_layer, "run_adb", return_value=b"  mCurrentFocus=null\n") as run_adb:
             device_layer.read_home_in_front("device")
+        # Each recorded invocation, named as such: `call` here would read like `unittest.mock.call`,
+        # which this module does not import and does not need.
         self.assertEqual(
-            [call.args[0][:2] for call in run_adb.call_args_list],
+            [invocation.args[0][:2] for invocation in run_adb.call_args_list],
             [["shell", "cmd"], ["shell", "dumpsys"]],
         )
 

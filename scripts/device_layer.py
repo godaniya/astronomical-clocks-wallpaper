@@ -1225,7 +1225,7 @@ class AdbDevice:
         return read_home_in_front(self.serial)
 
     def read_installed_apk_sha256(self) -> str | None:
-        """Read the SHA-256 of this package's installed `base.apk`, or None when unreadable."""
+        """Read the SHA-256 of this package's installed `base.apk`, or None; raises when the probe fails."""
         return read_installed_apk_sha256(self.serial)
 
     def read_keyguard_locked(self) -> bool | None:
