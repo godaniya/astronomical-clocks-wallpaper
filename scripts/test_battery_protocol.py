@@ -188,13 +188,16 @@ class ClkTckProbeTest(unittest.TestCase):
             patch.object(subject, "read_power_source_lines", return_value=ON_BATTERY_POWER_LINES),
             patch.object(subject, "verify_arm"),
             patch.object(subject, "arm_conditions", return_value={"wallpaper_component": "c", "median_luma": 0.0}),
-            patch.object(subject, "run_window", return_value=(_window(cpu=1.0), (True,), (True,))),
+            patch.object(subject, "run_window", return_value=(_window(cpu=1.0), (True,), (True,), (True,))),
             patch.object(subject, "undo_phase_changes", return_value=[]),
             patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
         ):
             record = subject.phase_visible(device, arm=report.Arm.LIVE, baseline=None, minutes=1.0, recorder=recorder())
         self.assertEqual(250, record.values["clk_tck"])
         self.assertEqual(subject.POWER_SOURCE_DEVICE, record.values["power_source"])
+        # The surface in front is sampled through the window and carried into the record, the way the
+        # display and power-source readings are, so the evidence the refusal rests on is on disk.
+        self.assertEqual((True,), record.values["home_in_front_samples"])
 
     def test_a_device_without_a_tick_rate_fails_before_the_window(self) -> None:
         device = MagicMock()
@@ -611,7 +614,7 @@ class PowerSourceProbeTest(unittest.TestCase):
             patch.object(subject, "read_power_source_lines", return_value=ON_BATTERY_POWER_LINES),
             patch.object(subject, "verify_arm"),
             patch.object(subject, "arm_conditions", return_value={"wallpaper_component": "c", "median_luma": 0.0}),
-            patch.object(subject, "run_window", return_value=(_window(cpu=1.0), (True,), (True, False))),
+            patch.object(subject, "run_window", return_value=(_window(cpu=1.0), (True,), (True, False), (True,))),
             patch.object(subject, "undo_phase_changes", return_value=[]),
             patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
             self.assertRaises(device_layer.ProbeError) as raised,
@@ -626,7 +629,9 @@ class PowerSourceProbeTest(unittest.TestCase):
             patch.object(subject, "read_power_source_lines", return_value=ON_BATTERY_POWER_LINES),
             patch.object(subject, "verify_arm"),
             patch.object(subject, "arm_conditions", return_value={"wallpaper_component": "c", "median_luma": 0.0}),
-            patch.object(subject, "run_window", return_value=(_window(cpu=1.0), (True, False), (True, True))),
+            patch.object(
+                subject, "run_window", return_value=(_window(cpu=1.0), (True, False), (True, True), (True, True))
+            ),
             patch.object(subject, "undo_phase_changes", return_value=[]),
             patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
             self.assertRaises(device_layer.ProbeError) as raised,
@@ -648,7 +653,7 @@ class PowerSourceProbeTest(unittest.TestCase):
             patch.object(subject, "read_power_source_lines", return_value=ON_BATTERY_POWER_LINES),
             patch.object(subject, "verify_arm"),
             patch.object(subject, "arm_conditions", return_value={"wallpaper_component": "c", "median_luma": 0.0}),
-            patch.object(subject, "run_window", return_value=(gained, (True,), (True,))),
+            patch.object(subject, "run_window", return_value=(gained, (True,), (True,), (True,))),
             patch.object(subject, "undo_phase_changes", return_value=[]),
             patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
             self.assertRaises(device_layer.ProbeError) as raised,
@@ -669,7 +674,7 @@ class PowerSourceProbeTest(unittest.TestCase):
             patch.object(subject, "verify_arm"),
             patch.object(subject, "read_power_source_lines", return_value=ON_BATTERY_POWER_LINES),
             patch.object(subject, "take_battery_sample", side_effect=[sample, sample]),
-            patch.object(subject, "run_window", return_value=(_window(cpu=1.0), (False, False), (False, True))),
+            patch.object(subject, "run_window", return_value=(_window(cpu=1.0), (False, False), (False, True), [])),
             patch.object(subject, "undo_phase_changes", return_value=[]),
             patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
             self.assertRaises(device_layer.ProbeError),
@@ -686,13 +691,81 @@ class PowerSourceProbeTest(unittest.TestCase):
             patch.object(subject, "read_power_source_lines", return_value=ON_BATTERY_POWER_LINES),
             patch.object(subject, "verify_arm"),
             patch.object(subject, "take_battery_sample", side_effect=[sample, sample]),
-            patch.object(subject, "sample_window_states", return_value=([True, True], [True, False])),
+            patch.object(subject, "sample_window_states", return_value=([True, True], [True, False], [True, True])),
             patch.object(subject, "undo_phase_changes", return_value=[]),
             patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
             self.assertRaises(device_layer.ProbeError) as raised,
         ):
             subject.phase_memory(device, minutes=1.0, recorder=recorder())
         self.assertIn("charger connected inside the window", str(raised.exception))
+
+    def test_a_visible_window_that_left_the_home_screen_is_refused(self) -> None:
+        # The arm guard establishes the home screen *before* the window, and another app can come
+        # forward after that with the bound wallpaper component unchanged, so the display, the
+        # keyguard and the arm all still pass. `read_home_in_front` says what is needed here in its own
+        # docstring — "a caller measuring a window must verify the surface at the points it requires
+        # rather than trusting this one answer for the whole window" — so the surface is sampled with
+        # the rest of the window's state, and one sample that is not the home screen refuses it.
+        for samples in ([True, False], [True, None]):
+            with (
+                self.subTest(samples=samples),
+                self.assertRaises(device_layer.ProbeError) as raised,
+            ):
+                subject.require_visible_measurement(
+                    _window(cpu=1.0), [True, True], [True, True], samples, report.Arm.LIVE
+                )
+            self.assertIn("not the surface in front", str(raised.exception))
+        self.assertAlmostEqual(
+            120000.0,
+            subject.require_visible_measurement(
+                _window(cpu=1.0), [True, True], [True, True], [True, True], report.Arm.LIVE
+            ),
+        )
+
+    def test_a_memory_window_that_left_the_home_screen_is_refused(self) -> None:
+        # B6 is defined over a window on the live wallpaper, so a different app in front means the
+        # wallpaper is not the surface being drawn for the window the record claims.
+        before = subject.BatterySample(0.0, 4_000_000, 90, 4000, 10.0, 45_000)
+        after = subject.BatterySample(1800.0, 3_980_000, 90, 3990, 12.0, 45_500)
+        with self.assertRaises(device_layer.ProbeError) as raised:
+            subject.require_memory_measurement([True], [True], [False], before, after)
+        self.assertIn("not the surface in front", str(raised.exception))
+        self.assertEqual(500, subject.require_memory_measurement([True], [True], [True], before, after))
+
+
+class WindowSurfaceSamplingTest(unittest.TestCase):
+    """Checks that a window's surface is sampled through it, not only checked before it."""
+
+    def test_a_visible_window_samples_the_surface_in_front(self) -> None:
+        device = MagicMock()
+        device.read_screen_on.return_value = True
+        device.read_home_in_front.return_value = True
+        with (
+            patch.object(subject, "device_on_own_battery", return_value=True),
+            patch.object(subject.time, "sleep"),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            states, on_battery, homes = subject.sample_window_states(device, 60.0, home_required=True)
+        self.assertEqual([True, True], states)
+        self.assertEqual([True, True], on_battery)
+        self.assertEqual([True, True], homes)
+        self.assertEqual(2, device.read_home_in_front.call_count)
+
+    def test_a_hidden_window_samples_no_surface(self) -> None:
+        # The display is off for a hidden window, so there is no surface in front to require: the
+        # sampler returns an empty list rather than reading one nothing would use.
+        device = MagicMock()
+        device.read_screen_on.return_value = False
+        with (
+            patch.object(subject, "device_on_own_battery", return_value=True),
+            patch.object(subject.time, "sleep"),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            states, on_battery, homes = subject.sample_window_states(device, 60.0, home_required=False)
+        self.assertEqual([False, False], states)
+        self.assertEqual([True, True], on_battery)
+        self.assertEqual([], homes)
+        device.read_home_in_front.assert_not_called()
 
 
 class ArmGuardTest(unittest.TestCase):
@@ -852,7 +925,7 @@ class VisiblePhaseGuardTest(unittest.TestCase):
             patch.object(subject, "DeviceStateSnapshot"),
             patch.object(subject, "read_power_source_lines", return_value=ON_BATTERY_POWER_LINES),
             patch.object(subject, "arm_conditions", return_value={"wallpaper_component": "static", "median_luma": 0.0}),
-            patch.object(subject, "run_window", return_value=(_window(cpu=1.0), (True,), (True,))),
+            patch.object(subject, "run_window", return_value=(_window(cpu=1.0), (True,), (True,), (True,))),
             patch.object(subject, "undo_phase_changes", return_value=[]),
             patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
         ):
@@ -962,7 +1035,7 @@ class AbortedRestoreTest(unittest.TestCase):
             patch.object(subject, "read_power_source_lines", return_value=ON_BATTERY_POWER_LINES),
             patch.object(subject, "verify_arm"),
             patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
-            patch.object(subject, "run_window", return_value=(_window(cpu=1.0), (True, True), (True, True))),
+            patch.object(subject, "run_window", return_value=(_window(cpu=1.0), (True, True), (True, True), [])),
             patch.object(subject, "undo_phase_changes", return_value=["airplane_mode_on did not read back as 0"]),
             contextlib.redirect_stdout(io.StringIO()),
             self.assertRaises(device_layer.ProbeError) as raised,
@@ -990,7 +1063,7 @@ class AbortedRestoreTest(unittest.TestCase):
             patch.object(subject, "verify_arm"),
             patch.object(subject, "arm_conditions", return_value={"wallpaper_component": "c", "median_luma": 0.0}),
             patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
-            patch.object(subject, "run_window", return_value=(_window(cpu=1.0), (True,), (True, False))),
+            patch.object(subject, "run_window", return_value=(_window(cpu=1.0), (True,), (True, False), (True,))),
             patch.object(subject, "undo_phase_changes", return_value=["screen_brightness did not read back as 128"]),
             contextlib.redirect_stdout(io.StringIO()),
             self.assertRaises(device_layer.ProbeError) as raised,
@@ -1020,7 +1093,7 @@ class AbortedRestoreTest(unittest.TestCase):
             patch.object(subject, "verify_arm"),
             patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
             patch.object(subject, "take_battery_sample", side_effect=[unparsable, unparsable]),
-            patch.object(subject, "sample_window_states", return_value=([True], [True])),
+            patch.object(subject, "sample_window_states", return_value=([True], [True], [True])),
             patch.object(subject, "undo_phase_changes", return_value=["the display could not be restored"]),
             contextlib.redirect_stdout(io.StringIO()),
             self.assertRaises(device_layer.ProbeError) as raised,
@@ -1054,7 +1127,7 @@ class MemoryPhaseTest(unittest.TestCase):
             patch.object(subject, "DeviceStateSnapshot"),
             patch.object(subject, "read_power_source_lines", return_value=ON_BATTERY_POWER_LINES),
             patch.object(subject, "take_battery_sample", side_effect=[sample, sample]),
-            patch.object(subject, "sample_window_states", return_value=([True, False], [True, True])),
+            patch.object(subject, "sample_window_states", return_value=([True, False], [True, True], [True, True])),
             patch.object(subject, "undo_phase_changes", return_value=[]),
             patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
             self.assertRaises(device_layer.ProbeError),
@@ -1079,7 +1152,7 @@ class MemoryPhaseTest(unittest.TestCase):
             patch.object(subject, "DeviceStateSnapshot"),
             patch.object(subject, "read_power_source_lines", return_value=ON_BATTERY_POWER_LINES),
             patch.object(subject, "take_battery_sample", side_effect=[before, after]),
-            patch.object(subject, "sample_window_states", return_value=([True], [True])),
+            patch.object(subject, "sample_window_states", return_value=([True], [True], [True])),
             patch.object(subject, "undo_phase_changes", return_value=[]),
             patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
             contextlib.redirect_stdout(io.StringIO()),
@@ -1108,7 +1181,7 @@ class HiddenPhaseTest(unittest.TestCase):
             patch.object(subject, "read_power_source_lines", return_value=ON_BATTERY_POWER_LINES),
             patch.object(subject, "verify_arm"),
             patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
-            patch.object(subject, "run_window", return_value=(_window(cpu=0.5), [False, False], [True, True])),
+            patch.object(subject, "run_window", return_value=(_window(cpu=0.5), [False, False], [True, True], [])),
             patch.object(subject, "undo_phase_changes", return_value=[]),
             contextlib.redirect_stdout(io.StringIO()),
         ):
@@ -1128,7 +1201,7 @@ class HiddenPhaseTest(unittest.TestCase):
             patch.object(subject, "read_power_source_lines", return_value=ON_BATTERY_POWER_LINES),
             patch.object(subject, "verify_arm"),
             patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
-            patch.object(subject, "run_window", return_value=(_window(cpu=0.5), (False, True), (True, True))),
+            patch.object(subject, "run_window", return_value=(_window(cpu=0.5), (False, True), (True, True), [])),
             patch.object(subject, "undo_phase_changes", return_value=[]),
             contextlib.redirect_stdout(io.StringIO()),
             self.assertRaises(device_layer.ProbeError) as raised,
@@ -1152,10 +1225,10 @@ class WindowValidityTest(unittest.TestCase):
         # The same refusal on the B5 side, and only for the live arm: a baseline arm has no wallpaper
         # process to read CPU from, so `None` there is the expected reading rather than a failure.
         with self.assertRaises(device_layer.ProbeError) as raised:
-            subject.require_visible_measurement(_window(cpu=None), [True], [True], report.Arm.LIVE)
+            subject.require_visible_measurement(_window(cpu=None), [True], [True], [True], report.Arm.LIVE)
         self.assertIn("could not be read over a visible window", str(raised.exception))
         self.assertIsInstance(
-            subject.require_visible_measurement(_window(cpu=None), [True], [True], report.Arm.BASELINE),
+            subject.require_visible_measurement(_window(cpu=None), [True], [True], [True], report.Arm.BASELINE),
             float,
         )
 
@@ -1478,6 +1551,29 @@ class MainExitCodeTest(unittest.TestCase):
             "hidden", "now", "rev", None, 36, 1.0, {"restore_problems": ["airplane_mode_on did not read back as 0"]}
         )
         self.assertEqual(1, self.run_main(record))
+
+    def test_a_target_selection_failure_is_a_named_error_not_a_traceback(self) -> None:
+        # `select_target_serial` runs `adb devices`, so a missing or wedged adb is the most common way
+        # this harness fails. It was called outside the guard, so that failure printed a traceback
+        # instead of the `ERROR:` line — and the exit code — every other failure gets.
+        with (
+            patch.object(device_layer, "select_target_serial", side_effect=subprocess.CalledProcessError(1, "adb")),
+            contextlib.redirect_stderr(io.StringIO()) as stderr,
+        ):
+            code = subject.main(["resources"])
+        self.assertEqual(1, code)
+        self.assertIn("ERROR:", stderr.getvalue())
+
+    def test_an_unusable_selection_still_exits_rather_than_returning(self) -> None:
+        # `select_target_serial` reports a selection it cannot make by exiting. Moving it inside the
+        # guard must not turn that `SystemExit` into a returned exit code, or a caller would read a
+        # refused selection as a phase that ran.
+        with (
+            patch.object(device_layer, "select_target_serial", side_effect=SystemExit(1)),
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit),
+        ):
+            subject.main(["resources"])
 
 
 class MeasurementIdentityTest(unittest.TestCase):

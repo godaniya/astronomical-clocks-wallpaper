@@ -1170,10 +1170,31 @@ def arm_conditions(device: device_layer.AdbDevice, arm: Arm, baseline: Baseline 
     }
 
 
-def sample_window_states(device: device_layer.AdbDevice, seconds: float) -> tuple[list[bool | None], list[bool]]:
-    """Sample the display state and the power source across a window and return every reading."""
+def sample_window_states(
+    device: device_layer.AdbDevice,
+    seconds: float,
+    *,
+    home_required: bool,
+) -> tuple[list[bool | None], list[bool], list[bool | None]]:
+    """
+    Sample the display state, the power source, and — for a visible window — the surface in front.
+
+    The display and the power source are sampled *through* the window rather than checked once before
+    it, because either can change while it runs. The surface in front is the same kind of fact, and it
+    was the one still checked only at the start. `device_layer.read_home_in_front` reads the foreground
+    and the home package in two separate round trips, and says so itself: "a caller measuring a window
+    must verify the surface at the points it requires rather than trusting this one answer for the
+    whole window". Another app coming forward mid-window leaves the bound wallpaper component
+    unchanged, so every other guard still passes and the window would be recorded as a home-screen
+    B4/B5 measurement of a screen that is not the home screen — and, for B6, as a window on the live
+    wallpaper while that wallpaper is not the surface being drawn.
+
+    A hidden window turns the display off and has no surface to sample, so it passes
+    `home_required=False` and gets an empty list back.
+    """
     states: list[bool | None] = []
     on_battery: list[bool] = []
+    homes: list[bool | None] = []
     remaining = seconds
     while remaining > 0:
         interval = min(SAMPLE_INTERVAL_SECONDS, remaining)
@@ -1181,8 +1202,12 @@ def sample_window_states(device: device_layer.AdbDevice, seconds: float) -> tupl
         remaining -= interval
         states.append(device.read_screen_on())
         on_battery.append(device_on_own_battery(device))
-        print(f"  {seconds - remaining:6.0f}s: screen_on={states[-1]} on_battery={on_battery[-1]}", flush=True)
-    return states, on_battery
+        reading = f"  {seconds - remaining:6.0f}s: screen_on={states[-1]} on_battery={on_battery[-1]}"
+        if home_required:
+            homes.append(device.read_home_in_front())
+            reading += f" home_in_front={homes[-1]}"
+        print(reading, flush=True)
+    return states, on_battery, homes
 
 
 def power_source_problem(on_battery: Sequence[bool]) -> str | None:
@@ -1288,17 +1313,19 @@ def run_window(
     *,
     screen_on: bool,
     clk_tck: int,
-) -> tuple[Window, list[bool | None], list[bool]]:
+) -> tuple[Window, list[bool | None], list[bool], list[bool | None]]:
     """Sample a bounded window, holding the requested display state for its whole duration."""
     if not screen_on:
         device.run_adb(["shell", "input", "keyevent", "KEYCODE_SLEEP"])
         time.sleep(2.0)
     start = take_battery_sample(device, pid, clk_tck)
     seconds = minutes * 60.0
-    states, on_battery = sample_window_states(device, seconds)
+    # A window whose display is on is a window on the home screen, so the surface in front is sampled
+    # with the rest of the state; see `sample_window_states`.
+    states, on_battery, homes = sample_window_states(device, seconds, home_required=screen_on)
     end = take_battery_sample(device, pid, clk_tck)
     window = Window(start_sample=start, end_sample=end, duration_seconds=end.timestamp - start.timestamp)
-    return window, states, on_battery
+    return window, states, on_battery, homes
 
 
 def phase_resources(device: device_layer.AdbDevice) -> Record:
@@ -1365,6 +1392,7 @@ def require_visible_measurement(
     window: Window,
     states: Sequence[bool | None],
     on_battery: Sequence[bool],
+    home_in_front: Sequence[bool | None],
     arm: Arm,
 ) -> float:
     """
@@ -1373,9 +1401,18 @@ def require_visible_measurement(
     `Window.discharge_rate_ua` is one of the refusals — it raises when the pack gained charge across
     the window — so it is read here, inside the same path as the others, rather than at the print that
     happens to need it first.
+
+    The surface in front is checked over the whole window, not only before it: the guard that runs
+    before the window establishes the home screen, and another app coming forward after that leaves
+    the bound wallpaper component unchanged, so every other reading here would still pass while the
+    screen measured is not the home screen. A sample that could not be read is a refusal for the same
+    reason it is in `ensure_visible_home`.
     """
     if states and not all(state is True for state in states):
         detail = f"the display was not on for the whole visible window: {states}"
+        raise device_layer.ProbeError(detail)
+    if home_in_front and not all(state is True for state in home_in_front):
+        detail = f"the home screen was not the surface in front for the whole visible window: {home_in_front}"
         raise device_layer.ProbeError(detail)
     charging = power_source_problem(on_battery)
     if charging is not None:
@@ -1390,12 +1427,23 @@ def require_visible_measurement(
 def require_memory_measurement(
     states: Sequence[bool | None],
     on_battery: Sequence[bool],
+    home_in_front: Sequence[bool | None],
     before: BatterySample,
     after: BatterySample,
 ) -> int:
-    """Refuse a memory window that is not a B6 measurement, returning the total-PSS growth in kB."""
+    """
+    Refuse a memory window that is not a B6 measurement, returning the total-PSS growth in kB.
+
+    B6 is defined over a window on the live wallpaper, so the surface in front is checked over the
+    whole window for the reason `require_visible_measurement` gives: a different app in front means
+    the wallpaper is not the surface being drawn, and the PSS growth recorded would be the growth of
+    a wallpaper that was not on screen for the window the record claims.
+    """
     if states and not all(state is True for state in states):
         detail = f"the display was not on for the whole memory window: {states}"
+        raise device_layer.ProbeError(detail)
+    if home_in_front and not all(state is True for state in home_in_front):
+        detail = f"the home screen was not the surface in front for the whole memory window: {home_in_front}"
         raise device_layer.ProbeError(detail)
     charging = power_source_problem(on_battery)
     if charging is not None:
@@ -1428,7 +1476,7 @@ def phase_hidden(device: device_layer.AdbDevice, minutes: float, *, recorder: Re
             snapshot.pin()
             power_source = apply_power_mode(device)
             simulated = power_source == POWER_SOURCE_SIMULATED
-            window, states, on_battery = run_window(device, pid, minutes, screen_on=False, clk_tck=clk_tck)
+            window, states, on_battery, _ = run_window(device, pid, minutes, screen_on=False, clk_tck=clk_tck)
         finally:
             problems = undo_phase_changes(device, snapshot, prior_power, simulated=simulated)
         # The acceptance checks and the record build sit inside this `try`, after the restore, rather
@@ -1489,7 +1537,7 @@ def phase_visible(
             snapshot.pin()
             power_source = apply_power_mode(device)
             simulated = power_source == POWER_SOURCE_SIMULATED
-            window, states, on_battery = run_window(device, pid, minutes, screen_on=True, clk_tck=clk_tck)
+            window, states, on_battery, homes = run_window(device, pid, minutes, screen_on=True, clk_tck=clk_tck)
         finally:
             problems = undo_phase_changes(device, snapshot, prior_power, simulated=simulated)
         # The acceptance checks and the record build sit inside this `try`, after the restore, rather
@@ -1497,7 +1545,7 @@ def phase_visible(
         # still an abort, and the restore problems it collected have to reach disk with it instead of
         # leaving the shared device changed with nothing saying so. That is why the checks are a
         # function of their own — they belong to that path rather than sitting beside it.
-        discharge_rate_ua = require_visible_measurement(window, states, on_battery, arm)
+        discharge_rate_ua = require_visible_measurement(window, states, on_battery, homes, arm)
         print(f"window {window.duration_seconds:.1f}s: discharge {window.discharge_uah} uAh")
         print(f"discharge rate {discharge_rate_ua:.0f} uA, CPU {window.cpu_pct}% of one core")
         record = build_record(
@@ -1514,6 +1562,7 @@ def phase_visible(
             power_source=power_source,
             screen_on_samples=states,
             on_battery_samples=on_battery,
+            home_in_front_samples=homes,
             restore_problems=problems,
             **conditions,
         )
@@ -1533,6 +1582,7 @@ def phase_memory(device: device_layer.AdbDevice, minutes: float, *, recorder: Re
     problems: list[str] = []
     states: list[bool | None] = []
     on_battery: list[bool] = []
+    homes: list[bool | None] = []
     power_source = POWER_SOURCE_DEVICE
     simulated = False
     # The restore sits in its own `finally` inside the outer `try`, so it runs before the abort is
@@ -1547,7 +1597,7 @@ def phase_memory(device: device_layer.AdbDevice, minutes: float, *, recorder: Re
             simulated = power_source == POWER_SOURCE_SIMULATED
             before = take_battery_sample(device, pid, clk_tck)
             seconds = minutes * 60.0
-            states, on_battery = sample_window_states(device, seconds)
+            states, on_battery, homes = sample_window_states(device, seconds, home_required=True)
             after = take_battery_sample(device, pid, clk_tck)
         finally:
             problems = undo_phase_changes(device, snapshot, prior_power, simulated=simulated)
@@ -1556,7 +1606,7 @@ def phase_memory(device: device_layer.AdbDevice, minutes: float, *, recorder: Re
         # still an abort, and the restore problems it collected have to reach disk with it instead of
         # leaving the shared device changed with nothing saying so. That is why the checks are a
         # function of their own — they belong to that path rather than sitting beside it.
-        growth_kb = require_memory_measurement(states, on_battery, before, after)
+        growth_kb = require_memory_measurement(states, on_battery, homes, before, after)
         print(f"total PSS {before.total_pss_kb} -> {after.total_pss_kb} kB over {minutes:.1f} min")
         print(f"growth {growth_kb} kB against the {MAX_PSS_GROWTH_KB} kB budget")
         record = build_record(
@@ -1576,6 +1626,7 @@ def phase_memory(device: device_layer.AdbDevice, minutes: float, *, recorder: Re
             power_source=power_source,
             screen_on_samples=states,
             on_battery_samples=on_battery,
+            home_in_front_samples=homes,
             restore_problems=problems,
         )
     except Exception as error:
@@ -1857,10 +1908,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         except device_layer.ProbeError as error:
             print(f"ERROR: {device_layer.error_detail(error)}", file=sys.stderr)
             return 1
-    serial = device_layer.select_target_serial(args.serial)
-    device = device_layer.AdbDevice(serial)
     recorder = Recorder(state_dir)
     try:
+        # Target selection is inside the guard because it runs `adb devices`: a missing or wedged adb
+        # is the most common way this harness fails, and outside the guard it printed a traceback
+        # rather than the named `ERROR` every other failure gets. `select_target_serial` reports an
+        # unusable selection by exiting, which is a `SystemExit` and is not caught here, so that
+        # behaviour is unchanged.
+        serial = device_layer.select_target_serial(args.serial)
+        device = device_layer.AdbDevice(serial)
         sdk = device.run_adb(["shell", "getprop", "ro.build.version.sdk"]).decode(errors="replace")
         print(f"$ adb -s {serial}  (API {parse_api_level(sdk)})")
         dispatch(args, device, recorder)
