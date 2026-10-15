@@ -51,12 +51,23 @@ from battery_report import (
     two_sigma_noise_floor,
 )
 
-CHARGE_COUNTER_PATTERN: Final = re.compile(r"^[ \t]*Charge counter:[ \t]*(\d+)[ \t]*$", re.MULTILINE)
-BATTERY_LEVEL_PATTERN: Final = re.compile(r"^[ \t]*level:[ \t]*(\d+)[ \t]*$", re.MULTILINE)
+# A run of digits as a device prints one, bounded. Every pattern below that captures a number is handed
+# to `int()`, and `int()` refuses a value of more than about 4300 digits by *raising* rather than
+# converting it — so an unbounded `\d+` turns a dump that lost its mind into a traceback instead of the
+# named refusal the harness promises. No field, census, or tick count this harness reads is 18 digits
+# wide, so the bound costs nothing that a real dump has.
+#
+# The trailing lookahead is what makes the bound a refusal rather than a truncation: in a pattern with
+# no trailing anchor — `TOTAL_PSS_PATTERN` is the one — `\d{1,18}` would happily match the first
+# eighteen digits of a longer run and report them as the reading, which is the silent misreading the
+# bound exists to prevent. `(?!\d)` refuses the run instead.
+DIGITS: Final = r"\d{1,18}(?!\d)"
+CHARGE_COUNTER_PATTERN: Final = re.compile(rf"^[ \t]*Charge counter:[ \t]*({DIGITS})[ \t]*$", re.MULTILINE)
+BATTERY_LEVEL_PATTERN: Final = re.compile(rf"^[ \t]*level:[ \t]*({DIGITS})[ \t]*$", re.MULTILINE)
 # Anchored to the field name so that `Max charging voltage:` can never be read as the pack voltage.
-BATTERY_VOLTAGE_PATTERN: Final = re.compile(r"^[ \t]*voltage:[ \t]*(\d+)[ \t]*$", re.MULTILINE)
-TOTAL_PSS_PATTERN: Final = re.compile(r"^\s*TOTAL\s+(\d+)", re.MULTILINE)
-SDK_PATTERN: Final = re.compile(r"^(\d+)$")
+BATTERY_VOLTAGE_PATTERN: Final = re.compile(rf"^[ \t]*voltage:[ \t]*({DIGITS})[ \t]*$", re.MULTILINE)
+TOTAL_PSS_PATTERN: Final = re.compile(rf"^\s*TOTAL\s+({DIGITS})", re.MULTILINE)
+SDK_PATTERN: Final = re.compile(rf"^({DIGITS})$")
 # Every shape `dumpsys jobscheduler` prints a job line in, taken from the test device's own dump.
 # The two components at the end of a job line are a `<hash> <component>` pair; the component is
 # either `<pkg>/<class>` or `<ns>@<pkg>/<class>`, and one legacy line on this device is tagged
@@ -86,25 +97,25 @@ ALARM_ENTRY_PATTERN: Final = re.compile(r"^\s*\w+\s*#\d+:\s*Alarm\{", re.MULTILI
 # A `dumpsys jobscheduler` dump that has been read at all prints a `Registered <n> jobs:` census line
 # before the job list; requiring it is what separates "the app has no jobs" from "this is not a
 # jobscheduler dump", so an unparsable probe is an error rather than a zero.
-JOBSCHEDULER_CENSUS_PATTERN: Final = re.compile(r"^[ \t]*Registered (\d+) jobs:", re.MULTILINE)
+JOBSCHEDULER_CENSUS_PATTERN: Final = re.compile(rf"^[ \t]*Registered ({DIGITS}) jobs:", re.MULTILINE)
 # A `dumpsys power` that has been read at all prints its wake-lock census before listing the locks,
 # the same way `dumpsys jobscheduler` prints its job census. Requiring it is what separates "the app
 # holds no wake locks" from "this is not a power dump", so a truncated or reshaped dump is an error
 # rather than a zero.
 #
-# The leading and trailing whitespace classes are `[ \t]` and not `\s`. `\s` matches a newline, so
-# `^\s*(\d+) pending alarms:` can begin its match at the blank line *above* the census and run
-# into it — the match then starts one line early, and a parser that locates the censused block from
-# the match start reads the block from the wrong line. Requiring a line's own spaces keeps the match
-# on the census line.
-POWER_WAKELOCK_CENSUS_PATTERN: Final = re.compile(r"^[ \t]*Wake Locks: size=(\d+)[ \t]*$", re.MULTILINE)
+# The leading and trailing whitespace classes are `[ \t]` and not `\s`. `\s` matches a newline, so a
+# pattern anchored `^\s*` on a census line can begin its match at the blank line *above* the census and
+# run into it — the match then starts one line early, and a parser that locates the censused block from
+# the match start reads the block from the wrong line. Requiring a line's own spaces keeps the match on
+# the census line.
+POWER_WAKELOCK_CENSUS_PATTERN: Final = re.compile(rf"^[ \t]*Wake Locks: size=({DIGITS})[ \t]*$", re.MULTILINE)
 # `dumpsys alarm` likewise prints a census before listing the pending alarms, and that census is what
 # makes an alarm count trustworthy. The line is taken from the test device's own dump, which reads
 # `  164 pending alarms: ` — count first, no `Pending alarm batches:` line anywhere in it. The count
 # is a count of entries and not the highest entry index: the block below this census is numbered `#1`
 # onwards, and on five consecutive reads of one device the declared count and the number of entry
 # lines agreed exactly, which is what `census_entry_block` holds them to.
-ALARM_CENSUS_PATTERN: Final = re.compile(r"^[ \t]*(\d+) pending alarms:[ \t]*$", re.MULTILINE)
+ALARM_CENSUS_PATTERN: Final = re.compile(rf"^[ \t]*({DIGITS}) pending alarms:[ \t]*$", re.MULTILINE)
 POWERED_LINE_PATTERN: Final = re.compile(r"^\s*(\w+) powered:\s*(true|false)\s*$", re.MULTILINE)
 # The four power sources `dumpsys battery` reports. A reading is only complete when all four are
 # present: a dump that lost three of them must not be read as "the remaining one is false, so the
@@ -116,12 +127,12 @@ EXPECTED_POWER_SOURCES: Final = ("AC", "USB", "Wireless", "Dock")
 # A device setting is never 18 digits wide, so the bound costs nothing and makes "unreadable" the
 # answer for everything the pattern does not match. The sign is accepted here because
 # `screen_brightness` is legitimately `-1` on a device using automatic brightness.
-DECIMAL_INT_PATTERN: Final = re.compile(r"[+-]?\d{1,18}")
+DECIMAL_INT_PATTERN: Final = re.compile(rf"[+-]?{DIGITS}")
 # A UID as `stat -c %u` prints one, which is never negative. It is a pattern of its own rather than the
 # signed one above: a read that failed or was malformed can answer `-1`, and accepting it as a UID
 # would carry that through `phase_resources` — which refuses only `None` — into the wake-lock predicate
 # as `uid=-1`, matching no lock and reporting a zero, which is a B2 pass the app did not earn.
-PROCESS_UID_PATTERN: Final = re.compile(r"\d{1,18}")
+PROCESS_UID_PATTERN: Final = re.compile(DIGITS)
 
 DEFAULT_STATE_DIR: Final = Path("build/reports/battery")
 RECORD_FILE_NAME: Final = "records.jsonl"
@@ -1331,6 +1342,18 @@ def run_window(
     if not screen_on:
         device.run_adb(["shell", "input", "keyevent", "KEYCODE_SLEEP"])
         time.sleep(2.0)
+        # The sleep key event is a request, not the state: `device_layer.sleep_screen` reports that the
+        # event was *delivered*, and a sleep that failed or merely lagged leaves the display on. The
+        # first display sample is a whole sampling interval away from here, so a lag would be invisible
+        # in the readings — every later one would be `False` while the start of the window was lit —
+        # and B3 would be accepted for a window that was not screen-off throughout. This is the same
+        # readback `wake_screen` makes for the opposite transition.
+        if device.read_screen_on() is not False:
+            detail = (
+                "the display did not read back as off after the sleep key event, so the window would "
+                "not be screen-off throughout"
+            )
+            raise device_layer.ProbeError(detail)
     start = take_battery_sample(device, pid, clk_tck)
     seconds = minutes * 60.0
     # A window whose display is on is a window on the home screen, so the surface in front is sampled
@@ -1745,12 +1768,19 @@ def add_arm_arguments(parser: argparse.ArgumentParser) -> None:
 
 def positive_float(raw: str) -> float:
     """
-    Parse a finite, strictly positive number for the command line.
+    Parse a finite, strictly positive duration the sampling loop can actually finish.
 
     `inf` is refused along with zero and the negatives: it is not a large window, it is a number the
     phase can never reach, and `sample_window_states` would subtract its 30-second interval from it
     forever, turning a bounded phase into an unbounded one. `nan` compares false against everything, so
     it slips past a `<= 0` test and has to be refused by name.
+
+    Refusing `inf` is not enough on its own, because finite values behave the same way. `1e308` minutes
+    is finite and overflows to `inf` when the phase multiplies it by 60, and a window of `1e17` seconds
+    is unchanged by subtracting the interval — 30 is smaller than the gap between adjacent floats that
+    far out — so the loop would subtract forever. A duration is therefore accepted only when its
+    seconds value is finite *and* the interval actually reduces it, which is the property the loop
+    needs and the same property `inf` fails.
     """
     value = float(raw)
     if not math.isfinite(value):
@@ -1758,6 +1788,14 @@ def positive_float(raw: str) -> float:
         raise argparse.ArgumentTypeError(message)
     if value <= 0:
         message = f"{raw} is not a positive duration"
+        raise argparse.ArgumentTypeError(message)
+    seconds = value * 60.0
+    if not math.isfinite(seconds) or seconds - SAMPLE_INTERVAL_SECONDS >= seconds:
+        message = (
+            f"{raw} minutes is not a long window but an unbounded one: the sampling loop subtracts its "
+            f"{SAMPLE_INTERVAL_SECONDS:.0f}-second interval from the duration, and this one does not "
+            f"shrink, so the phase would never return"
+        )
         raise argparse.ArgumentTypeError(message)
     return value
 

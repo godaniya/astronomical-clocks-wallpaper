@@ -96,6 +96,11 @@ ON_BATTERY_POWER_LINES = (
 )
 
 
+# A digit run longer than `int()` will convert — it raises above about 4300 digits rather than
+# building the integer — which is what an unbounded `\d+` in a dump parser hands it.
+OVERSIZED_DIGITS = "9" * 5000
+
+
 def recorder() -> subject.Recorder:
     """Return a recorder bound to a throwaway state directory, for the phases that persist to one."""
     return subject.Recorder(Path(tempfile.mkdtemp()))
@@ -124,6 +129,15 @@ class ParseBatteryOutputTest(unittest.TestCase):
     def test_unrelated_output_raises(self) -> None:
         with self.assertRaises(device_layer.ProbeError):
             subject.parse_battery_output("Nothing here")
+
+    def test_an_oversized_counter_is_a_named_refusal_not_a_traceback(self) -> None:
+        # `int()` refuses a value of more than about 4300 digits by raising, and that `ValueError` is
+        # not one of the refusals `main` catches. An unbounded `\d+` therefore turned a battery dump
+        # that lost its mind into a traceback instead of the refusal this probe promises.
+        dump = f"  Charge counter: {OVERSIZED_DIGITS}\n  level: 95\n  voltage: 4120\n"
+        with self.assertRaises(device_layer.ProbeError) as raised:
+            subject.parse_battery_output(dump)
+        self.assertIn("Charge counter", str(raised.exception))
 
 
 class ProcStatTest(unittest.TestCase):
@@ -432,6 +446,15 @@ class WakeLockAndAlarmProbeTest(unittest.TestCase):
             subject.parse_alarm_count(truncated)
         self.assertIn("declares 5", str(raised.exception))
 
+    def test_an_oversized_census_is_refused_rather_than_traceback(self) -> None:
+        # The census count reaches `int()` as well, so it needs the same bound the field parsers do.
+        # Without it, a corrupted census line raises a `ValueError` where the probe promises a named
+        # refusal — the same escape `main` does not catch.
+        absurd = f"{OVERSIZED_DIGITS} pending alarms:\n    ELAPSED #1: Alarm{{x type 3 android}}\n"
+        with self.assertRaises(device_layer.ProbeError) as raised:
+            subject.parse_alarm_count(absurd)
+        self.assertIn("pending alarms", str(raised.exception))
+
     def test_a_census_matches_on_its_own_line_and_not_the_blank_line_above_it(self) -> None:
         # The census patterns' leading class is `[ \t]*` and not `\s*`, because `\s` matches a newline:
         # the match could begin on the blank line *above* the census, and `census_entry_block` reads the
@@ -731,6 +754,39 @@ class PowerSourceProbeTest(unittest.TestCase):
             subject.require_memory_measurement([True], [True], [False], before, after)
         self.assertIn("not the surface in front", str(raised.exception))
         self.assertEqual(500, subject.require_memory_measurement([True], [True], [True], before, after))
+
+
+class HiddenWindowSleepTest(unittest.TestCase):
+    """Checks that a screen-off window confirms the display went off before it starts."""
+
+    def test_a_display_that_did_not_go_off_refuses_the_window(self) -> None:
+        # The sleep key event is a request, not the state — `device_layer.sleep_screen` reports only
+        # that it was delivered. The first display sample is a whole sampling interval away, so a
+        # display still lit, or one that could not be read, would appear in no later reading: every
+        # sample would be `False` once it did sleep, and B3 would be accepted for a window that was
+        # not screen-off throughout.
+        for reading in (True, None):
+            with self.subTest(reading=reading):
+                device = MagicMock()
+                device.read_screen_on.return_value = reading
+                with patch.object(subject.time, "sleep"), self.assertRaises(device_layer.ProbeError) as raised:
+                    subject.run_window(device, None, 1.0, screen_on=False, clk_tck=100)
+                self.assertIn("did not read back as off", str(raised.exception))
+
+    def test_a_display_that_is_off_lets_the_window_run(self) -> None:
+        device = MagicMock()
+        device.read_screen_on.return_value = False
+        sample = subject.BatterySample(0.0, 4_000_000, 90, 4000, None, 45_000)
+        with (
+            patch.object(subject.time, "sleep"),
+            patch.object(subject, "take_battery_sample", side_effect=[sample, sample]),
+            patch.object(subject, "sample_window_states", return_value=([False], [True], [])),
+        ):
+            _, states, on_battery, homes = subject.run_window(device, None, 1.0, screen_on=False, clk_tck=100)
+        self.assertEqual([False], states)
+        self.assertEqual([True], on_battery)
+        self.assertEqual([], homes)
+        device.read_screen_on.assert_called_once()
 
 
 class WindowSurfaceSamplingTest(unittest.TestCase):
@@ -1824,6 +1880,22 @@ class DurationArgumentTest(unittest.TestCase):
             with self.subTest(argv=argv):
                 self.assertEqual(minimum, self.parse(*argv).minutes)
 
+    def test_a_duration_the_sampling_loop_could_never_finish_is_refused(self) -> None:
+        # `inf` was refused by name and the *finite* values that behave the same way were not.
+        # `1e308` minutes is finite and overflows to `inf` seconds when the phase multiplies it by 60;
+        # at `1e17` seconds, subtracting the 30-second interval leaves the remaining time unchanged,
+        # because 30 is far below the gap between adjacent floats that far out. Either way
+        # `sample_window_states` loops forever, holding the shared device while it does not return.
+        for raw in ("1e308", "1e20", "1e17"):
+            with self.subTest(raw=raw):
+                self.parse_refusing("hidden", "--minutes", raw)
+        self.assertEqual(45.0, self.parse("hidden", "--minutes", "45").minutes)
+
+    def test_the_bound_is_the_loop_s_own_progress_rule_not_a_maximum(self) -> None:
+        # A year is absurd for a window and is still accepted, because the sampling loop can consume
+        # it. The refusal is about a duration the loop cannot make progress through, not about length.
+        self.assertEqual(525600.0, self.parse("hidden", "--minutes", "525600").minutes)
+
     def test_the_pilot_refuses_fewer_runs_than_a_noise_floor_needs(self) -> None:
         # The refusal used to arrive from `two_sigma_noise_floor` after every requested window had
         # already been run, so `--runs 3` spent up to 45 minutes of the shared device on a run that
@@ -1851,6 +1923,11 @@ class ParseApiLevelTest(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(device_layer.ProbeError):
                 subject.parse_api_level(raw)
 
+    def test_an_oversized_level_is_a_named_refusal_not_a_traceback(self) -> None:
+        with self.assertRaises(device_layer.ProbeError) as raised:
+            subject.parse_api_level(OVERSIZED_DIGITS)
+        self.assertIn("not an API level", str(raised.exception))
+
 
 class ParseTotalPssTest(unittest.TestCase):
     """Checks the `dumpsys meminfo` total-PSS parsing."""
@@ -1861,6 +1938,9 @@ class ParseTotalPssTest(unittest.TestCase):
 
     def test_has_no_value_without_a_total_line(self) -> None:
         self.assertIsNone(subject.parse_total_pss_kb("  Graphics   100\n"))
+
+    def test_an_oversized_total_is_a_refusal_rather_than_a_traceback(self) -> None:
+        self.assertIsNone(subject.parse_total_pss_kb(f"  TOTAL {OVERSIZED_DIGITS}\n"))
 
 
 class VisibleHomeStateTest(unittest.TestCase):
