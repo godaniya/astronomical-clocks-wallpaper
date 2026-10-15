@@ -429,6 +429,16 @@ class WakeLockAndAlarmProbeTest(unittest.TestCase):
             subject.parse_alarm_count(truncated)
         self.assertIn("declares 5", str(raised.exception))
 
+    def test_a_census_matches_on_its_own_line_and_not_the_blank_line_above_it(self) -> None:
+        # The census patterns' leading class is `[ \t]*` and not `\s*`, because `\s` matches a newline:
+        # the match could begin on the blank line *above* the census, and `census_entry_block` reads the
+        # block from the match's own line, so it would start a line early. This device's dump has a
+        # blank line above its census, and with `\s*` the fired alarm below the block is pulled in — it
+        # declares 2 entries and lists 3. Nothing pins the anchoring without this fixture.
+        dump = ALARM_DUMP_WITH_SECTIONS.replace("  2 pending alarms:", "\n  2 pending alarms:")
+        self.assertIn("\n\n  2 pending alarms:", dump)
+        self.assertEqual(0, subject.parse_alarm_count(dump))
+
 
 class LoadRecordsTest(unittest.TestCase):
     """Finding 3: a truncated state file is a named error, not a traceback."""
@@ -461,6 +471,26 @@ class LoadRecordsTest(unittest.TestCase):
         with self.assertRaises(device_layer.ProbeError) as raised:
             subject.load_records(Path(tempfile.mkdtemp()))
         self.assertIn(subject.RECORD_FILE_NAME, str(raised.exception))
+
+    def test_a_state_file_that_is_not_utf8_is_named_not_a_traceback(self) -> None:
+        # An append interrupted mid-character leaves a partial UTF-8 sequence, and `read_text` raises
+        # `UnicodeDecodeError` on it. That is the same corrupt state file the JSON branch names,
+        # failing one step earlier — and it used to fail as a traceback rather than a named refusal.
+        directory = Path(tempfile.mkdtemp())
+        (directory / subject.RECORD_FILE_NAME).write_bytes(b'{"phase": "hidden", "note": "\xff\xfe"}')
+        with self.assertRaises(device_layer.ProbeError) as raised:
+            subject.load_records(directory)
+        self.assertIn("not valid UTF-8", str(raised.exception))
+        self.assertIn(subject.RECORD_FILE_NAME, str(raised.exception))
+
+    def test_a_number_json_refuses_to_convert_is_named_too(self) -> None:
+        # `json` raises a plain `ValueError`, not a `JSONDecodeError`, for an integer with more digits
+        # than `int()` will convert. Both are a line that cannot be read, so both are named.
+        directory = self.state('{"phase": "hidden", "level_pct": ' + "9" * 5000 + "}")
+        with self.assertRaises(device_layer.ProbeError) as raised:
+            subject.load_records(directory)
+        self.assertIn(f"{subject.RECORD_FILE_NAME}:1", str(raised.exception))
+        self.assertIn("not valid JSON", str(raised.exception))
 
 
 class JobProbeTest(unittest.TestCase):
@@ -777,6 +807,16 @@ class ArmGuardTest(unittest.TestCase):
             with self.subTest(expected=expected), patch.object(device_layer, "decode_frame", return_value=pixels):
                 self.assertAlmostEqual(expected, subject.median_luma(device))
 
+    def test_a_capture_that_cannot_be_decoded_is_refused_by_name(self) -> None:
+        # `decode_frame` raises `device_layer.ScreencapError`, which is a sibling of `ProbeError` and
+        # not one of the refusals `main` catches. A truncated `screencap` payload therefore left the
+        # CLI printing a traceback instead of the named `ERROR` the rest of the harness reports.
+        device = MagicMock()
+        device.run_adb.return_value = b"not a screencap"
+        with self.assertRaises(device_layer.ProbeError) as raised:
+            subject.median_luma(device)
+        self.assertIn("could not be decoded", str(raised.exception))
+
 
 class VisiblePhaseGuardTest(unittest.TestCase):
     """Checks that the phase refuses a mismatched arm before it measures anything."""
@@ -1022,6 +1062,32 @@ class MemoryPhaseTest(unittest.TestCase):
             subject.phase_memory(device, minutes=1.0, recorder=recorder())
         guard.assert_called_once()
 
+    def test_the_recorded_duration_is_the_span_the_samples_were_taken_over(self) -> None:
+        # The hidden and visible phases record the span they measured. The memory phase recorded the
+        # length that was *requested* instead, so its record asserted a window length it had not
+        # measured — and `report` is the reader that gates a record on its own recorded length.
+        device = MagicMock()
+        device.read_process_cpu_clock_ticks.return_value = 100
+        device.read_screen_on.return_value = True
+        device.read_keyguard_locked.return_value = False
+        device.read_home_in_front.return_value = True
+        device.run_adb.return_value = b"36\n"
+        before = subject.BatterySample(1000.0, 4_000_000, 90, 4000, 10.0, 45_000)
+        after = subject.BatterySample(2805.0, 3_980_000, 90, 3990, 12.0, 45_500)
+        with (
+            patch.object(subject, "verify_arm"),
+            patch.object(subject, "DeviceStateSnapshot"),
+            patch.object(subject, "read_power_source_lines", return_value=ON_BATTERY_POWER_LINES),
+            patch.object(subject, "take_battery_sample", side_effect=[before, after]),
+            patch.object(subject, "sample_window_states", return_value=([True], [True])),
+            patch.object(subject, "undo_phase_changes", return_value=[]),
+            patch.object(subject, "apply_power_mode", return_value=subject.POWER_SOURCE_DEVICE),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            record = subject.phase_memory(device, minutes=30.0, recorder=recorder())
+        self.assertEqual(after.timestamp - before.timestamp, record.duration_seconds)
+        self.assertNotEqual(30.0 * 60.0, record.duration_seconds)
+
 
 class HiddenPhaseTest(unittest.TestCase):
     """Checks that the B3 window is only recorded when it is the measurement B3 is defined on."""
@@ -1050,6 +1116,10 @@ class HiddenPhaseTest(unittest.TestCase):
         self.assertEqual("hidden", record.phase)
         self.assertEqual(0.5, record.values["cpu_pct"])
         self.assertEqual([False, False], record.values["screen_on_samples"])
+        # The window's length is `duration_seconds`, which is the monotonic delta the measurement is
+        # taken on. The record also used to carry that same number again as `wall_clock_seconds`,
+        # naming a provenance the value contradicts and duplicating the field nothing reads.
+        self.assertNotIn("wall_clock_seconds", record.values)
 
     def test_a_window_that_left_the_display_on_is_refused(self) -> None:
         device = self.device()
@@ -1069,6 +1139,25 @@ class HiddenPhaseTest(unittest.TestCase):
 
 class WindowValidityTest(unittest.TestCase):
     """Checks the window itself refuses a measurement that is not one."""
+
+    def test_a_hidden_window_whose_cpu_could_not_be_read_is_refused(self) -> None:
+        # The pid can be recycled and the process restart inside a window, leaving no CPU delta to
+        # read. Returning `None` as B3's figure would record a hidden-CPU criterion that no reading
+        # supports, so the phase refuses instead. Nothing pinned this refusal before.
+        with self.assertRaises(device_layer.ProbeError) as raised:
+            subject.require_hidden_measurement(_window(cpu=None), [False], [True])
+        self.assertIn("could not be read over the hidden window", str(raised.exception))
+
+    def test_a_live_visible_window_whose_cpu_could_not_be_read_is_refused(self) -> None:
+        # The same refusal on the B5 side, and only for the live arm: a baseline arm has no wallpaper
+        # process to read CPU from, so `None` there is the expected reading rather than a failure.
+        with self.assertRaises(device_layer.ProbeError) as raised:
+            subject.require_visible_measurement(_window(cpu=None), [True], [True], report.Arm.LIVE)
+        self.assertIn("could not be read over a visible window", str(raised.exception))
+        self.assertIsInstance(
+            subject.require_visible_measurement(_window(cpu=None), [True], [True], report.Arm.BASELINE),
+            float,
+        )
 
     def test_a_cpu_counter_that_went_backwards_is_refused(self) -> None:
         # The pid was recycled, or the process restarted inside the window: the delta is not CPU this
@@ -1219,10 +1308,58 @@ class RestoreTest(unittest.TestCase):
         device.wake_screen.assert_called_once()
 
     def test_the_settings_restore_is_not_lost_when_only_the_reset_fails(self) -> None:
+        # This test used to assert `[] == undo_phase_changes(...)` with a reset that did *not* fail and
+        # a settings restore whose fake returns `[]`, so it held whether or not the settings restore
+        # ran: deleting that step from `undo_phase_changes` left it passing. The premise the name
+        # states is made to happen here, and the restore running anyway is what is asserted.
         device = MagicMock()
         snapshot = MagicMock()
         snapshot.restore.return_value = []
-        self.assertEqual([], subject.undo_phase_changes(device, snapshot, simulated=True))
+        with (
+            patch.object(subject, "reset_battery_simulation", side_effect=subprocess.CalledProcessError(1, "reset")),
+            patch.object(subject, "power_source_restored", return_value=True),
+        ):
+            problems = subject.undo_phase_changes(device, snapshot, ON_BATTERY_POWER_LINES, simulated=True)
+        snapshot.restore.assert_called_once()
+        self.assertEqual(1, len(problems))
+        self.assertIn("battery simulation reset failed", problems[0])
+
+    def test_an_unreadable_reset_readback_does_not_skip_the_settings_restore(self) -> None:
+        # `power_source_restored` reads a battery dump, so it can raise `ProbeError` rather than
+        # answer, and a dump that lost a field does exactly that. It shared the reset's guard, which
+        # caught transport errors only, so the `ProbeError` escaped `undo_phase_changes` before the
+        # settings restore below it ran: the shared device stayed pinned and the problems list stayed
+        # empty, so nothing reached disk for `report` to print.
+        device = MagicMock()
+        snapshot = MagicMock()
+        snapshot.restore.return_value = []
+        prior_power = ("AC powered: false", "USB powered: false", "Wireless powered: false", "Dock powered: false")
+        with patch.object(
+            subject, "power_source_restored", side_effect=device_layer.ProbeError("the dump lost a field")
+        ):
+            problems = subject.undo_phase_changes(device, snapshot, prior_power, simulated=True)
+        snapshot.restore.assert_called_once()
+        self.assertTrue(any("power sources could not be read" in problem for problem in problems))
+
+    def test_a_readback_that_is_not_a_decimal_integer_does_not_escape_the_restore(self) -> None:
+        # The same readback `read_int_setting` performs runs inside the restore. Text it cannot parse
+        # is now `None`, which `_apply` reports as a value that did not read back, so the steps after
+        # it and the display restore still run.
+        device = MagicMock()
+        device.run_adb.return_value = b"--5"
+        device.read_screen_on.return_value = True
+        snapshot = subject.DeviceStateSnapshot(
+            device,
+            brightness=35,
+            brightness_mode=1,
+            screen_timeout=300_000,
+            airplane_mode=0,
+            stay_on=1,
+            screen_on=True,
+        )
+        problems = snapshot.restore()
+        self.assertGreaterEqual(len(problems), 5)
+        device.wake_screen.assert_called_once()
 
     def test_airplane_mode_is_restored_to_the_value_it_was_found_with(self) -> None:
         # A device that had airplane mode on before a phase must still have it on afterwards; the
@@ -1269,6 +1406,46 @@ class RestoreTest(unittest.TestCase):
         written = [call.args[0] for call in device.run_adb.call_args_list]
         self.assertTrue(any("screen_off_timeout" in args for args in written))
         self.assertFalse(any("screen_timeout" in args for args in written))
+
+
+class IntegerReadbackTest(unittest.TestCase):
+    """
+    Checks that a device's integer readback is parsed, not *tested* for digits.
+
+    `str.isdigit()` answers a different question from "can this be read as an integer": `"²"` is a
+    digit but not a decimal one, `"--5"` passes the `lstrip("-").isdigit()` guard the setting read
+    used, and a value of more than a few thousand digits is refused by `int()` itself. Each of them
+    raised `ValueError` from a readback whose callers treat "unreadable" as a value, so each one was a
+    traceback rather than a `None` the caller could report.
+    """
+
+    def test_a_setting_that_is_not_a_decimal_integer_is_unreadable_not_a_crash(self) -> None:
+        for raw in ("--5", "²", "9" * 5000, "null", "", "+"):
+            with self.subTest(raw=raw[:8]):
+                device = MagicMock()
+                device.run_adb.return_value = raw.encode()
+                self.assertIsNone(subject.read_int_setting(device, "system", "screen_brightness"))
+
+    def test_a_signed_setting_still_reads(self) -> None:
+        # `screen_brightness` is the reason the sign is allowed at all: the platform reports `-1` for
+        # it on a device using the automatic brightness setting.
+        device = MagicMock()
+        device.run_adb.return_value = b"-1"
+        self.assertEqual(-1, subject.read_int_setting(device, "system", "screen_brightness"))
+
+    def test_a_uid_that_is_not_a_decimal_integer_is_unreadable_not_a_crash(self) -> None:
+        for raw in ("²", "9" * 5000):
+            with self.subTest(raw=raw[:8]):
+                device = MagicMock()
+                device.run_adb.return_value = raw.encode()
+                self.assertIsNone(subject.read_process_uid(device, 1234))
+
+    def test_an_unresolvable_pid_is_still_no_uid(self) -> None:
+        device = MagicMock()
+        for pid in (None, 0, -1):
+            with self.subTest(pid=pid):
+                self.assertIsNone(subject.read_process_uid(device, pid))
+        device.run_adb.assert_not_called()
 
 
 class MainExitCodeTest(unittest.TestCase):
@@ -1378,16 +1555,23 @@ class MeasurementIdentityTest(unittest.TestCase):
             subject.device_identity(device)
 
     def test_a_record_carries_the_device_it_was_measured_on(self) -> None:
-        device = MagicMock()
-        device.serial = "R58M12345AB"
-        device.run_adb.return_value = b"36\n"
-        with (
-            patch.object(subject, "read_source_revision", return_value="rev"),
-            patch.object(subject, "read_apk_sha256", return_value="abc"),
-        ):
-            record = subject.build_record(device, "resources", 0.0)
+        # The assertion used to be `assertEqual(device_identity(device), record["device_id"])`: the
+        # expected value computed by the very function `build_record` calls, so it held for any
+        # implementation — a constant one included. What the name claims is that the field *tells
+        # devices apart*, so the same device is compared with itself and with another.
+        def identify(serial: str) -> object:
+            device = MagicMock()
+            device.serial = serial
+            device.run_adb.return_value = b"36\n"
+            with (
+                patch.object(subject, "read_source_revision", return_value="rev"),
+                patch.object(subject, "read_apk_sha256", return_value="abc"),
+            ):
+                return subject.build_record(device, "resources", 0.0).values["device_id"]
+
         self.assertIn("device_id", report.IDENTITY_FIELDS)
-        self.assertEqual(subject.device_identity(device), record.values["device_id"])
+        self.assertEqual(identify("R58M12345AB"), identify("R58M12345AB"))
+        self.assertNotEqual(identify("R58M12345AB"), identify("R58M00000ZZ"))
 
     def test_the_digest_is_read_from_the_installed_apk(self) -> None:
         # The identity the record carries is the build the *device* is running. Hashing the host
@@ -1528,6 +1712,17 @@ class DurationArgumentTest(unittest.TestCase):
         ):
             with self.subTest(argv=argv):
                 self.assertEqual(minimum, self.parse(*argv).minutes)
+
+    def test_the_pilot_refuses_fewer_runs_than_a_noise_floor_needs(self) -> None:
+        # The refusal used to arrive from `two_sigma_noise_floor` after every requested window had
+        # already been run, so `--runs 3` spent up to 45 minutes of the shared device on a run that
+        # could never produce a floor. It is a command-line minimum now, like `--minutes`; `0` is
+        # refused by the positive-count rule beneath it.
+        for runs in ("0", "1", "2", "3"):
+            with self.subTest(runs=runs):
+                self.parse_refusing("pilot", "--arm", "A", "--runs", runs)
+        self.assertEqual(4, self.parse("pilot", "--arm", "A").runs)
+        self.assertEqual(5, self.parse("pilot", "--arm", "A", "--runs", "5").runs)
 
     def test_a_longer_window_is_still_offered(self) -> None:
         # The minimum is a floor, not a fixed length: a longer window is a legitimate measurement.
@@ -1741,10 +1936,14 @@ class MonotonicTimestampTest(unittest.TestCase):
         self.assertIsInstance(sample.timestamp, float)
 
     def test_two_samples_are_ordered_on_the_monotonic_clock(self) -> None:
+        # The ordering alone holds on any clock that does not go backwards, so it did not pin what the
+        # name claims. The wall clock is refused here too, which is what makes the ordering an
+        # ordering *on the monotonic clock*.
         device = MagicMock()
         device.run_adb.return_value = REALISTIC_BATTERY_DUMP.encode()
-        first = subject.take_battery_sample(device, None, 100)
-        second = subject.take_battery_sample(device, None, 100)
+        with patch.object(subject.time, "time", side_effect=AssertionError("the wall clock was used")):
+            first = subject.take_battery_sample(device, None, 100)
+            second = subject.take_battery_sample(device, None, 100)
         self.assertLessEqual(first.timestamp, second.timestamp)
 
 

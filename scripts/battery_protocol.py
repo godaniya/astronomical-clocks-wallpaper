@@ -110,6 +110,12 @@ POWERED_LINE_PATTERN: Final = re.compile(r"^\s*(\w+) powered:\s*(true|false)\s*$
 # present: a dump that lost three of them must not be read as "the remaining one is false, so the
 # device is on battery", which is what a per-line scan would conclude from a truncated dump.
 EXPECTED_POWER_SOURCES: Final = ("AC", "USB", "Wireless", "Dock")
+# A decimal integer as a device prints one, bounded so that a long run of digits is refused rather
+# than handed to `int()`. `str.isdigit()` is not the same question: `"²"` is a digit but not a decimal
+# one, and it reaches `int()` as a `ValueError`, as does any value of more than a few thousand digits.
+# A device setting or a UID is never 18 digits wide, so the bound costs nothing and makes "unreadable"
+# the answer for everything the pattern does not match.
+DECIMAL_INT_PATTERN: Final = re.compile(r"[+-]?\d{1,18}")
 
 DEFAULT_STATE_DIR: Final = Path("build/reports/battery")
 RECORD_FILE_NAME: Final = "records.jsonl"
@@ -424,15 +430,27 @@ def undo_phase_changes(
     The `cmd battery` reset runs only when this phase applied the override. A device that was already
     on its own battery is never put under the override, so there is nothing to clear, and clearing it
     would be a write to a device whose state is already correct.
+
+    The reset and the readback that verifies it are two steps rather than one. `power_source_restored`
+    reads a battery dump, and a dump that cannot be parsed raises `ProbeError` from there; sharing the
+    reset's guard meant an unparsable readback escaped this function entirely, so the settings restore
+    below never ran and the problems list stayed empty — the shared device left pinned with nothing on
+    disk for `report` to print.
     """
     problems: list[str] = []
     if simulated:
         try:
             reset_battery_simulation(device)
-            if prior_power is not None and not power_source_restored(device, prior_power):
-                problems.append("the reported power sources did not return to their pre-phase state")
         except (subprocess.SubprocessError, OSError) as error:
             problems.append(f"battery simulation reset failed: {device_layer.error_detail(error)}")
+        if prior_power is not None:
+            try:
+                restored = power_source_restored(device, prior_power)
+            except (subprocess.SubprocessError, OSError, device_layer.ProbeError) as error:
+                problems.append(f"the restored power sources could not be read: {device_layer.error_detail(error)}")
+            else:
+                if not restored:
+                    problems.append("the reported power sources did not return to their pre-phase state")
     try:
         problems.extend(snapshot.restore())
     except (subprocess.SubprocessError, OSError) as error:
@@ -441,9 +459,16 @@ def undo_phase_changes(
 
 
 def read_int_setting(device: device_layer.AdbDevice, namespace: str, key: str) -> int | None:
-    """Read one integer device setting, or None when it is unset or not an integer."""
+    """
+    Read one integer device setting, or None when it is unset or not a decimal integer.
+
+    The readback runs inside the restore as well as before it, and the restore's contract is that no
+    step can abort the ones after it. A readback that raised here would do exactly that — the settings
+    restore would stop at this step and the display restore would never run — so text that cannot be
+    read is `None`, which the restore already reports as a value that did not read back.
+    """
     raw = device.run_adb(["shell", "settings", "get", namespace, key]).decode(errors="replace").strip()
-    return int(raw) if raw.lstrip("-").isdigit() else None
+    return int(raw) if DECIMAL_INT_PATTERN.fullmatch(raw) else None
 
 
 def require_int_setting(device: device_layer.AdbDevice, namespace: str, key: str) -> int:
@@ -601,11 +626,11 @@ def parse_api_level(output: str) -> int:
 
 
 def read_process_uid(device: device_layer.AdbDevice, pid: int | None) -> int | None:
-    """Read the owning UID of a process from `/proc/<pid>`."""
+    """Read the owning UID of a process from `/proc/<pid>`, or None when it cannot be read."""
     if pid is None or pid <= 0:
         return None
     output = device.run_adb(["shell", "stat", "-c", "%u", f"/proc/{pid}"]).decode(errors="replace").strip()
-    return int(output) if output.isdigit() else None
+    return int(output) if DECIMAL_INT_PATTERN.fullmatch(output) else None
 
 
 def require_clk_tck(device: device_layer.AdbDevice) -> int:
@@ -776,7 +801,7 @@ def parse_alarm_count(dump: str, package: str = device_layer.PACKAGE_NAME) -> in
 
 
 def count_held_wakelocks(device: device_layer.AdbDevice, app_uid: int | None) -> int:
-    """Count the partial wake locks `dumpsys power` attributes to the app's UID."""
+    """Count the wake locks of any type `dumpsys power` attributes to the app's UID."""
     if app_uid is None:
         detail = "no UID was resolved for the wallpaper process, so wake locks cannot be attributed"
         raise device_layer.ProbeError(detail)
@@ -926,16 +951,26 @@ def load_records(state_dir: Path) -> list[dict[str, object]]:
     if not path.is_file():
         detail = f"no records at {path}; run the measurement phases before the report"
         raise device_layer.ProbeError(detail)
+    # The decode is guarded like the parse below it. An append interrupted mid-character leaves a
+    # partial UTF-8 sequence, which `read_text` raises `UnicodeDecodeError` on — the same corrupt
+    # state file the JSON branch names, failing one step earlier and as a traceback.
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        detail = f"{path} is not valid UTF-8 ({error}); the record file is truncated or corrupt"
+        raise device_layer.ProbeError(detail) from error
     records: list[dict[str, object]] = []
-    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for number, line in enumerate(text.splitlines(), start=1):
         if not line.strip():
             continue
         try:
             parsed = json.loads(line)
-        except json.JSONDecodeError as error:
+        except ValueError as error:
             # A truncated write is a state file the run can be told about, not a traceback: the
             # phases append as they go, so the last line is the one an interrupted run leaves short.
-            detail = f"{path}:{number} is not valid JSON ({error.msg}); the record is truncated or corrupt"
+            # `JSONDecodeError` is caught here as the `ValueError` it is, and so is the other
+            # `ValueError` `json` raises — a number with more digits than `int()` will convert.
+            detail = f"{path}:{number} is not valid JSON ({error}); the record is truncated or corrupt"
             raise device_layer.ProbeError(detail) from error
         if not isinstance(parsed, dict):
             detail = f"{path}:{number} is not a JSON object"
@@ -1027,8 +1062,18 @@ def median_luma(device: device_layer.AdbDevice) -> float:
     This reads the raw screencap rather than the dial-validated capture, because a baseline arm has
     no dial to validate: the validated read raises when the live wallpaper is not the one on screen,
     which is exactly the state the baseline arms are in.
+
+    A capture that cannot be decoded is refused as a probe error. `decode_frame` raises
+    `device_layer.ScreencapError`, which is this module's sibling in `device_layer` rather than one of
+    the refusals `main` catches, so it would leave the CLI printing a traceback instead of the named
+    `ERROR` a garbled capture deserves — and a truncated `screencap` payload is exactly the transport
+    wobble this must survive as a report rather than as a stack trace.
     """
-    _, _, pixels = device_layer.decode_frame(device.run_adb(["exec-out", "screencap"]))
+    try:
+        _, _, pixels = device_layer.decode_frame(device.run_adb(["exec-out", "screencap"]))
+    except device_layer.ScreencapError as error:
+        detail = f"the captured screen could not be decoded into a frame: {device_layer.error_detail(error)}"
+        raise device_layer.ProbeError(detail) from error
     luma = sorted(
         sum(weight * pixel for weight, pixel in zip(LUMA_WEIGHTS, pixels[index : index + 3], strict=True))
         for index in range(0, len(pixels) - 2, device_layer.PIXEL_STRIDE * LUMA_STRIDE)
@@ -1257,7 +1302,7 @@ def run_window(
 
 
 def phase_resources(device: device_layer.AdbDevice) -> Record:
-    """Record B2: the partial wake locks, alarms, and jobs the app holds, with their commands."""
+    """Record B2: the wake locks of any type, alarms, and jobs the app holds, with their commands."""
     pid = device.get_wallpaper_pid()
     uid = read_process_uid(device, pid)
     print(f"$ adb -s {device.serial} shell pidof {device_layer.PACKAGE_NAME} -> {pid}")
@@ -1405,7 +1450,6 @@ def phase_hidden(device: device_layer.AdbDevice, minutes: float, *, recorder: Re
             power_source=power_source,
             screen_on_samples=states,
             on_battery_samples=on_battery,
-            wall_clock_seconds=round(window.duration_seconds, 1),
             restore_problems=problems,
         )
     except Exception as error:
@@ -1518,7 +1562,11 @@ def phase_memory(device: device_layer.AdbDevice, minutes: float, *, recorder: Re
         record = build_record(
             device,
             "memory",
-            seconds,
+            # The span the samples were actually taken over, not the length that was requested. Both
+            # other windowed phases record the measured span, and the report reads this field as a
+            # measurement whose length has to hold up: a memory record carrying the requested value
+            # instead would assert a window length it never measured.
+            after.timestamp - before.timestamp,
             window_minutes=minutes,
             pss_start_kb=before.total_pss_kb,
             pss_end_kb=after.total_pss_kb,
@@ -1690,6 +1738,22 @@ def positive_int(raw: str) -> int:
     return value
 
 
+def positive_int_at_least(minimum: int) -> Callable[[str], int]:
+    """Build a count parser that refuses a value below the minimum the phase can use."""
+
+    def parse_count(raw: str) -> int:
+        value = positive_int(raw)
+        if value < minimum:
+            message = (
+                f"{raw} windows is below the {minimum} a noise floor needs, so the run would measure "
+                "no floor at all; the refusal is here rather than after the windows have been run"
+            )
+            raise argparse.ArgumentTypeError(message)
+        return value
+
+    return parse_count
+
+
 def build_argument_parser() -> argparse.ArgumentParser:
     """Build the command line: one bounded phase per subcommand."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1713,7 +1777,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
     pilot = subcommands.add_parser("pilot", help="Repeated windows whose spread is the noise floor")
     add_arm_arguments(pilot)
     add_window_arguments(pilot, MINIMUM_WINDOW_MINUTES)
-    pilot.add_argument("--runs", type=positive_int, default=MIN_PAIRED_SAMPLES, help="Windows to run")
+    pilot.add_argument(
+        "--runs",
+        type=positive_int_at_least(MIN_PAIRED_SAMPLES),
+        default=MIN_PAIRED_SAMPLES,
+        help=f"Windows to run (at least {MIN_PAIRED_SAMPLES}, which is what a noise floor needs)",
+    )
 
     memory = subcommands.add_parser("memory", help="B6: total-PSS growth over a long window")
     add_window_arguments(memory, MINIMUM_MEMORY_MINUTES)
