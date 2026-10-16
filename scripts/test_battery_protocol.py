@@ -1868,7 +1868,8 @@ class ReportCommandRefusalTest(unittest.TestCase):
         # The same promise for the other identity refusal, and the one whose reachability has to be
         # shown rather than argued: `NaN` is not JSON, but it is what Python's `json.loads` accepts by
         # default, so a hand-edited state file carries it into the report as a float. The record
-        # carries nothing but the one field, so the identity rule is the only rule that can refuse it.
+        # carries nothing but the one field, so the identity rule is the only rule that can refuse it
+        # — it is a float, and no identity field is written as one.
         directory = Path(tempfile.mkdtemp())
         state_file = directory / subject.RECORD_FILE_NAME
         state_file.write_text('{"phase": "resources", "clk_tck": NaN}\n', encoding="utf-8")
@@ -1877,7 +1878,7 @@ class ReportCommandRefusalTest(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertIn("ERROR:", stderr.getvalue())
         self.assertIn("clk_tck", stderr.getvalue())
-        self.assertIn("not finite", stderr.getvalue())
+        self.assertIn("not the integer this field is written as", stderr.getvalue())
 
 
 class MeasurementIdentityTest(unittest.TestCase):
