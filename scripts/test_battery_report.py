@@ -792,6 +792,23 @@ class CorruptRecordTest(unittest.TestCase):
                         report.check_measurement_identity(records)
                     self.assertIn(identity_field, str(raised.exception))
 
+    def test_a_non_finite_identity_value_is_refused(self) -> None:
+        # The state file is JSON Lines read with `json.loads`, which accepts `NaN` and `Infinity` by
+        # default, so a corrupt file really does reach here. Both are the wrong kind of wrong rather
+        # than merely absent: `inf` compares equal to itself, so a set of them is homogeneous and the
+        # check would read it as agreement and print `clk_tck: inf` as the identity the run was
+        # measured under, while two `nan` values make a set of two and are reported as a disagreement
+        # that never happened. Neither names a build, an API level or a tick rate.
+        for identity_field in report.IDENTITY_FIELDS:
+            for value in (float("nan"), float("inf"), float("-inf")):
+                with self.subTest(identity_field=identity_field, value=value):
+                    records = [{"phase": "resources", identity_field: value}]
+                    with self.assertRaises(device_layer.ProbeError) as raised:
+                        report.check_measurement_identity(records)
+                    self.assertIn(identity_field, str(raised.exception))
+        # The refusal must not reach a finite number, which is what every state file carries.
+        report.check_measurement_identity([{"phase": "resources", "clk_tck": 100, "api_level": 36}])
+
     def test_a_non_list_restore_problems_is_refused(self) -> None:
         # A failed restore is the one thing on a record that says the device was left changed, and
         # reading a string where the phases write a list as "no problems" would let the report exit

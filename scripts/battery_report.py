@@ -526,12 +526,28 @@ def identity_value(record: Mapping[str, object], identity_field: str) -> object:
     field is a truth value. A null is admitted, because `"apk_sha256": null` is the legitimate
     "unknown build" every pre-build record carries — refusing an unknown identity is the identity
     check's decision, not this reader's.
+
+    A non-finite float is refused for `finite_number`'s reason too, and it is not a hypothetical: the
+    state file is JSON Lines read with `json.loads`, which accepts `NaN` and `Infinity` by default, so
+    a hand-edited file reaches here. Both are the wrong kind of wrong rather than merely absent.
+    `inf` compares equal to itself, so a set of them is homogeneous and the identity check would read
+    it as *agreement* and print `clk_tck: inf` as the identity the run was measured under; `nan`
+    compares unequal to itself, so two of them make a set of two and the check reports a disagreement
+    that never happened. Neither names a build, an API level, a power mode or a tick rate. Only a
+    `float` is tested: `math.isfinite` raises `OverflowError` on an integer too large to convert, and
+    an `int` cannot be non-finite in the first place.
     """
     value = record.get(identity_field)
     if isinstance(value, bool) or (value is not None and not isinstance(value, str | int | float)):
         detail = (
             f"a {record.get('phase')!r} record's {identity_field} is {value!r}, which is not a scalar, "
             "so it cannot be read as a measurement identity"
+        )
+        raise device_layer.ProbeError(detail)
+    if isinstance(value, float) and not math.isfinite(value):
+        detail = (
+            f"a {record.get('phase')!r} record's {identity_field} is {value!r}, which is not finite, so "
+            "it cannot be read as a measurement identity"
         )
         raise device_layer.ProbeError(detail)
     return value
@@ -549,9 +565,9 @@ def check_measurement_identity(records: Sequence[Mapping[str, object]]) -> None:
     written before the APK was built carries `"apk_sha256": null`, meaning "unknown build", and that
     must not aggregate with a named one.
 
-    A value that is not a scalar is neither compared nor skipped: `identity_value` refuses it, because
-    the set is the comparison, and a value the set cannot hold cannot be shown to agree with the
-    others.
+    A value that is not a scalar — or is a non-finite float — is neither compared nor skipped:
+    `identity_value` refuses it, because the set is the comparison, and a value the set cannot hold,
+    or holds without ever comparing equal, cannot be shown to agree with the others.
     """
     for identity_field in IDENTITY_FIELDS:
         values = {identity_value(record, identity_field) for record in records if identity_field in record}

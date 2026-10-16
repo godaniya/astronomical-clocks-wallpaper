@@ -1773,6 +1773,21 @@ class ReportCommandRefusalTest(unittest.TestCase):
         self.assertIn("ERROR:", stderr.getvalue())
         self.assertIn("device_id", stderr.getvalue())
 
+    def test_a_non_finite_identity_value_is_refused_end_to_end(self) -> None:
+        # The same promise for the other identity refusal, and the one whose reachability has to be
+        # shown rather than argued: `NaN` is not JSON, but it is what Python's `json.loads` accepts by
+        # default, so a hand-edited state file carries it into the report as a float. The record
+        # carries nothing but the one field, so the identity rule is the only rule that can refuse it.
+        directory = Path(tempfile.mkdtemp())
+        state_file = directory / subject.RECORD_FILE_NAME
+        state_file.write_text('{"phase": "resources", "clk_tck": NaN}\n', encoding="utf-8")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as stderr:
+            code = subject.main(["--state", str(directory), "report"])
+        self.assertEqual(1, code)
+        self.assertIn("ERROR:", stderr.getvalue())
+        self.assertIn("clk_tck", stderr.getvalue())
+        self.assertIn("not finite", stderr.getvalue())
+
 
 class MeasurementIdentityTest(unittest.TestCase):
     """Finding 4: a record set that mixes builds or channels is refused, naming the values."""
