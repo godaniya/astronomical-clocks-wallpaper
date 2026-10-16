@@ -776,6 +776,22 @@ class CorruptRecordTest(unittest.TestCase):
         # carries neither `power_source` nor `clk_tck` — would stop being reportable.
         report.check_measurement_identity([{"api_level": 36}, {"api_level": 36}])
 
+    def test_a_non_scalar_identity_value_is_refused(self) -> None:
+        # The identity check is a set per field, so the set is the comparison: a value it cannot hold
+        # cannot be shown to agree with any other, and one it can hold but no record writes — a
+        # boolean, which is an `int` in Python — would be compared as a build or a tick rate. A list
+        # made the set construction raise `TypeError: unhashable type` out of the caller as a
+        # traceback rather than the named refusal every other corrupt-record reader gives. Every
+        # identity field is covered, not only the one the defect was reported against, because they
+        # are all read by the same rule.
+        for identity_field in report.IDENTITY_FIELDS:
+            for value in ([], {}, set(), True):
+                with self.subTest(identity_field=identity_field, value=value):
+                    records = [{"phase": "resources", identity_field: value}]
+                    with self.assertRaises(device_layer.ProbeError) as raised:
+                        report.check_measurement_identity(records)
+                    self.assertIn(identity_field, str(raised.exception))
+
     def test_a_non_list_restore_problems_is_refused(self) -> None:
         # A failed restore is the one thing on a record that says the device was left changed, and
         # reading a string where the phases write a list as "no problems" would let the report exit

@@ -1714,6 +1714,25 @@ class MainExitCodeTest(unittest.TestCase):
             subject.main(["resources"])
 
 
+class ReportCommandRefusalTest(unittest.TestCase):
+    """The `report` subcommand refuses a state file it cannot read by name, and touches no device."""
+
+    def test_a_non_scalar_identity_value_is_a_named_error_not_a_traceback(self) -> None:
+        # The CLI's promise for corrupt state is an `ERROR:` line on stderr and exit 1. The identity
+        # check builds a set per field, so a list there raised `TypeError: unhashable type` out of
+        # `main` instead — the one corrupt-record path that escaped as a crash, and reachable only
+        # through this subcommand. No device is faked: `report` returns before
+        # `select_target_serial`, so a test that had to patch one would be the regression.
+        directory = Path(tempfile.mkdtemp())
+        state_file = directory / subject.RECORD_FILE_NAME
+        state_file.write_text('{"phase": "resources", "device_id": []}\n', encoding="utf-8")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as stderr:
+            code = subject.main(["--state", str(directory), "report"])
+        self.assertEqual(1, code)
+        self.assertIn("ERROR:", stderr.getvalue())
+        self.assertIn("device_id", stderr.getvalue())
+
+
 class MeasurementIdentityTest(unittest.TestCase):
     """Finding 4: a record set that mixes builds or channels is refused, naming the values."""
 

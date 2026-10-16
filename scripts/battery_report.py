@@ -503,6 +503,40 @@ def duration_weighted_mean(samples: Sequence[CpuSample]) -> float:
     return sum(sample.cpu_pct * sample.duration_seconds for sample in samples) / total_seconds
 
 
+def identity_value(record: Mapping[str, object], identity_field: str) -> object:
+    """
+    Return one record's value for an identity field, refusing a value that is not a scalar.
+
+    The identity readers below all compare their field through a set, so the set *is* the
+    deduplication: a value it cannot hold cannot be compared with any other, and one it can hold but
+    no record writes — a boolean — would be compared as though it named a build or a tick rate.
+    Either way the field cannot be shown to agree, which is the only thing the checks are for, so
+    both are refused here rather than read.
+
+    It is refused here rather than at each set, because the refusal is not one site's business:
+    `check_measurement_identity` builds a set that raises `TypeError: unhashable type` out of a
+    traceback for a list, dict or set — not the named `ERROR` this module's readers promise for
+    state it did not write — and `phase_report` builds two more from `IDENTITY_FIELDS` whose
+    validity today rests only on that first check happening to run before them. Stating the rule
+    once means no site depends on call ordering to be correct.
+
+    `bool` is refused for the reason `finite_number` gives: it is an `int` in Python, so
+    `"clk_tck": true` would read as one tick and `"api_level": false` as API 0. It is, strictly, a
+    scalar, and that is exactly why it has to be named: nothing a record writes for an identity
+    field is a truth value. A null is admitted, because `"apk_sha256": null` is the legitimate
+    "unknown build" every pre-build record carries — refusing an unknown identity is the identity
+    check's decision, not this reader's.
+    """
+    value = record.get(identity_field)
+    if isinstance(value, bool) or (value is not None and not isinstance(value, str | int | float)):
+        detail = (
+            f"a {record.get('phase')!r} record's {identity_field} is {value!r}, which is not a scalar, "
+            "so it cannot be read as a measurement identity"
+        )
+        raise device_layer.ProbeError(detail)
+    return value
+
+
 def check_measurement_identity(records: Sequence[Mapping[str, object]]) -> None:
     """
     Refuse a record set that mixes builds, API levels, power modes, or tick rates.
@@ -514,9 +548,13 @@ def check_measurement_identity(records: Sequence[Mapping[str, object]]) -> None:
     bound it. A field the record *does* carry with a null value is a value, not an absence — a record
     written before the APK was built carries `"apk_sha256": null`, meaning "unknown build", and that
     must not aggregate with a named one.
+
+    A value that is not a scalar is neither compared nor skipped: `identity_value` refuses it, because
+    the set is the comparison, and a value the set cannot hold cannot be shown to agree with the
+    others.
     """
     for identity_field in IDENTITY_FIELDS:
-        values = {record.get(identity_field) for record in records if identity_field in record}
+        values = {identity_value(record, identity_field) for record in records if identity_field in record}
         if not values:
             continue
         if values == {None}:
@@ -854,7 +892,7 @@ def phase_report(records: Sequence[Mapping[str, object]], *, black_unavailable: 
     """Print the aggregate report and every unrun check it can see, returning its exit status."""
     check_measurement_identity(records)
     revisions = {str(record.get("revision")) for record in records}
-    api_levels = {record.get("api_level") for record in records}
+    api_levels = {identity_value(record, "api_level") for record in records}
     print(f"records: {len(records)}")
     print(f"source revisions: {', '.join(sorted(revisions))}")
     print(f"API levels: {', '.join(str(level) for level in sorted(api_levels, key=str))}")
@@ -862,7 +900,8 @@ def phase_report(records: Sequence[Mapping[str, object]], *, black_unavailable: 
         if identity_field == "api_level":
             continue
         values = sorted(
-            {record.get(identity_field) for record in records if record.get(identity_field) is not None}, key=str
+            {identity_value(record, identity_field) for record in records if record.get(identity_field) is not None},
+            key=str,
         )
         if values:
             print(f"{identity_field}: {', '.join(str(value) for value in values)}")
