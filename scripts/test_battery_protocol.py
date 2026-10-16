@@ -587,6 +587,24 @@ class JobProbeTest(unittest.TestCase):
             subject.parse_job_count(truncated)
         self.assertIn("declares 9", str(raised.exception))
 
+    def test_a_census_line_with_a_suffix_is_not_the_census(self) -> None:
+        # The census is required *because* it says this is a jobscheduler dump and what its count is.
+        # Anchored at the start only, the pattern matched a malformed line and read it as written: a
+        # dump holding nothing but `Registered 0 jobs: CORRUPT` reported the app as holding no jobs —
+        # a B2 pass from a line the probe never read — and a suffixed count above zero was read as a
+        # trusted number the same way. The power and alarm census patterns already required the line
+        # to end after the count, and this one now does too.
+        suffixed = subject.JOBSCHEDULER_CENSUS_PATTERN.search("Registered 0 jobs: CORRUPT\n") is None
+        self.assertTrue(suffixed, "the census pattern still matches a line with a suffix")
+        dumps = (
+            "Registered 0 jobs: CORRUPT\n",
+            JOBSCHEDULER_DUMP.replace("Registered 3 jobs:", "Registered 3 jobs: CORRUPT"),
+        )
+        for dump in dumps:
+            with self.subTest(dump=dump[:40]), self.assertRaises(device_layer.ProbeError) as raised:
+                subject.parse_job_count(dump)
+            self.assertIn("carried no", str(raised.exception))
+
 
 class PowerSourceProbeTest(unittest.TestCase):
     """Part 2: the device's own battery is used directly and only a charger is simulated away."""
@@ -1388,7 +1406,8 @@ class DisplaySnapshotOrderTest(unittest.TestCase):
         device.read_screen_on.return_value = False
         with (
             patch.object(subject, "require_int_setting", return_value=128),
-            patch.object(subject, "read_int_setting", return_value=None),
+            # The device's own `null`, which is the reading that means the setting was never set.
+            patch.object(subject, "read_setting_text", return_value=subject.UNSET_SETTING_TEXT),
         ):
             snapshot = subject.DeviceStateSnapshot.capture(device)
         self.assertIsNotNone(snapshot.screen_on)
@@ -1476,10 +1495,32 @@ class RestoreTest(unittest.TestCase):
             stay_on=None,
             screen_on=True,
         )
-        with patch.object(subject, "read_int_setting", side_effect=subprocess.CalledProcessError(1, "settings get")):
+        with patch.object(
+            subject, "read_unsettable_int_setting", side_effect=subprocess.CalledProcessError(1, "settings get")
+        ):
             problems = snapshot.restore()
         self.assertTrue(any("stay-awake restore could not be verified" in problem for problem in problems))
         device.wake_screen.assert_called_once()
+
+    def test_an_unreadable_unset_readback_is_a_problem_not_a_clean_restore(self) -> None:
+        # The delete is verified by reading the key back, and `read_int_setting` answers None for text
+        # it cannot parse — the same answer as the unset value the delete was meant to produce. A
+        # readback nobody could read was therefore reported as a restore that succeeded, which is the
+        # one reading of this step that lets a device left changed pass as restored.
+        device = MagicMock()
+        device.run_adb.return_value = b"Settings provider is dead"
+        device.read_screen_on.return_value = True
+        snapshot = subject.DeviceStateSnapshot(
+            device,
+            brightness=35,
+            brightness_mode=1,
+            screen_timeout=300_000,
+            airplane_mode=0,
+            stay_on=None,
+            screen_on=True,
+        )
+        problems = snapshot.restore()
+        self.assertTrue(any("stay-awake restore could not be verified" in problem for problem in problems))
 
     def test_the_settings_restore_is_not_lost_when_only_the_reset_fails(self) -> None:
         # This test used to assert `[] == undo_phase_changes(...)` with a reset that did *not* fail and
@@ -2262,14 +2303,32 @@ class RequiredCaptureTest(unittest.TestCase):
 
     def test_the_stay_awake_setting_may_still_be_unset(self) -> None:
         # It is legitimately unset on a device that never had it, and an unset value is captured as
-        # None and restored by deleting the key rather than by writing one back.
+        # None and restored by deleting the key rather than by writing one back. The device says so
+        # with its own `null`, which is what this now feeds it: an unreadable answer is a different
+        # reading and is refused below, so faking one here would have pinned the wrong behaviour.
         device = MagicMock()
-        device.run_adb.return_value = b""
+        device.run_adb.side_effect = lambda argv: b"null" if argv[-1] == "stay_on_while_plugged_in" else b"1"
         device.read_screen_on.return_value = True
-        with patch.object(subject, "read_int_setting", side_effect=_all_set_except("stay_on_while_plugged_in")):
-            snapshot = subject.DeviceStateSnapshot.capture(device)
+        snapshot = subject.DeviceStateSnapshot.capture(device)
         self.assertEqual(1, snapshot.brightness)
         self.assertIsNone(snapshot.stay_on)
+
+    def test_an_unreadable_stay_awake_reading_is_refused_not_read_as_unset(self) -> None:
+        # `read_int_setting` answers None both for the unset text and for text it cannot parse, and
+        # the capture took that None as proof the setting had never been set. A settings service that
+        # did not answer therefore had its value captured as "unset", and the restore *deleted* the
+        # key — losing a value the device did hold and reporting a clean restore of a device it left
+        # changed. The unset reading is the device's own `null` and nothing else, so anything else
+        # stops the phase before it pins anything, as the four required settings already do.
+        device = MagicMock()
+        device.run_adb.side_effect = lambda argv: (
+            b"Settings provider is dead" if argv[-1] == "stay_on_while_plugged_in" else b"1"
+        )
+        device.read_screen_on.return_value = True
+        with self.assertRaises(device_layer.ProbeError) as raised:
+            subject.DeviceStateSnapshot.capture(device)
+        self.assertIn("stay_on_while_plugged_in", str(raised.exception))
+        self.assertIn("neither a decimal integer nor", str(raised.exception))
 
 
 class MonotonicTimestampTest(unittest.TestCase):

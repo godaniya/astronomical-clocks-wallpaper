@@ -103,7 +103,12 @@ ALARM_ENTRY_PATTERN: Final = re.compile(r"^\s*\w+\s*#\d+:\s*Alarm\{", re.MULTILI
 # A `dumpsys jobscheduler` dump that has been read at all prints a `Registered <n> jobs:` census line
 # before the job list; requiring it is what separates "the app has no jobs" from "this is not a
 # jobscheduler dump", so an unparsable probe is an error rather than a zero.
-JOBSCHEDULER_CENSUS_PATTERN: Final = re.compile(rf"^[ \t]*Registered ({DIGITS}) jobs:", re.MULTILINE)
+#
+# The line must *end* after the count, as the power and alarm census patterns below already require,
+# with the same `[ \t]` trailing class. Anchored at the start only, this matched a malformed line such
+# as `Registered 0 jobs: CORRUPT` and read its leading zero as the census — a count from a line the
+# probe never actually read, which for a zero is a B2 pass.
+JOBSCHEDULER_CENSUS_PATTERN: Final = re.compile(rf"^[ \t]*Registered ({DIGITS}) jobs:[ \t]*$", re.MULTILINE)
 # A `dumpsys power` that has been read at all prints its wake-lock census before listing the locks,
 # the same way `dumpsys jobscheduler` prints its job census. Requiring it is what separates "the app
 # holds no wake locks" from "this is not a power dump", so a truncated or reshaped dump is an error
@@ -134,6 +139,11 @@ EXPECTED_POWER_SOURCES: Final = ("AC", "USB", "Wireless", "Dock")
 # answer for everything the pattern does not match. The sign is accepted here because
 # `screen_brightness` is legitimately `-1` on a device using automatic brightness.
 DECIMAL_INT_PATTERN: Final = re.compile(rf"[+-]?{DIGITS}")
+# What `settings get <namespace> <key>` prints for a key that was never set. It is the only reading
+# that means "unset", which is why it is a literal of its own rather than "anything that is not a
+# decimal integer" — that reading is also what a settings service that did not answer looks like, and
+# treating the two alike loses a value the restore was supposed to put back.
+UNSET_SETTING_TEXT: Final = "null"
 # A count a device prints that cannot be negative — a UID from `stat -c %u`, or the utime and stime
 # ticks from `/proc/<pid>/stat`. It is a pattern of its own rather than the signed one above, because a
 # read that failed or was malformed can answer `-1` and `int()` would take it. Both callers then treat a
@@ -324,7 +334,9 @@ class DeviceStateSnapshot:
         not be read is a value the restore cannot put back, and skipping it would leave the shared
         device changed by a phase that reported success. The stay-awake setting is the one exception —
         it is legitimately unset on a device that never had it, and an unset value *is* captured, as
-        `None`, and restored by deleting the key.
+        `None`, and restored by deleting the key. The exception is only for the setting's *unset*
+        reading, not for an unreadable one: `read_unsettable_int_setting` tells the device's `null`
+        from a service that did not answer, and refuses the second before anything is pinned.
         """
         return cls(
             device,
@@ -332,7 +344,7 @@ class DeviceStateSnapshot:
             brightness_mode=require_int_setting(device, "system", "screen_brightness_mode"),
             screen_timeout=require_int_setting(device, "system", "screen_off_timeout"),
             airplane_mode=require_int_setting(device, "global", "airplane_mode_on"),
-            stay_on=read_int_setting(device, "global", "stay_on_while_plugged_in"),
+            stay_on=read_unsettable_int_setting(device, "global", "stay_on_while_plugged_in"),
             screen_on=device.read_screen_on(),
         )
 
@@ -411,10 +423,14 @@ class DeviceStateSnapshot:
             except (subprocess.SubprocessError, OSError) as error:
                 return [f"stay-awake restore failed: {device_layer.error_detail(error)}"]
             # The readback is inside its own guard: a transport failure here used to escape the whole
-            # restore and skip the display step that follows it.
+            # restore and skip the display step that follows it. The reader's refusal is caught here
+            # with it, and that is the point of using this reader rather than `read_int_setting`: a
+            # readback of `""` or any other unreadable text reads as `None` there — indistinguishable
+            # from the unset value the delete was meant to produce — so a delete nobody could verify
+            # was reported as a clean restore. Here it is a problem like any other.
             try:
-                remaining = read_int_setting(self.device, "global", "stay_on_while_plugged_in")
-            except (subprocess.SubprocessError, OSError) as error:
+                remaining = read_unsettable_int_setting(self.device, "global", "stay_on_while_plugged_in")
+            except (subprocess.SubprocessError, OSError, device_layer.ProbeError) as error:
                 return [f"stay-awake restore could not be verified: {device_layer.error_detail(error)}"]
             if remaining is not None:
                 return ["global/stay_on_while_plugged_in did not return to unset"]
@@ -519,6 +535,11 @@ def undo_phase_changes(
     return problems
 
 
+def read_setting_text(device: device_layer.AdbDevice, namespace: str, key: str) -> str:
+    """Read one device setting as the text `settings get` printed for it, stripped."""
+    return device.run_adb(["shell", "settings", "get", namespace, key]).decode(errors="replace").strip()
+
+
 def read_int_setting(device: device_layer.AdbDevice, namespace: str, key: str) -> int | None:
     """
     Read one integer device setting, or None when it is unset or not a decimal integer.
@@ -527,9 +548,40 @@ def read_int_setting(device: device_layer.AdbDevice, namespace: str, key: str) -
     step can abort the ones after it. A readback that raised here would do exactly that — the settings
     restore would stop at this step and the display restore would never run — so text that cannot be
     read is `None`, which the restore already reports as a value that did not read back.
+
+    That conflation is the right reading for a *comparison* — `None` is never the value a step wrote,
+    so it fails one — but not for deciding what a setting was worth. `read_unsettable_int_setting` is
+    the reader that tells the two apart, and the stay-awake setting is captured through it.
     """
-    raw = device.run_adb(["shell", "settings", "get", namespace, key]).decode(errors="replace").strip()
-    return parse_signed_int(raw)
+    return parse_signed_int(read_setting_text(device, namespace, key))
+
+
+def read_unsettable_int_setting(device: device_layer.AdbDevice, namespace: str, key: str) -> int | None:
+    """
+    Read one integer device setting that is legitimately unset, refusing an unreadable reading.
+
+    `settings get` prints `null` for a key that was never set, and a decimal integer for one that was,
+    so those are the only two readings that say anything about the setting's value. Anything else is
+    a settings service that did not answer — and `read_int_setting` reports it as `None`, which is
+    exactly the sentinel for "never set". Nothing downstream can tell them apart afterwards: the
+    capture stores it, `pin()` overwrites the setting anyway, and the restore then *deletes* a key
+    that may have held a real value, reporting a clean restore of a device it left changed. The
+    distinction has to be made where the text is, so it is made here and an unreadable reading stops
+    the phase before it pins anything — the same refusal `require_int_setting` makes for the four
+    settings that cannot be captured as unset, for the same reason.
+    """
+    raw = read_setting_text(device, namespace, key)
+    if raw == UNSET_SETTING_TEXT:
+        return None
+    value = parse_signed_int(raw)
+    if value is None:
+        detail = (
+            f"{namespace}/{key} read back as {raw!r}, which is neither a decimal integer nor the "
+            f"device's {UNSET_SETTING_TEXT} for an unset setting, so whether it held a value to "
+            "restore cannot be read from this device"
+        )
+        raise device_layer.ProbeError(detail)
+    return value
 
 
 def require_int_setting(device: device_layer.AdbDevice, namespace: str, key: str) -> int:
