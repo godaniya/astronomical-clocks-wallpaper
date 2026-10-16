@@ -765,6 +765,33 @@ def parse_api_level(output: str) -> int:
     return int(stripped)
 
 
+def wallpaper_pid(device: device_layer.AdbDevice) -> int | None:
+    """
+    Read the wallpaper process id, refusing an answer that cannot be read as one.
+
+    `device_layer.get_wallpaper_pid` reads `pidof` and answers `None` when nothing matches. A token
+    that is *not* a process id is a different thing, and that reader converts it with `int()` after
+    an `isdigit()` test, so a digit run past `int()`'s limit raises `ValueError` from inside it.
+    `ValueError` is not one `main` catches, so a corrupted response reached the operator as a
+    traceback rather than the `ERROR:` line every other unreadable probe produces.
+
+    The translation is made here rather than in the device-layer reader because that reader is shared
+    with the repository's other harnesses and carries the same unbounded conversion at four sites;
+    widening its contract is its own change, and this slice owes its own callers the named refusal.
+    `None` still means exactly what it means there — no live wallpaper process — because a response
+    nobody could read is not evidence of one.
+    """
+    try:
+        return device.get_wallpaper_pid()
+    except ValueError as error:
+        detail = (
+            f"the wallpaper process id probe answered something that is not a process id ({error}), so "
+            "the wallpaper's process cannot be identified; refusing rather than reading it as no live "
+            "process"
+        )
+        raise device_layer.ProbeError(detail) from error
+
+
 def read_process_uid(device: device_layer.AdbDevice, pid: int | None) -> int | None:
     """
     Read the owning UID of a process from `/proc/<pid>`, or None when it cannot be read.
@@ -786,8 +813,25 @@ def require_clk_tck(device: device_layer.AdbDevice) -> int:
 
     `device_layer.read_process_cpu_clock_ticks` reads `getconf CLK_TCK`. When it cannot answer, the
     CPU criteria cannot be scaled correctly, so the run fails loudly instead of assuming 100.
+
+    "Cannot answer" includes answering with something that cannot be converted: that reader tests the
+    text with `str.isdigit()` and then hands it to `int()`, so a digit run past `int()`'s limit — or a
+    character `isdigit()` accepts and `int()` does not, such as `"²"` — raises `ValueError` from
+    inside it. `ValueError` is not one `main` catches, so a corrupted response reached the operator as
+    a traceback rather than the `ERROR:` line this refusal is. The translation is made here rather
+    than in the device-layer reader because that reader is shared with the repository's other
+    harnesses and carries the same unbounded conversion at four sites; widening its contract is its
+    own change, and this slice owes its own callers the named refusal.
     """
-    clk_tck = device.read_process_cpu_clock_ticks()
+    try:
+        clk_tck = device.read_process_cpu_clock_ticks()
+    except ValueError as error:
+        detail = (
+            f"the CLK_TCK probe answered something that is not a tick rate ({error}), so process CPU "
+            "ticks cannot be converted to seconds; refusing to scale every CPU criterion by an "
+            "assumed rate"
+        )
+        raise device_layer.ProbeError(detail) from error
     if clk_tck is None or clk_tck <= 0:
         detail = (
             "the device did not report its CLK_TCK rate, so process CPU ticks cannot be converted to "
@@ -849,9 +893,15 @@ def census_entry_block(  # noqa: PLR0913 — the dump, the two patterns, and the
     `Alarm{...}` header followed by six or more `key=value` continuation lines, none of which are
     entries.
 
+    A line inside the block that is neither an entry nor a continuation of one is a third failure and
+    is refused too, because reconciliation alone cannot see it: a block holding a malformed entry
+    beside exactly the declared number of recognised ones reconciles perfectly. A continuation is
+    identified by indentation — it is deeper than the entry it belongs to — which is the only
+    structural fact the three dumps share, so it is what the check is built on.
+
     `probe` names the dump for the message, `census_line` is the literal line required of it, and
-    `entry_shape` is what one entry looks like, so that a refusal says which of the two failures it
-    is rather than only that something was wrong.
+    `entry_shape` is what one entry looks like, so that a refusal says which failure it is rather
+    than only that something was wrong.
     """
     census = census_pattern.search(dump)
     if census is None:
@@ -866,14 +916,33 @@ def census_entry_block(  # noqa: PLR0913 — the dump, the two patterns, and the
     census_text = lines[census_index] if census_index < len(lines) else ""
     indent = len(census_text) - len(census_text.lstrip())
     entries: list[str] = []
+    entry_indent: int | None = None
     for line in lines[census_index + 1 :]:
         if not line.strip():
             continue
         if entry_pattern.match(line):
             entries.append(line)
+            entry_indent = len(line) - len(line.lstrip())
             continue
-        if len(line) - len(line.lstrip()) <= indent:
+        line_indent = len(line) - len(line.lstrip())
+        if line_indent <= indent:
             break
+        # A line inside the block that is not an entry is a continuation of one — the alarm dump
+        # prints six or more `key=value` lines under each `Alarm{...}` header, and the jobscheduler
+        # dump more below each `JOB`. A continuation is *deeper indented than the entry it belongs
+        # to*, which is what tells it apart from an entry or a header the pattern did not recognise:
+        # such a line either appears before any entry (a block that holds content under a census of
+        # zero) or sits at the entry's own depth. Skipping those silently was the same defect as
+        # reading a count from a line that was never the census: a malformed entry could sit in the
+        # block while the recognised ones reconciled exactly, so the dump was accepted and the
+        # unrecognised entry counted as nothing.
+        if entry_indent is None or line_indent <= entry_indent:
+            detail = (
+                f"the {probe}'s {census_line} census block holds a line that is neither an entry "
+                f"shaped like {entry_shape} nor a continuation of one: {line.strip()!r}; the census "
+                "cannot be reconciled against a block it does not describe"
+            )
+            raise device_layer.ProbeError(detail)
     if len(entries) < declared:
         detail = (
             f"the {probe} declares {declared} entries but the block below its {census_line} census "
@@ -1489,7 +1558,7 @@ def run_window(
 
 def phase_resources(device: device_layer.AdbDevice) -> Record:
     """Record B2: the wake locks of any type, alarms, and jobs the app holds, with their commands."""
-    pid = device.get_wallpaper_pid()
+    pid = wallpaper_pid(device)
     uid = read_process_uid(device, pid)
     print(f"$ adb -s {device.serial} shell pidof {device_layer.PACKAGE_NAME} -> {pid}")
     print(f"$ adb -s {device.serial} shell stat -c %u /proc/{pid} -> {uid}")
@@ -1631,7 +1700,7 @@ def phase_hidden(device: device_layer.AdbDevice, minutes: float, *, recorder: Re
             # launcher's; `phase_visible` and `phase_memory` guard their arms and this phase used to
             # take the pid and open the window without asking what was bound.
             verify_arm(device, Arm.LIVE, None)
-            pid = device.get_wallpaper_pid()
+            pid = wallpaper_pid(device)
             snapshot.pin()
             # The decision is recorded before the override is applied: `cmd battery unplug` can take
             # effect and still fail on the way back, and a restore that read the flag afterwards would
@@ -1694,7 +1763,7 @@ def phase_visible(
             # display has already been woken still runs the restore below.
             ensure_visible_home(device)
             verify_arm(device, arm, baseline)
-            pid = device.get_wallpaper_pid() if arm is Arm.LIVE else None
+            pid = wallpaper_pid(device) if arm is Arm.LIVE else None
             conditions = arm_conditions(device, arm, baseline)
             print(f"arm guard admitted {conditions['wallpaper_component']} (median luma {conditions['median_luma']})")
             snapshot.pin()
@@ -1758,7 +1827,7 @@ def phase_memory(device: device_layer.AdbDevice, minutes: float, *, recorder: Re
         try:
             ensure_visible_home(device)
             verify_arm(device, Arm.LIVE, None)
-            pid = device.get_wallpaper_pid()
+            pid = wallpaper_pid(device)
             snapshot.pin()
             # The decision is recorded before the override is applied: `cmd battery unplug` can take
             # effect and still fail on the way back, and a restore that read the flag afterwards would

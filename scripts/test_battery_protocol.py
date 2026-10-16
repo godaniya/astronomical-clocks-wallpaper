@@ -211,6 +211,20 @@ class ClkTckProbeTest(unittest.TestCase):
             with self.subTest(missing=missing), self.assertRaises(device_layer.ProbeError):
                 subject.require_clk_tck(device)
 
+    def test_a_rate_that_cannot_be_converted_is_a_named_refusal_not_a_traceback(self) -> None:
+        # The device-layer reader tests `getconf CLK_TCK`'s text with `str.isdigit()` and then hands
+        # it to `int()`, so a digit run past `int()`'s limit raises `ValueError` from inside it. That
+        # is not an exception `main` catches, so a corrupted response reached the operator as a
+        # traceback rather than the `ERROR:` line this probe's other failures produce. The reader is
+        # reached here rather than faked, so the test pins the conversion as well as the translation.
+        device = device_layer.AdbDevice("device")
+        with (
+            patch.object(device_layer, "run_adb", return_value=b"9" * 5000),
+            self.assertRaises(device_layer.ProbeError) as raised,
+        ):
+            subject.require_clk_tck(device)
+        self.assertIn("not a tick rate", str(raised.exception))
+
     def test_a_window_records_the_probed_rate_and_power_source(self) -> None:
         device = MagicMock()
         device.read_process_cpu_clock_ticks.return_value = 250
@@ -343,6 +357,36 @@ Registered 2 jobs:
 """
 
 
+class WallpaperPidProbeTest(unittest.TestCase):
+    """A `pidof` answer that cannot be read is a named refusal, not a traceback and not a zero."""
+
+    def test_a_real_pid_is_returned(self) -> None:
+        device = device_layer.AdbDevice("device")
+        with patch.object(device_layer, "run_adb", return_value=b"4805\n"):
+            self.assertEqual(4805, subject.wallpaper_pid(device))
+
+    def test_no_live_process_is_still_none(self) -> None:
+        # `pidof` exits 1 and prints nothing when the package has no process, and the device-layer
+        # reader answers `None` for that. It is not the same answer as a corrupt response, and the
+        # wrapper must not turn it into one.
+        device = device_layer.AdbDevice("device")
+        with patch.object(device_layer, "run_adb", side_effect=subprocess.CalledProcessError(1, "pidof")):
+            self.assertIsNone(subject.wallpaper_pid(device))
+
+    def test_a_pid_that_cannot_be_converted_is_a_named_refusal_not_a_traceback(self) -> None:
+        # The device-layer reader converts a digit-only token with `int()`, so a digit run past
+        # `int()`'s limit raises `ValueError` from inside it — an exception `main` does not catch, so
+        # a corrupted response reached the operator as a traceback. The reader is reached here rather
+        # than faked, so the test pins the conversion as well as the translation.
+        device = device_layer.AdbDevice("device")
+        with (
+            patch.object(device_layer, "run_adb", return_value=b"9" * 5000),
+            self.assertRaises(device_layer.ProbeError) as raised,
+        ):
+            subject.wallpaper_pid(device)
+        self.assertIn("not a process id", str(raised.exception))
+
+
 class WakeLockAndAlarmProbeTest(unittest.TestCase):
     """Finding 1: an unparsable power or alarm dump is an error, not a zero-lock B2 pass."""
 
@@ -435,9 +479,56 @@ class WakeLockAndAlarmProbeTest(unittest.TestCase):
         self.assertIn("lists 2", str(raised.exception))
 
     def test_a_census_with_no_locks_at_all_is_still_a_real_zero(self) -> None:
-        # The refusal above must not turn a device that genuinely holds nothing into an error.
-        empty = POWER_DUMP.replace("size=2", "size=0").replace("_WAKE_LOCK", "_NOT_A_LOCK")
+        # The refusal above must not turn a device that genuinely holds nothing into an error. The
+        # empty census is built by *removing* the lock lines, not by renaming their lock type: a
+        # renamed line is one the entry pattern does not recognise, and an unrecognised line inside
+        # the census block is now a refusal of its own rather than a line to skip past — which is
+        # exactly what the test below pins.
+        emptied = POWER_DUMP.replace("size=2", "size=0")
+        empty = "\n".join(line for line in emptied.splitlines() if "_WAKE_LOCK" not in line) + "\n"
         self.assertEqual(0, subject.parse_wakelock_count(empty, 10026))
+
+    def test_an_unrecognised_line_in_the_census_block_is_refused(self) -> None:
+        # Reconciliation alone cannot see this: a block holding a malformed entry beside exactly the
+        # declared number of recognised ones reconciles perfectly, and a block holding one under a
+        # census of zero reconciled too — because non-entry lines were skipped. Both read as a count
+        # the dump does not support, and the second is a B2 pass from a census that describes no
+        # block. A line that is neither an entry nor deeper indented than the entry it continues is
+        # refused.
+        cases = (
+            ("  0 pending alarms:\n    MALFORMED_ALARM_ENTRY\n", subject.parse_alarm_count),
+            (" Wake Locks: size=0\n  MALFORMED_LOCK_LINE\n", lambda dump: subject.parse_wakelock_count(dump, 10026)),
+        )
+        for dump, parse in cases:
+            with self.subTest(dump=dump[:24]), self.assertRaises(device_layer.ProbeError) as raised:
+                parse(dump)
+            self.assertIn("neither an entry shaped like", str(raised.exception))
+        # And the same thing under a census its recognised entries *do* satisfy: the third entry is
+        # no longer in the entry shape, the two that remain reconcile with the count, and the
+        # unrecognised line still sits in the block. Reconciliation alone accepts this dump.
+        mixed = ALARM_DUMP.replace("  3 pending alarms:", "  2 pending alarms:").replace(
+            "RTC_WAKEUP #1: Alarm{", "RTC_WAKEUP #1 Alarm{"
+        )
+        with self.assertRaises(device_layer.ProbeError) as raised:
+            subject.parse_alarm_count(mixed)
+        self.assertIn("neither an entry shaped like", str(raised.exception))
+
+    def test_a_continuation_line_deeper_than_its_entry_is_still_read(self) -> None:
+        # The device's own alarm dump prints six or more `key=value` lines under every `Alarm{...}`
+        # header, and the jobscheduler dump more below each `JOB`. Those are continuations, told
+        # apart from an unrecognised line by being deeper indented than the entry they belong to, and
+        # they must not be refused. Run against the real dump as well, which is where the rule was
+        # checked before it was written.
+        package = device_layer.PACKAGE_NAME
+        dump = (
+            "  2 pending alarms:\n"
+            f"    ELAPSED #1: Alarm{{a {package}}}\n"
+            "      tag=*walarm*:one\n"
+            "      type=ELAPSED repeatInterval=0\n"
+            f"    ELAPSED #2: Alarm{{b {package}}}\n"
+            "      tag=*walarm*:two\n"
+        )
+        self.assertEqual(2, subject.parse_alarm_count(dump))
 
     def test_an_alarm_in_a_later_section_is_not_counted_as_pending(self) -> None:
         # `ALARM_DUMP_WITH_SECTIONS` names this app in `Past-due non-wakeup alarms:` and in nothing
