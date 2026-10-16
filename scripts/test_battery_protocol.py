@@ -2029,6 +2029,27 @@ class PilotPersistenceTest(unittest.TestCase):
         self.assertEqual(["pilot_floor"], [record.phase for record in returned])
         self.assertIsNotNone(returned[0].values["noise_floor_rate_ua"])
 
+    def test_a_window_that_did_not_restore_the_device_stops_the_pilot(self) -> None:
+        # The windows are one measurement of one device in one state. A window whose restore failed
+        # leaves a power override applied or a display in the state this run did not find it in, and
+        # the next window would be measured on that. `main` reports the accumulated problems, but only
+        # once the whole pilot has returned — up to two hours of windows later.
+        device = MagicMock()
+        device.run_adb.return_value = b"36\n"
+        recorder = MagicMock()
+        first = self.record(1000.0)
+        first.values["restore_problems"] = ["global/stay_on_while_plugged_in did not return to unset"]
+        windows = [first, self.record(1005.0), self.record(1010.0), self.record(1015.0)]
+        with (
+            patch.object(subject, "phase_visible", side_effect=windows),
+            self.assertRaises(device_layer.ProbeError) as raised,
+        ):
+            subject.phase_pilot(device, arm=report.Arm.LIVE, baseline=None, runs=4, minutes=1.0, recorder=recorder)
+        # The window that failed is persisted before the run stops, so stopping loses no evidence.
+        self.assertEqual(1, recorder.emit.call_count)
+        self.assertIn("did not restore the device", str(raised.exception))
+        self.assertIn("stay_on_while_plugged_in", str(raised.exception))
+
     def test_a_dead_discharge_channel_emits_no_floor_and_is_marked_unmeasured(self) -> None:
         # The target device's gauge reports a constant charge counter, so every window's rate is zero.
         # A 2-sigma half-width of zero divided by a zero mean is not a quiet channel, it is no reading
@@ -2268,12 +2289,18 @@ class VisibleHomeStateTest(unittest.TestCase):
         subject.ensure_visible_home(device)
         self.assertEqual(["wake", "dismiss", "home"], calls)
 
-    def test_a_still_locked_device_is_refused(self) -> None:
+    def test_a_locked_device_is_refused_before_the_keyguard_is_touched(self) -> None:
+        # Refusing only *after* dismissing cannot tell "the device was already unlocked" from "this
+        # call unlocked it": `wm dismiss-keyguard` changes a shared device that nothing in this
+        # protocol puts back, so a run started on a locked device would unlock it and then pass this
+        # very guard. The lock state is read first, and a locked one stops the phase untouched.
         device = self.device()
         device.read_keyguard_locked.return_value = True
         with self.assertRaises(device_layer.ProbeError) as raised:
             subject.ensure_visible_home(device)
-        self.assertIn("still locked", str(raised.exception))
+        self.assertIn("the keyguard is showing", str(raised.exception))
+        device.dismiss_keyguard.assert_not_called()
+        device.show_home.assert_not_called()
 
     def test_a_display_that_did_not_read_back_on_is_refused(self) -> None:
         device = self.device()

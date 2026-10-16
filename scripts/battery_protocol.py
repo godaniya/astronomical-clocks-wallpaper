@@ -1483,9 +1483,36 @@ def ensure_visible_home(device: device_layer.AdbDevice) -> None:
     screen, and the foreground read says the home screen is the thing in front at all. Neither
     implies the other — a device unlocked on another app's activity passes the first and fails the
     second — and both are three-valued, so an unreadable device is refused rather than assumed.
+
+    The keyguard is also read *before* the device is touched at all, and a locked or unreadable one
+    stops the phase there. `dismiss_keyguard()` below is a change to a shared device that this
+    protocol never puts back, so the check that it was safe to make has to come first: read
+    afterwards, it cannot tell a device that was already unlocked from one this call just unlocked,
+    and the phase would pass its own guard having changed the device it was guarding.
     """
     if not device.wake_screen():
         detail = "the display could not be woken for a visible window"
+        raise device_layer.ProbeError(detail)
+    # The lock state is read *before* anything is changed, because `wm dismiss-keyguard` changes the
+    # shared device and nothing here puts it back: the snapshot restores the display state, not the
+    # lock state. Dismissing first and reading afterwards cannot tell "the device was already
+    # unlocked" from "this call unlocked it", so a run started on a locked device would unlock it and
+    # then pass its own guard. `scripts/device_qualification.py` refuses a locked device before
+    # mutating for the same reason, and `docs/device-testing.md` says to start with the keyguard
+    # unlocked.
+    locked = device.read_keyguard_locked()
+    if locked is None:
+        detail = (
+            "the keyguard state could not be read before the window was set up, so a locked device "
+            "cannot be told from an unlocked one; refusing to dismiss a keyguard that may be there"
+        )
+        raise device_layer.ProbeError(detail)
+    if locked:
+        detail = (
+            "the keyguard is showing, so the device is not in the state this phase measures in, and "
+            "dismissing it would change a shared device that nothing here puts back; unlock the device "
+            "and re-run"
+        )
         raise device_layer.ProbeError(detail)
     device.dismiss_keyguard()
     device.show_home()
@@ -1892,6 +1919,13 @@ def phase_pilot(  # noqa: PLR0913 — the arms, the window shape, and the sink a
     resumable: a pilot interrupted at window three keeps the windows it completed, instead of
     returning them to a `main` that never got to append them.
 
+    A window that could not restore the device stops the run where it stands, after its record is on
+    disk. The windows are one measurement of one device in one state, and the next window would be
+    measured under whatever the failed restore left behind — a power override still applied, a display
+    that never returned to the state it was found in. Reporting that at the end of the run, as `main`
+    does with the accumulated problems, is reporting it after the later windows have already been
+    taken on it.
+
     The run is bounded before the first window opens. `--runs` has a count bound and `--minutes` a
     length bound, but neither bounds this invocation on its own: a count at the floor with a window at
     the ceiling is hours past what `docs/battery-budget.md` allows an invocation to take, and refusing
@@ -1912,6 +1946,20 @@ def phase_pilot(  # noqa: PLR0913 — the arms, the window shape, and the sink a
         record.values["pilot"] = True
         record.values["runs"] = runs
         recorder.emit(record)
+        # The window is persisted before the run is stopped, so stopping here loses no evidence. A
+        # window whose restore failed left the device in a state this run no longer controls — a power
+        # override that did not reset, a display that did not return to the state it was found in —
+        # and every later window would be measured on it. `main` reports the accumulated problems, but
+        # only once the whole pilot has returned, which for a full pilot is two hours of windows.
+        restore_problems = record.values.get("restore_problems")
+        if isinstance(restore_problems, list) and restore_problems:
+            named = "; ".join(str(problem) for problem in restore_problems)
+            detail = (
+                f"pilot window {run} of {runs} did not restore the device ({named}), so the remaining "
+                f"windows would be measured on a device this run does not control; stopping after "
+                f"{run} window(s)"
+            )
+            raise device_layer.ProbeError(detail)
         rate = record.values.get("discharge_rate_ua")
         if not isinstance(rate, int | float):
             detail = "a visible window recorded no discharge rate, so the noise floor has no input"
