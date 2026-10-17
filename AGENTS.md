@@ -42,11 +42,11 @@ and [responding to review](CONTRIBUTING.md#responding-to-review). After a review
 round, record each verdict where the finding lives: in its thread reply, or in one
 reply comment for a finding raised in a review body. A fixing commit's reasoning
 belongs in its body and is linked from the verdict; a declined finding states its
-reason there and needs no commit. In the PR body, add only the new index rows and
-links, re-deriving every row from the pushed branch after a rebase, and revise the
-Summary only if the outcome changed. Make the whole-diff pass before each
-re-request, and stop re-requesting automated review at the limit that section
-sets.
+reason there and needs no commit. In the PR body, update only the index rows and
+links (re-deriving every row from the pushed branch after a rebase), the Caveats
+note when the automated-review cap is reached, and the Summary when the outcome
+changed. Make the whole-diff pass before each re-request, and stop re-requesting
+automated review at the limit that section sets.
 
 ## Product feature gate
 

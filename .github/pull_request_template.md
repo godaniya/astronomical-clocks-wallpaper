@@ -27,11 +27,12 @@
 
 <!-- Follow CONTRIBUTING.md, "Pull requests and Accountability Index".
      On each push and review round, add a row per new commit and a link per newly
-     resolved finding; nothing else in the body grows. One line per cell; link the
-     rationale in commits/threads rather than copying it. Use actual native commit
-     references, e.g. owner/repo@sha, without backticks. After a rebase, re-derive
-     every row from the pushed branch; the earlier SHAs no longer name the commits
-     the PR carries.
+     resolved finding; no per-round narrative or rationale is added. When the
+     automated-review cap is reached, record what remains under Caveats. One line
+     per cell; link the rationale in commits/threads rather than copying it. Use
+     actual native commit references, e.g. owner/repo@sha, without backticks.
+     After a rebase, re-derive every row from the pushed branch; the earlier SHAs
+     no longer name the commits the PR carries.
      After the default squash merge these SHAs live on the PR head ref rather than
      in main's ancestry, so this table is not expected to match main commit for
      commit; citing them is still correct. See [merge policy](../CONTRIBUTING.md#merge-method). -->
