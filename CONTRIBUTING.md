@@ -335,8 +335,10 @@ run until a reviewer stops producing findings.
 - Before requesting a review or re-review, review the whole diff as it now
   stands, not only the lines the last finding touched: a re-requested review
   reads the whole diff again.
-- Answer every open finding from a round in one push, and fix each finding's
-  class across the diff rather than only the reported instance.
+- Answer every open finding from a round in one pass: batch accepted fixes into a
+  single push, fixing each finding's class across the diff rather than only the
+  reported instance, and answer declined findings in their verdict replies
+  without a commit.
 - Record each verdict in the thread, or, for a finding raised in a review body,
   in one reply comment: accepted with the fixing commit, or declined with the
   reason. Declining is a legitimate verdict — for example, hardening against
