@@ -159,7 +159,7 @@ a maximum channel delta of 48 and a mean absolute channel delta of 0.0055. The 1
 the same pixels by up to 228 levels, which is the visible step.
 
 The changed-pixel bounding box spans the dial's moving content — the civil hand, the zodiac ring and
-its signs, and the Sun/Moon/star field — not a clipped or shifted dial.
+its signs, and the Sun and Moon markers — not a clipped or shifted dial.
 
 ---
 
@@ -190,8 +190,7 @@ Issue #136 requires checking whether the slower cadence is visually distinguisha
    - The zodiac ring is **not static**. `OrlojProjection.zodiacCircle` offsets the ring's centre
      along the local sidereal angle, and `eclipticPoint` rotates the ecliptic frame by the same angle,
      so the ring, its signs, and the Sun/Moon markers advance at the sidereal rate of
-     360°/86164.09 s, i.e. **0.2507° per minute** — slightly faster than the civil hand. The star
-     field is recomputed from the same instant and moves with it.
+     360°/86164.09 s, i.e. **0.2507° per minute** — slightly faster than the civil hand.
    - Time-invariant plate elements — the Roman numeral ring, the temporal-hour curves, and the plate
      shading — are genuinely static and render identically; the fixed-instant comparison above shows
      they are byte-identical across builds.
@@ -224,9 +223,15 @@ per 15 min) to 1/60 Hz (about 15 frames per 15 min) reveals the CPU consumption 
      47 ms per active frame including looper overhead — plus any viewport redraws, which a static
      home screen did not request.
 2. **Components of the frame pipeline**:
-   - **Coordinate calculations**: Astronomy Engine solar/lunar position, ecliptic coordinate transformations, local sidereal time calculation, unequal temporal hour curve intersections, and the 26-star rotation matrix.
-   - **Canvas draw calls**: Canvas save/restore, transformation matrices for the zodiac dial, drawing dynamic sun/moon glyphs, anti-aliased hand lines, and counterweight geometries.
-   - **Surface locking and synchronization**: `SurfaceHolder.lockHardwareCanvas()` and `unlockCanvasAndPost()` synchronization between application Looper and SurfaceFlinger.
+   - **Coordinate calculations**: the wallpaper calls `AstronomyCalculator.dialGeometry`, which asks
+     Astronomy Engine for the Sun's and Moon's geocentric ecliptic longitudes, the true-obliquity
+     rotation, local sidereal time, and the moon phase. It does not call `sky()`, so a wallpaper frame
+     does not compute planets, fixed stars, horizontal coordinates, refraction, or rise/set events.
+   - **Canvas draw calls**: Canvas save/restore, transformation matrices for the zodiac dial, drawing
+     dynamic sun/moon glyphs, anti-aliased hand lines, and counterweight geometries.
+   - **Surface locking and synchronization**: the frame draws on the software canvas from
+     `SurfaceHolder.lockCanvas()` and posts it with `unlockCanvasAndPost()`; there is no hardware
+     canvas. This synchronization runs between the application Looper and SurfaceFlinger.
 3. **Conclusion on mechanism**:
    - The CPU cost was predominantly the Canvas/ephemeris rendering loop rather than background idle
      overhead: removing 59 of 60 frames per minute dropped the same app on the same device under
@@ -281,8 +286,8 @@ Renderer log scan inconclusive: no matching warning records.
 - **Simulated discharge.** `cmd battery unplug` on USB freezes the fuel gauge, so the discharge
   channel reads 0 by construction and B4 is not measured. B5 uses `/proc/<pid>/stat` CPU ticks, which
   the simulation does not affect.
-- **CPU is quantized at `CLK_TCK=100`.** One tick over the 914.4 s window is about 0.011% of one
-  core.
+- **CPU is quantized at `CLK_TCK=100`.** One tick is 0.01 s of CPU, so one tick over the 914.4 s
+  window is `(0.01 / 914.4) × 100 ≈ 0.0011%` of one core.
 - **The hand-angle detector has a rasterization floor.** It reports +0.282779° for an exact +0.25°
   minute step (+0.0328°, about 0.27 px at the detected radius); the 30-minute smoke check's residual
   was +0.074°. The detector is a corroborating measure, not a second rendering reference.
