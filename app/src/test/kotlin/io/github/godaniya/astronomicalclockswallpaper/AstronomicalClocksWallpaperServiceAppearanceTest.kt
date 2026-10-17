@@ -125,7 +125,7 @@ class AstronomicalClocksWallpaperServiceAppearanceTest {
 
     // Copilot review discussion_r4177344106: onSurfaceDestroyed cancels the loop but leaves the
     // engine visible, so a night-mode change arriving in that gap must not redraw onto the released
-    // surface. Before the fix this ran a tick whose finally re-armed the per-second loop, so even the
+    // surface. Before the fix this ran a tick whose finally re-armed the periodic loop, so even the
     // later tick kept rendering; both checks must stay at zero.
     @Test
     fun nightChangeWithoutSurface() {
