@@ -298,9 +298,10 @@ one link away.
   rationale that a commit body or thread reply already holds — link to it.
 - Update the index on every push and review round, in the same pass as the
   commit or reply: add one row for every commit pushed (the table must not stop
-  at the opening commits), and keep the "Review decisions" line as one link per
-  resolved finding, each naming the commit that resolved it or marking it
-  declined. A finding raised in a review body rather than a thread is linked
+  at the opening commits). After a rebase, re-derive every row from the pushed
+  branch: the SHAs that named the old commits no longer name the commits the PR
+  carries. Keep the "Review decisions" line as one link per resolved finding,
+  each naming the commit that resolved it or marking it declined. A finding raised in a review body rather than a thread is linked
   through the reply that records its verdict. Those rows cite the PR's own commits, which
   after the default [squash merge](#merge-method) remain on the PR head ref
   rather than in `main`'s ancestry; citing them by SHA is still correct, and the
