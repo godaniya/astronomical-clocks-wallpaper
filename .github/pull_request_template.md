@@ -1,8 +1,9 @@
 ## Summary
 
-<!-- Replace with two to four concise bullets: the outcome and why, as the change
-     now stands. When review changes the outcome, revise these bullets; do not add
-     a bullet per push or review round — that history lives in commits and threads. -->
+<!-- Replace with two to four concise bullets: the outcome, and one short
+     current-state reason it matters. When review changes the outcome, revise
+     these bullets; do not add a bullet per push or review round — review history
+     lives in commits and threads. -->
 -
 -
 
