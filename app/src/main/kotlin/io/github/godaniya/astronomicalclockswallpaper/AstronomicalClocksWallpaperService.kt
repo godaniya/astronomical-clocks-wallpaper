@@ -450,11 +450,12 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
 
         private fun scheduleNextTick() {
             handler.removeCallbacksAndMessages(null)
-            val millisInSecond = Math.floorMod(clock.millis(), MILLIS_PER_SECOND)
+            val millisInMinute = Math.floorMod(clock.millis(), MILLIS_PER_MINUTE)
+            val delayMillis = (MILLIS_PER_MINUTE - millisInMinute).coerceAtLeast(1L)
             val isScheduled =
                 handler.postDelayed(
                     Runnable { runTick() },
-                    MILLIS_PER_SECOND - millisInSecond,
+                    delayMillis,
                 )
             if (!isScheduled) {
                 Log.w(
@@ -559,6 +560,7 @@ class AstronomicalClocksWallpaperService : WallpaperService() {
         const val EXTRA_RESET = "reset"
 
         private const val MILLIS_PER_SECOND = 1000L
+        private const val MILLIS_PER_MINUTE = 60_000L
         private const val SECONDS_PER_MINUTE = 60L
         private const val SECONDS_PER_HOUR = 3600L
         private val minSupportedInstant: Instant = Instant.ofEpochMilli(Long.MIN_VALUE)
