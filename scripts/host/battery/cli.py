@@ -314,7 +314,7 @@ def build_report_argument_parser() -> argparse.ArgumentParser:
 def main_report(argv: Sequence[str] | None = None) -> int:
     """Parse the standalone report command line and print the aggregate report."""
     args = build_report_argument_parser().parse_args(argv)
-    forwarded = ["--state", str(args.state), "report"]
+    forwarded = [f"--state={args.state}", "report"]
     if args.black_unavailable is not None:
-        forwarded.extend(["--black-unavailable", args.black_unavailable])
+        forwarded.append(f"--black-unavailable={args.black_unavailable}")
     return main(forwarded)

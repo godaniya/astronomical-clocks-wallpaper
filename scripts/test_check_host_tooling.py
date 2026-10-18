@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for the host tooling parity check and runtime import audit."""
 
+import ast
 import contextlib
 import tempfile
 import unittest
@@ -344,6 +345,21 @@ class RuntimeImportAuditTest(unittest.TestCase):
         problems = subject.check_runtime_imports(paths)
         self.assertEqual(len(problems), 1)
         self.assertIn("cannot parse runtime harness", problems[0])
+
+
+class PackageInitializerTest(unittest.TestCase):
+    """Package initializers stay docstring-only, so importing one submodule loads no siblings."""
+
+    def test_every_package_initializer_has_no_imports(self) -> None:
+        root = Path(__file__).resolve().parent
+        initializers = sorted((root / "host").rglob("__init__.py"))
+        self.assertIn(root / "host" / "__init__.py", initializers)
+        self.assertGreaterEqual(len(initializers), 4)
+        for path in initializers:
+            with self.subTest(initializer=path.relative_to(root)):
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+                imports = [node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))]
+                self.assertFalse(imports, f"{path.relative_to(root)} must not import")
 
 
 class RuntimeSourcesTest(unittest.TestCase):

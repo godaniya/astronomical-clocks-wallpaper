@@ -13,8 +13,10 @@ import io
 import unittest
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from unittest.mock import patch
 
 from device_test_fixtures import install_no_real_sleep_guard
+from host.battery import cli as battery_cli
 from host.battery import report as battery_report
 from host.battery import stats as battery_stats
 from host.device import probes as device_probes
@@ -953,3 +955,15 @@ class CorruptRecordTest(unittest.TestCase):
         self.assertEqual(
             ["x"], battery_report.collect_restore_problems([{"phase": "hidden", "restore_problems": ["x"]}])
         )
+
+
+class MainReportForwardingTest(unittest.TestCase):
+    """The report wrapper forwards each parsed value as one `--option=value` token."""
+
+    def test_dash_prefixed_values_survive_forwarding(self) -> None:
+        # Two tokens (`--state`, `-reports`) make argparse read the second as an unknown option, so
+        # a dash-prefixed state directory or reason could not be forwarded at all.
+        argv = ["--state=-reports", "--black-unavailable=--reason"]
+        with patch.object(battery_cli, "main", return_value=0) as main:
+            self.assertEqual(battery_cli.main_report(argv), 0)
+        main.assert_called_once_with(["--state=-reports", "report", "--black-unavailable=--reason"])
