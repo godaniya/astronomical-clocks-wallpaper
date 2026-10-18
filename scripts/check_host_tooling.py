@@ -2,36 +2,19 @@
 """
 Host tooling consistency checks for the #146 developer environment.
 
-Two properties are checked here that no other host check can see:
-
-* every tool pinned in ``[dependency-groups].dev`` matches the revision of its own repository in
-  ``.pre-commit-config.yaml``; and
-* the runtime harnesses in ``scripts/`` import only the standard library and sibling runtime
-  modules.
-
-The pre-commit scanner is deliberately narrow. It understands the block-style ``repos:`` list this
-repository uses, not YAML in general: flow-style mappings, anchors, and other constructs raise
-instead of being guessed at, and comments are removed with a small quote-aware scanner so the check
-needs no third-party parser. Each revision is associated with the repository that declares it and
-compared as a complete string, so swapped repositories, a longer version that shares a prefix, and a
-revision that appears only in a comment all fail.
-
-The import audit is static. It follows ``import`` and ``from ... import`` statements, so a dynamic
-import such as ``importlib.import_module("numpy")`` is invisible to it.
+Verify that development pins match their pre-commit revisions and that the runtime harnesses import
+only the standard library and siblings. The pre-commit scanner handles the block-style ``repos:``
+list used here, not YAML in general; the import audit is static.
 """
-
-from __future__ import annotations
 
 import ast
 import re
 import sys
 import tomllib
+from collections.abc import Iterator, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping, MutableMapping, Sequence
+from typing import Final
 
 RUNTIME_SCRIPTS: Final = (
     Path("scripts/battery_protocol.py"),
@@ -50,10 +33,8 @@ HOOK_REPOSITORIES: Final = {
 _DEV_PIN: Final = re.compile(r"^(?P<name>[A-Za-z0-9_.-]+)==(?P<version>[A-Za-z0-9_.+-]+)$")
 _REPO_ITEM: Final = re.compile(r"^(?P<indent> *)- repo:(?P<value>.*)$")
 _MAPPING_KEY: Final = re.compile(r"^(?P<indent> *)(?P<key>[A-Za-z0-9_-]+):(?P<value>.*)$")
-# A single- or double-quoted YAML scalar on one line. Single-quoted scalars escape a quote by
-# doubling it; double-quoted scalars escape with a backslash.
+# A quoted YAML scalar: single quotes escape by doubling, double quotes by backslash.
 _QUOTED_SCALAR: Final = re.compile(r"\"(?:[^\"\\]|\\.)*\"|'(?:[^']|'')*'")
-# A comment marker: a ``#`` at the start of the line or after whitespace.
 _COMMENT: Final = re.compile(r"(?<!\S)#")
 
 
@@ -63,14 +44,7 @@ def _mask_quoted(match: re.Match[str]) -> str:
 
 
 def _strip_comment(line: str) -> str:
-    """
-    Remove a YAML comment from one line, respecting quoted scalars.
-
-    A ``#`` starts a comment only at column 0 or after whitespace. A ``#`` inside a single- or
-    double-quoted scalar is preserved. Masking each quoted scalar before the search keeps a ``#``
-    that follows one from becoming a comment, because the filler is not whitespace. This is a
-    scanner for the shapes this repository writes, not a YAML parser.
-    """
+    """Remove a YAML comment, preserving ``#`` in quotes or after non-whitespace."""
     masked = _QUOTED_SCALAR.sub(_mask_quoted, line)
     comment = _COMMENT.search(masked)
     return line[: comment.start()].rstrip() if comment else line.rstrip()
@@ -224,14 +198,7 @@ def _record_revision(
 
 
 def parse_pre_commit_revisions(text: str) -> dict[str, str]:
-    """
-    Parse repository revisions from the repository's ``.pre-commit-config.yaml``.
-
-    The result maps each repository URL to its revision. A ``local`` repository is skipped because
-    it legitimately has no revision. Duplicate repositories, duplicate revisions, a revision before
-    any repository, and a repository without a revision are rejected with ``ValueError``; so are
-    formats this narrow scanner does not understand.
-    """
+    """Map each repository URL to its revision; ``local`` entries are skipped and duplicates raise."""
     revisions: dict[str, str] = {}
     owners: dict[str, str] = {}
     for repository, revision in _revision_entries(text):

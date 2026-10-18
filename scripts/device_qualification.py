@@ -691,7 +691,7 @@ def rollover_instants(zone: ZoneInfo) -> list[str]:
     ]
 
 
-def expected_rollover_angles_deg(zone: ZoneInfo, instants: Sequence[str]) -> list[float]:
+def expected_rollover_angles_deg(zone: ZoneInfo, instants: list[str]) -> list[float]:
     """Return each UTC instant's absolute civil-hand angle in the zone, clockwise from the top."""
     return [
         device_layer.civil_hand_angle_deg(local.hour * 3600 + local.minute * 60 + local.second)
@@ -700,7 +700,7 @@ def expected_rollover_angles_deg(zone: ZoneInfo, instants: Sequence[str]) -> lis
 
 
 def evaluate_rollover(
-    zone: ZoneInfo, instants: Sequence[str], angles: Sequence[float], zone_id: str
+    zone: ZoneInfo, instants: list[str], angles: Sequence[float], zone_id: str
 ) -> tuple[list[float], list[float], list[str]]:
     """Return (expected absolute angles, circular residuals, problems) for one civil-midnight sweep."""
     expected = expected_rollover_angles_deg(zone, instants)
@@ -709,8 +709,7 @@ def evaluate_rollover(
     ]
     problems = [
         # Compare the raw residual: rounding to ANGLE_REPORT_DECIMALS first would accept a residual
-        # just above the boundary (0.5004° rounds to 0.500°), widening the tolerance beyond its stated
-        # 0.5°. The test stays strict, so a residual of exactly the tolerance passes.
+        # just above the boundary (0.5004° rounds to 0.500°), widening the stated 0.5° tolerance.
         f"Midnight rollover at {instant} (zone {zone_id}) hand angle residual {residual:+.3f}° "
         f"exceeds the {device_layer.ANGLE_TOLERANCE_DEG}° tolerance"
         for instant, residual in zip(instants, residuals, strict=True)
@@ -719,8 +718,7 @@ def evaluate_rollover(
     for instant, (previous_expected, expected_angle), (previous_angle, angle) in zip(
         instants[1:], pairwise(expected), pairwise(angles), strict=True
     ):
-        # Only gaps wider than the probe jitter can order adjacent samples: the 20-second pair sits
-        # 0.083° apart, below the tolerance, so it is checked as a bracket, not ordered against itself.
+        # Only gaps wider than the probe jitter can order adjacent samples; the 20-second pair is a bracket.
         if expected_angle - previous_expected > device_layer.ANGLE_TOLERANCE_DEG and angle < previous_angle:
             problems.append(
                 f"Midnight rollover did not advance monotonically at {instant} "
@@ -961,7 +959,7 @@ def print_check_report(results: Sequence[tuple[str, str]]) -> None:
     print("=======================================================\n")
 
 
-def finish_run(results: Sequence[tuple[str, str]], failures: Sequence[str], *, log_scan_inconclusive: bool) -> None:
+def finish_run(results: Sequence[tuple[str, str]], failures: list[str], *, log_scan_inconclusive: bool) -> None:
     """Print the report and exit non-zero when any check failed."""
     print_check_report(results)
     if failures:
