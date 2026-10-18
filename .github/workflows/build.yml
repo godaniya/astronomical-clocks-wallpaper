@@ -106,41 +106,7 @@ jobs:
           uv lock --check
           git diff --exit-code uv.lock
           uv sync --frozen --group dev
-          python3 - <<'PY'
-          import ast
-          import pathlib
-          import sys
-          import tomllib
-
-          pyproject = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))
-          dev_pins = dict(item.split("==", 1) for item in pyproject["dependency-groups"]["dev"])
-          pre_commit = pathlib.Path(".pre-commit-config.yaml").read_text(encoding="utf-8")
-          for tool in ("ruff", "ty", "codespell"):
-              expected_rev = f"rev: v{dev_pins[tool]}"
-              if expected_rev not in pre_commit:
-                  raise SystemExit(f".pre-commit-config.yaml missing {expected_rev} for {tool}")
-
-          runtime_files = [
-              pathlib.Path("scripts/battery_protocol.py"),
-              pathlib.Path("scripts/battery_report.py"),
-              pathlib.Path("scripts/device_layer.py"),
-              pathlib.Path("scripts/device_qualification.py"),
-              pathlib.Path("scripts/device_smoke.py"),
-          ]
-          local_modules = {path.stem for path in runtime_files}
-          allowed = set(sys.stdlib_module_names) | local_modules
-          for path in runtime_files:
-              tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-              for node in ast.walk(tree):
-                  names = []
-                  if isinstance(node, ast.Import):
-                      names = [alias.name.split(".", 1)[0] for alias in node.names]
-                  elif isinstance(node, ast.ImportFrom) and node.module:
-                      names = [node.module.split(".", 1)[0]]
-                  for top in names:
-                      if top not in allowed:
-                          raise SystemExit(f"Non-stdlib import {top!r} in runtime harness {path}")
-          PY
+          uv run --frozen python scripts/check_host_tooling.py
       - name: Lint host scripts (Ruff)
         run: uv run --frozen ruff check --output-format=github scripts
       - name: Check host script formatting (Ruff)

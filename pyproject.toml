@@ -83,6 +83,11 @@ notice-rgx = "# SPDX-License-Identifier: Apache-2\\.0"
 # The shared test-only RGBA fixture helper is also a standalone scripts/ module.
 "scripts/device_test_fixtures.py" = ["INP001"]
 
+# The host tooling checker is dev tooling run as a script, and its tests follow the same unittest
+# conventions as the modules above until the #148 migration.
+"scripts/check_host_tooling.py" = ["INP001"]
+"scripts/test_check_host_tooling.py" = ["INP001", "D102", "D103", "PT009", "PT019", "PT027"]
+
 [tool.codespell]
 # Domain vocabulary and local identifiers that codespell's dictionary flags; see the 2026-10-07
 # scan in docs/development.md. `skip` keeps direct local runs off generated output and `.venv`.
