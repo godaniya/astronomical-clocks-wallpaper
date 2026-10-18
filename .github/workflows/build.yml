@@ -96,25 +96,60 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # uv serves the pinned ty and codespell checks; Ruff runs through its own official action.
+      # uv reproduces the locked host dev environment (`[dependency-groups].dev` in uv.lock).
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: 0.12.23
+          version: 0.13.1
+      - name: Sync and verify host dev environment
+        run: |
+          set -euo pipefail
+          uv lock --check
+          git diff --exit-code uv.lock
+          uv sync --frozen --group dev
+          python3 - <<'PY'
+          import ast
+          import pathlib
+          import sys
+          import tomllib
+
+          pyproject = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))
+          dev_pins = dict(item.split("==", 1) for item in pyproject["dependency-groups"]["dev"])
+          pre_commit = pathlib.Path(".pre-commit-config.yaml").read_text(encoding="utf-8")
+          for tool in ("ruff", "ty", "codespell"):
+              expected_rev = f"rev: v{dev_pins[tool]}"
+              if expected_rev not in pre_commit:
+                  raise SystemExit(f".pre-commit-config.yaml missing {expected_rev} for {tool}")
+
+          runtime_files = [
+              pathlib.Path("scripts/battery_protocol.py"),
+              pathlib.Path("scripts/battery_report.py"),
+              pathlib.Path("scripts/device_layer.py"),
+              pathlib.Path("scripts/device_qualification.py"),
+              pathlib.Path("scripts/device_smoke.py"),
+          ]
+          local_modules = {path.stem for path in runtime_files}
+          allowed = set(sys.stdlib_module_names) | local_modules
+          for path in runtime_files:
+              tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+              for node in ast.walk(tree):
+                  names = []
+                  if isinstance(node, ast.Import):
+                      names = [alias.name.split(".", 1)[0] for alias in node.names]
+                  elif isinstance(node, ast.ImportFrom) and node.module:
+                      names = [node.module.split(".", 1)[0]]
+                  for top in names:
+                      if top not in allowed:
+                          raise SystemExit(f"Non-stdlib import {top!r} in runtime harness {path}")
+          PY
       - name: Lint host scripts (Ruff)
-        uses: astral-sh/ruff-action@278981a28ce3188b1e39527901f38254bf3aac89 # v4.1.0
-        with:
-          version: "0.16.10"
-          args: check --output-format=github
-          src: ./scripts
+        run: uv run --frozen ruff check --output-format=github scripts
       - name: Check host script formatting (Ruff)
-        uses: astral-sh/ruff-action@278981a28ce3188b1e39527901f38254bf3aac89 # v4.1.0
-        with:
-          version: "0.16.10"
-          args: format --check --output-format=github
-          src: ./scripts
+        run: uv run --frozen ruff format --check --output-format=github scripts
       - name: Type-check host scripts (ty)
-        run: uvx --from ty==0.0.84 ty check --output-format=github scripts
+        run: uv run --frozen ty check --output-format=github scripts
       - name: Spell-check text files (codespell)
-        run: uvx --from codespell==2.4.3 codespell
+        run: uv run --frozen codespell
       - name: Test host device harnesses
-        run: python3 -I -m unittest discover -s scripts -p 'test_*.py' -v
+        run: |
+          uv run --frozen pytest
+          python3 -I -m unittest discover -s scripts -p 'test_*.py' -v
