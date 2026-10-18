@@ -3,9 +3,10 @@
 """
 Unit tests for the report's decision rules: the budgets, the statistics, and the recorded identity.
 
-These are the checks on `scripts/host/battery/battery_report.py`, the half of the protocol that reads record dicts
-and decides. They need no device, no window, and no phase: every input is a record as the state file
-would carry it, which is what lets a criterion be tested without running one.
+These are the checks on `scripts/host/battery/report.py`, the implementation behind the
+`scripts/battery_report.py` wrapper: the half of the protocol that reads record dicts and decides.
+They need no device, no window, and no phase: every input is a record as the state file would carry
+it, which is what lets a criterion be tested without running one.
 """
 
 from collections.abc import Mapping, Sequence
