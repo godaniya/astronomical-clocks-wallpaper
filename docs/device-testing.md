@@ -140,7 +140,7 @@ System `dumpsys` surfaces used by `host.device`, `host.qualification`, and `host
 | Process total PSS (`phase_total_pss_growth`) | `adb shell dumpsys meminfo <package>` | Already scoped to the debug package; `TOTAL <pss>` is the standard text summary row. |
 | Battery level, status, and voltage (`battery_protocol.py`) | `adb shell dumpsys battery` | `cmd battery get status` and `cmd battery get level` exist, but `cmd battery get voltage` fails (`Unknown get option: voltage`), so one `dumpsys battery` call remains the single consistent snapshot for all four fields. |
 | Alarm and JobScheduler census (`battery_protocol.py`) | `adb shell dumpsys alarm` and `adb shell dumpsys jobscheduler` | `cmd alarm` and `cmd jobscheduler` have no census getters. `dumpsys jobscheduler <package>` still prints the system-wide `Registered <n> jobs:` header while filtering the body to `None.`, which would trip the census truncation guard (`census_entry_block`). |
-| Cumulative battery accounting (`battery_protocol.py`) | `adb shell dumpsys batterystats --charged` | Already uses the structured `--charged` summary text required for whole-device discharge, per-UID power, and wakelock attribution. |
+| Historical per-app CPU and service time (`battery_protocol.py`) | `adb shell dumpsys batterystats <package>` | Scoped to the debug package; its `Total cpu time:`, `Fg Service for:`, and `Total running:` lines are recorded as corroboration, not as whole-device discharge or per-UID power attribution. |
 
 ## Standard acceptance test matrix
 
