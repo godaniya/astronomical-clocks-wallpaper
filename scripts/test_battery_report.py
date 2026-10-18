@@ -194,6 +194,12 @@ def report_lines_text(records: Sequence[Mapping[str, object]]) -> list[str]:
 
 
 @pytest.fixture
+def matched_pairs() -> list[VisibleRecord]:
+    """Return four A/B pairs at the same rate, the ordinary matched-arm case."""
+    return pairs(4, 1000.0, 1000.0, cpu=1.0)
+
+
+@pytest.fixture
 def full_pass_records() -> list[Record]:
     """Return a record set in which every criterion is measured and passes."""
     return [resources_record(), hidden_record(), memory_record(), *pairs(4, 1000.0, 1000.0)]
@@ -389,8 +395,8 @@ def test_hidden_cpu_is_checked_against_its_budget(cpu_pct: float, expected_statu
 
 
 @pytest.mark.parametrize("label", ["B4 vs stock point estimate", "B4 vs stock CI upper bound", "B5 visible CPU"])
-def test_matched_arms_within_the_budget_pass(label: str) -> None:
-    lines = report_lines_text(pairs(4, 1000.0, 1000.0))
+def test_matched_arms_within_the_budget_pass(label: str, matched_pairs: list[VisibleRecord]) -> None:
+    lines = report_lines_text(matched_pairs)
     assert any(line.startswith(label) and "PASS" in line for line in lines)
 
 
@@ -425,8 +431,8 @@ def test_visible_cpu_over_its_budget_fails() -> None:
     assert any(line.startswith("B5 visible CPU") and "FAIL" in line for line in lines)
 
 
-def test_pilot_windows_are_excluded_from_the_final_comparison() -> None:
-    records = [*pairs(4, 1000.0, 1000.0), visible_record("A", 99999.0, pilot=True)]
+def test_pilot_windows_are_excluded_from_the_final_comparison(matched_pairs: list[VisibleRecord]) -> None:
+    records = [*matched_pairs, visible_record("A", 99999.0, pilot=True)]
     lines = report_lines_text(records)
     assert any(line.startswith("B4 vs stock point estimate") and "PASS" in line for line in lines)
 
@@ -526,27 +532,28 @@ def test_a_sequence_that_is_not_an_ab_alternation_is_refused() -> None:
     assert any(line.startswith("B4 pairing") and "NOT MEASURED" in line for line in lines)
 
 
-def test_a_live_window_with_no_cpu_reading_leaves_b5_unmeasured() -> None:
-    records = pairs(4, 1000.0, 1000.0, cpu=1.0)
-    records[0]["cpu_pct"] = None
-    lines = report_lines_text(records)
+def test_a_live_window_with_no_cpu_reading_leaves_b5_unmeasured(matched_pairs: list[VisibleRecord]) -> None:
+    matched_pairs[0]["cpu_pct"] = None
+    lines = report_lines_text(matched_pairs)
     assert any(line.startswith("B5 visible CPU") and "NOT MEASURED" in line for line in lines)
 
 
 @pytest.mark.parametrize("cpu", [float("-inf"), True, -1])
-def test_an_unreadable_visible_cpu_reading_leaves_b5_unmeasured(cpu: float) -> None:
+def test_an_unreadable_visible_cpu_reading_leaves_b5_unmeasured(
+    cpu: float,
+    matched_pairs: list[VisibleRecord],
+) -> None:
     # `-inf` sorts below every budget, a boolean reads as 1.0%, and a negative percentage falls
     # below it too; none of them is a reading, so B5 has no input.
-    records = pairs(4, 1000.0, 1000.0, cpu=1.0)
-    records[0]["cpu_pct"] = cpu
-    lines = report_lines_text(records)
+    matched_pairs[0]["cpu_pct"] = cpu
+    lines = report_lines_text(matched_pairs)
     assert any(line.startswith("B5 visible CPU") and "NOT MEASURED" in line for line in lines)
     assert not any(line.startswith("B5 visible CPU (mean)") for line in lines)
 
 
-def test_a_window_with_no_discharge_rate_leaves_b4_unmeasured() -> None:
+def test_a_window_with_no_discharge_rate_leaves_b4_unmeasured(matched_pairs: list[VisibleRecord]) -> None:
     # The removed field is the partial shape under test, not a record the typed builder writes.
-    records: list[dict[str, object]] = [dict(record) for record in pairs(4, 1000.0, 1000.0, cpu=1.0)]
+    records: list[dict[str, object]] = [dict(record) for record in matched_pairs]
     del records[1]["discharge_rate_ua"]
     lines = report_lines_text(records)
     assert any(line.startswith("B4 vs stock") and "NOT MEASURED" in line for line in lines)
@@ -591,24 +598,27 @@ def test_b5_is_unchanged_when_every_window_is_the_same_length() -> None:
     assert any(line.startswith("B5 visible CPU (mean)") and "PASS — 1.0000%" in line for line in lines)
 
 
-def test_an_unreadable_cpu_reading_is_not_reported_as_no_live_window() -> None:
+def test_an_unreadable_cpu_reading_is_not_reported_as_no_live_window(
+    matched_pairs: list[VisibleRecord],
+) -> None:
     # A second "no live window was recorded" verdict would contradict a file that recorded one.
-    records = pairs(4, 1000.0, 1000.0, cpu=1.0)
-    records[0]["cpu_pct"] = float("-inf")
-    lines = [line for line in report_lines_text(records) if line.startswith("B5 visible CPU")]
+    matched_pairs[0]["cpu_pct"] = float("-inf")
+    lines = [line for line in report_lines_text(matched_pairs) if line.startswith("B5 visible CPU")]
     assert len(lines) == 1
     assert "not finite" in lines[0]
     assert "no live window was recorded" not in lines[0]
 
 
 @pytest.mark.parametrize("rate", [True, float("inf"), float("nan")])
-def test_an_unreadable_discharge_rate_leaves_b4_unmeasured(rate: float) -> None:
+def test_an_unreadable_discharge_rate_leaves_b4_unmeasured(
+    rate: float,
+    matched_pairs: list[VisibleRecord],
+) -> None:
     # `True` is an `int`, and `inf`/`nan` reach the arithmetic; none of them is a discharge
     # measurement, so B4 is unmeasurable.
-    records = pairs(4, 1000.0, 1000.0, cpu=1.0)
-    for record in records:
+    for record in matched_pairs:
         record["discharge_rate_ua"] = rate
-    lines = report_lines_text(records)
+    lines = report_lines_text(matched_pairs)
     assert any(line.startswith("B4 vs stock") and "NOT MEASURED" in line for line in lines)
     assert not any(line.startswith("B4 vs stock point estimate") for line in lines)
 
@@ -761,6 +771,7 @@ def test_a_state_file_carrying_a_negative_rate_is_not_a_comparison() -> None:
 def test_an_undocumented_or_absent_baseline_label_is_refused(
     baseline_label: str | None,
     expected_match: str,
+    matched_pairs: list[VisibleRecord],
 ) -> None:
     failing = pairs(1, 9000.0, 1000.0, cpu=1.0)
     if baseline_label is None:
@@ -768,7 +779,7 @@ def test_an_undocumented_or_absent_baseline_label_is_refused(
     else:
         failing[1]["baseline"] = baseline_label
     with pytest.raises(device_probes.ProbeError, match=expected_match):
-        battery_report.report_lines(pairs(4, 1000.0, 1000.0, cpu=1.0) + failing)
+        battery_report.report_lines(matched_pairs + failing)
 
 
 # --- Finding: a `pilot` flag that is not a boolean is refused ---
@@ -783,19 +794,18 @@ def test_a_non_boolean_pilot_flag_is_refused(value: object) -> None:
         battery_report.report_lines([*records, *hot])
 
 
-def test_a_non_boolean_pilot_flag_hides_no_b4_pair() -> None:
+def test_a_non_boolean_pilot_flag_hides_no_b4_pair(matched_pairs: list[VisibleRecord]) -> None:
     failing = [record_with(record, pilot="false") for record in pairs(1, 9000.0, 1000.0, cpu=1.0)]
     with pytest.raises(device_probes.ProbeError, match="pilot"):
-        battery_report.report_lines([*pairs(4, 1000.0, 1000.0, cpu=1.0), *failing])
+        battery_report.report_lines([*matched_pairs, *failing])
 
 
-def test_an_absent_pilot_flag_is_not_a_pilot() -> None:
+def test_an_absent_pilot_flag_is_not_a_pilot(matched_pairs: list[VisibleRecord]) -> None:
     # The visible phase does not write the flag at all — only the pilot phase does — so a record
     # that does not carry it is an ordinary measurement, and the refusal must not reach it.
-    records = pairs(4, 1000.0, 1000.0, cpu=1.0)
-    for record in records:
+    for record in matched_pairs:
         del record["pilot"]
-    lines = report_lines_text(records)
+    lines = report_lines_text(matched_pairs)
     assert any(line.startswith("B4 vs stock point estimate") and "PASS" in line for line in lines)
     assert any(line.startswith("B5 visible CPU (mean)") and "PASS" in line for line in lines)
 
