@@ -4,6 +4,8 @@
 
 import ast
 import contextlib
+import subprocess
+import sys
 import tempfile
 import unittest
 from collections.abc import Callable
@@ -360,6 +362,25 @@ class PackageInitializerTest(unittest.TestCase):
                 tree = ast.parse(path.read_text(encoding="utf-8"))
                 imports = [node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))]
                 self.assertFalse(imports, f"{path.relative_to(root)} must not import")
+
+
+class TopLevelImportOrderTest(unittest.TestCase):
+    """Each package module imports first in a fresh interpreter, whatever order the graph is entered."""
+
+    def test_each_device_module_imports_first(self) -> None:
+        root = Path(__file__).resolve().parent.parent
+        for module in ("host.device.trace", "host.device.frame", "host.device.probes", "host.battery.cli"):
+            with self.subTest(module=module):
+                # S603: this runs the same interpreter with a fixed script; the module name is one of
+                # the literals above, and no shell is involved.
+                result = subprocess.run(  # noqa: S603
+                    [sys.executable, "-I", "-c", f"import sys; sys.path.insert(0, 'scripts'); import {module}"],
+                    cwd=root,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(0, result.returncode, result.stderr)
 
 
 class RuntimeSourcesTest(unittest.TestCase):

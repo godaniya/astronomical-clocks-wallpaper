@@ -728,11 +728,22 @@ class AdbDevice:
         self,
         pid: int,
         *,
-        seconds: float = trace.TRACE_WINDOW_SECONDS,
-        sample_seconds: float = trace.TRACE_DISPLAY_SAMPLE_SECONDS,
-    ) -> trace.ProducerWindow:
-        """Trace this device's producer pipeline for a bounded window, sampling the display."""
-        return trace.capture_producer_window(self.serial, pid, seconds=seconds, sample_seconds=sample_seconds)
+        seconds: float | None = None,
+        sample_seconds: float | None = None,
+    ) -> "trace.ProducerWindow":
+        """
+        Trace this device's producer pipeline for a bounded window, sampling the display.
+
+        The defaults are resolved at call time and the return annotation is a string: `trace` imports
+        this module for transport, so a trace-first import leaves it partially initialized while this
+        class is defined, and touching its attributes there would fail.
+        """
+        return trace.capture_producer_window(
+            self.serial,
+            pid,
+            seconds=trace.TRACE_WINDOW_SECONDS if seconds is None else seconds,
+            sample_seconds=trace.TRACE_DISPLAY_SAMPLE_SECONDS if sample_seconds is None else sample_seconds,
+        )
 
     def sleep_screen(self) -> bool:
         """Put the screen to sleep."""
