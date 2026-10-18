@@ -129,8 +129,9 @@ static checks connect to a device or establish Android lifecycle, rendering, bat
 These development tools are never imported by the runtime harnesses (the
 [`scripts/check_host_tooling.py`](../scripts/check_host_tooling.py) AST audit verifies that the five
 runtime scripts import only the Python standard library and sibling runtime modules), and the Gradle
-build and [`release.yml`](../.github/workflows/release.yml) do not read `pyproject.toml` or invoke
-Python or `uv`. Every rule the configuration relaxes is recorded below.
+build and [`release.yml`](../.github/workflows/release.yml) do not read `pyproject.toml` or use `uv`:
+their verification scripts run system `python3` with only the standard library. Every rule the
+configuration relaxes is recorded below.
 
 ### Host-tooling decisions
 
@@ -157,7 +158,8 @@ only once both harnesses are present. None of this adds production shared-device
 **Locked `[dependency-groups].dev`, stdlib-only runtime (#146 owner decision).** Runtime harnesses in
 `scripts/` remain strictly standard-library Python (`dependencies = []`, `[tool.uv] package = false`)
 so running a device check requires no third-party runtime package, and the Android build and release
-workflows remain independent of Python and `uv`. Host test and analysis tools are pinned in
+workflows remain independent of `uv` and the locked development environment; their verification
+scripts run system `python3` with only the standard library. Host test and analysis tools are pinned in
 `[dependency-groups].dev` and committed in [`uv.lock`](../uv.lock) so `uv sync --frozen --group dev`
 reproduces one exact environment across local machines and CI. The approved pytest plugin budget is
 `pytest`, `pytest-cov`, `pytest-subtests`, and `pytest-mock`; heavy runtime or property-testing

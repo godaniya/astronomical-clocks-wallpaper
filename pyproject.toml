@@ -1,5 +1,6 @@
 # Host tooling. The Gradle build does not read this file, nothing here reaches the APK, and the
-# Android quality gate and release workflow stay hermetic and independent of Python and uv.
+# Android quality gate and release workflow stay hermetic and independent of uv and the locked
+# development environment; their verification scripts use only the system python3 standard library.
 #
 # Runtime harnesses in scripts/ remain standard-library only (`dependencies = []`,
 # `[tool.uv] package = false`). Host test and static-analysis tools are pinned in
