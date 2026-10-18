@@ -117,7 +117,6 @@ uv run --frozen ruff format --check --output-format=github scripts
 uv run --frozen ty check --output-format=github scripts
 uv run --frozen codespell
 uv run --frozen pytest
-python3 -I -m unittest discover -s scripts -p 'test_*.py' -v
 ```
 
 Ruff runs `select = ["ALL"]` on stable rules at a 120-column line length, and ty promotes every rule to
@@ -150,9 +149,8 @@ directory, not a distribution package: it also holds `setup-android-sdk.sh` and 
 lives in the `scripts/host/` package (`host.contract`, `host.device.{probes,frame,trace}`,
 `host.battery.{stats,report,snapshot,probes,phases,cli}`, and
 `host.qualification.{checks,phases,smoke}`), while the top-level `scripts/*.py` entry points remain
-thin CLI wrappers. Both `python3 scripts/<wrapper>.py` and
-`python3 -I -m unittest discover -s scripts -p 'test_*.py'` place `scripts/` on `sys.path` natively;
-pytest does the same through `pythonpath = ["scripts"]` in `[tool.pytest.ini_options]`, so `host.*` is
+thin CLI wrappers. `python3 scripts/<wrapper>.py` places `scripts/` on `sys.path` natively; pytest
+does the same through `pythonpath = ["scripts"]` in `[tool.pytest.ini_options]`, so `host.*` is
 imported under one canonical module identity (`host.<subpackage>.<module>`) without `sys.path`
 mutation or an editable install, and `unittest.mock.patch` targets never split across duplicate
 module objects. The `INP001` exception below applies only to the top-level wrapper and test files in
@@ -181,8 +179,8 @@ installs the module-scoped autouse `no_real_sleep` fixture wrapping `install_no_
 every `scripts/test_*.py` module), `almost_equal(...)` with `assertAlmostEqual`'s places semantics for
 numeric parity, `pytest.raises(..., match=...)`, `capsys` / `mocker` fixtures, and
 `@pytest.mark.parametrize` with all `flake8-pytest-style` (`PT`) rules enforced. While the four remaining
-`unittest.TestCase` modules await H4b/H4c, `uv run pytest` and `python3 -I -m unittest discover` both run
-the suite and `PT009`, `PT019`, and `PT027` stay relaxed on those files.
+`unittest.TestCase` modules await H4b/H4c, `uv run pytest` collects both native pytest and legacy
+unittest modules, and `PT009`, `PT019`, and `PT027` stay relaxed on those files.
 
 **Parity and import checks in `scripts/check_host_tooling.py`.** The checker is development tooling,
 not one of the runtime harnesses. Its pre-commit scanner strips comments with a quote-aware
@@ -285,7 +283,7 @@ colors.
 | Ruff formatter-conflict audit (2026-10-07) | The pinned toolchain was audited against Ruff's documented [formatter-conflict list](https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules): every other listed rule (`W191`, `E111`, `E114`, `E117`, `D206`, `Q000`–`Q004`, `COM819`) was enabled in a temporary config and cleared both `ruff format --check` (no conflict warnings) and `ruff check` (0 findings), on the formatter-stable tree and on a formatting torture fixture (tabs, 2-space indentation, over-indentation, comment indentation, tab-indented docstring paragraph, trailing commas, mixed quotes, escaped quotes). ISC002 is not relaxed: its documented condition (`ISC001` disabled and `allow-multiline = false`) does not apply because `ISC001` stays enabled. The four rules above are the only Ruff ignores left; re-run the audit whenever the Ruff pin changes. | Ruff config, `scripts/` |
 | Ruff `T201` | The harnesses and the device layer print output or diagnostic errors to stdout/stderr; there is no logger to convert to, and adding one would be a dependency. | `scripts/host/**/*.py` |
 | Ruff `INP001` | `scripts/` deliberately has no `__init__.py` at its top level: the CLI wrappers are run as scripts, while `scripts/host/` is a proper package where `INP001` remains enabled. | Top-level wrapper, fixture, and test files in `scripts/*.py` |
-| Ruff `D102`, `D103` | Test methods and helpers in the suite are described by their names and their docstrings, not by a summary line restating the name. | `scripts/test_battery_protocol.py`, `scripts/test_battery_report.py`, `scripts/test_device_smoke.py`, `scripts/test_device_qualification.py`, `scripts/test_check_host_tooling.py` |
+| Ruff `D102`, `D103` | Test methods and helpers in the suite are described by their names and their docstrings, not by a summary line restating the name. | `scripts/test_battery_protocol.py`, `scripts/test_device_smoke.py`, `scripts/test_device_qualification.py`, `scripts/test_check_host_tooling.py` (`D102`, `D103`); `scripts/test_battery_report.py` (`D103` only) |
 | Ruff `S101` | Every host test module uses pytest now or after H4b/H4c, and bare `assert` statements are rewritten by pytest's assertion introspection (`PT009` forbids `unittest.TestCase` assertion helpers). The rule is relaxed repository-wide for test modules rather than per migrated file. | Every `scripts/test_*.py` module |
 | Ruff `PT009`, `PT019`, `PT027` | These flake8-pytest-style rules remain relaxed on the existing `unittest.TestCase` files until they are migrated under #148: `PT009` and `PT027` flag `assertEqual`/`assertRaises`, and `PT019` reads positionally injected `unittest.mock.patch` parameters as pytest fixtures. | `scripts/test_battery_protocol.py`, `scripts/test_device_smoke.py`, `scripts/test_device_qualification.py`, `scripts/test_check_host_tooling.py` |
 | Ruff `S603` | `run_adb` executes the developer's own `adb` from `PATH` with an argv built from literals and parsed device output, `check=True`, and no shell, so there is no untrusted input to validate. `S607` is not raised because the executable is not written at the call site. The fresh-interpreter import-order test runs the same Python executable with a fixed script and a literal module name. | `run_adb` in `scripts/host/device/probes.py` and the import-order test, annotated in source |

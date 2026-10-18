@@ -111,6 +111,6 @@ error-on-warning = true
 [tool.ty.environment]
 # Matches Ruff's target-version and the CI runner's python3. `extra-paths` matches Ruff's `src` so
 # `ty check scripts` resolves `host.*` imports the same way `python3 scripts/<wrapper>.py` and
-# `python3 -m unittest discover -s scripts` do.
+# `uv run pytest` (through `pythonpath = ["scripts"]`) do.
 python-version = "3.12"
 extra-paths = ["scripts"]
