@@ -122,14 +122,11 @@ def visible_record(  # noqa: PLR0913 - the arm, its readings, and the window sha
 
 def pairs(count: int, live_rate: float, base_rate: float, *, cpu: float = 1.0) -> list[VisibleRecord]:
     """Build `count` whole A/B pairs in the order an alternation records them."""
-    return [
-        record
-        for _ in range(count)
-        for record in (
-            visible_record("A", live_rate, cpu=cpu),
-            visible_record("B", base_rate, baseline="stock"),
-        )
-    ]
+    records: list[VisibleRecord] = []
+    for _ in range(count):
+        records.append(visible_record("A", live_rate, cpu=cpu))
+        records.append(visible_record("B", base_rate, baseline="stock"))
+    return records
 
 
 def record_with(base: Mapping[str, object], **fields: object) -> dict[str, object]:
