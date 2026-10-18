@@ -318,12 +318,24 @@ class RuntimeImportAuditTest(unittest.TestCase):
         self.assertEqual(len(problems), 1)
         self.assertIn("numpy", problems[0])
 
-    def test_sibling_runtime_modules_pass(self) -> None:
+    def test_bare_sibling_import_is_reported(self) -> None:
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         paths = [
             self._write(root, "alpha.py", "import beta\n"),
             self._write(root, "beta.py", "from alpha import value\n"),
         ]
+        problems = subject.check_runtime_imports(paths)
+        self.assertEqual(len(problems), 2)
+        self.assertTrue(all("Non-stdlib" in problem for problem in problems))
+
+    def test_relative_imports_pass(self) -> None:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        paths = [self._write(root, "alpha.py", "from . import beta\nfrom .beta import value\n")]
+        self.assertEqual(subject.check_runtime_imports(paths), [])
+
+    def test_absolute_host_import_passes(self) -> None:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        paths = [self._write(root, "alpha.py", "from host import contract\nfrom host.device import probes\n")]
         self.assertEqual(subject.check_runtime_imports(paths), [])
 
     def test_parse_failure_is_reported(self) -> None:
@@ -332,6 +344,22 @@ class RuntimeImportAuditTest(unittest.TestCase):
         problems = subject.check_runtime_imports(paths)
         self.assertEqual(len(problems), 1)
         self.assertIn("cannot parse runtime harness", problems[0])
+
+
+class RuntimeSourcesTest(unittest.TestCase):
+    """The audit covers the four wrappers plus every module in the host package."""
+
+    def test_includes_wrappers_and_host_modules(self) -> None:
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        scripts = directory / "scripts"
+        (scripts / "host" / "battery").mkdir(parents=True)
+        (scripts / "host" / "__init__.py").write_text("", encoding="utf-8")
+        (scripts / "host" / "battery" / "probes.py").write_text("from . import stats\n", encoding="utf-8")
+        self.enterContext(contextlib.chdir(directory))
+        self.assertEqual(
+            subject.runtime_sources(),
+            [*subject.RUNTIME_SCRIPTS, Path("scripts/host/__init__.py"), Path("scripts/host/battery/probes.py")],
+        )
 
 
 class MainTest(unittest.TestCase):
@@ -354,14 +382,15 @@ class MainTest(unittest.TestCase):
         (directory / "pyproject.toml").write_text(PINNED_PYPROJECT, encoding="utf-8")
         (directory / ".pre-commit-config.yaml").write_text(PINNED_PRE_COMMIT, encoding="utf-8")
         scripts = directory / "scripts"
-        scripts.mkdir()
+        (scripts / "host" / "battery").mkdir(parents=True)
         for name in (
             "battery_protocol.py",
             "battery_report.py",
-            "device_layer.py",
             "device_qualification.py",
             "device_smoke.py",
         ):
             (scripts / name).write_text("import json\n", encoding="utf-8")
+        (scripts / "host" / "__init__.py").write_text("", encoding="utf-8")
+        (scripts / "host" / "battery" / "probes.py").write_text("from host import contract\n", encoding="utf-8")
         self.enterContext(contextlib.chdir(directory))
         self.assertIsNone(subject.main())
