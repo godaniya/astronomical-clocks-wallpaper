@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Mapping, MutableMapping, Sequence
 
 RUNTIME_SCRIPTS: Final = (
     Path("scripts/battery_protocol.py"),
@@ -50,24 +50,16 @@ HOOK_REPOSITORIES: Final = {
 _DEV_PIN: Final = re.compile(r"^(?P<name>[A-Za-z0-9_.-]+)==(?P<version>[A-Za-z0-9_.+-]+)$")
 _REPO_ITEM: Final = re.compile(r"^(?P<indent> *)- repo:(?P<value>.*)$")
 _MAPPING_KEY: Final = re.compile(r"^(?P<indent> *)(?P<key>[A-Za-z0-9_-]+):(?P<value>.*)$")
+# A single- or double-quoted YAML scalar on one line. Single-quoted scalars escape a quote by
+# doubling it; double-quoted scalars escape with a backslash.
+_QUOTED_SCALAR: Final = re.compile(r"\"(?:[^\"\\]|\\.)*\"|'(?:[^']|'')*'")
+# A comment marker: a ``#`` at the start of the line or after whitespace.
+_COMMENT: Final = re.compile(r"(?<!\S)#")
 
 
-def _skip_quoted(line: str, start: int) -> int:
-    """Return the index just past the quoted scalar that begins at ``start``."""
-    quote = line[start]
-    index = start + 1
-    while index < len(line):
-        character = line[index]
-        if quote == '"' and character == "\\":
-            index += 2
-            continue
-        if character == quote:
-            if quote == "'" and index + 1 < len(line) and line[index + 1] == "'":
-                index += 2
-                continue
-            return index + 1
-        index += 1
-    return index
+def _mask_quoted(match: re.Match[str]) -> str:
+    """Replace one quoted scalar with non-whitespace filler of the same length."""
+    return "x" * len(match.group(0))
 
 
 def _strip_comment(line: str) -> str:
@@ -75,19 +67,13 @@ def _strip_comment(line: str) -> str:
     Remove a YAML comment from one line, respecting quoted scalars.
 
     A ``#`` starts a comment only at column 0 or after whitespace. A ``#`` inside a single- or
-    double-quoted scalar is preserved. This is a scanner for the shapes this repository writes, not
-    a YAML parser.
+    double-quoted scalar is preserved. Masking each quoted scalar before the search keeps a ``#``
+    that follows one from becoming a comment, because the filler is not whitespace. This is a
+    scanner for the shapes this repository writes, not a YAML parser.
     """
-    index = 0
-    while index < len(line):
-        character = line[index]
-        if character in {'"', "'"}:
-            index = _skip_quoted(line, index)
-            continue
-        if character == "#" and (index == 0 or line[index - 1] in " \t"):
-            return line[:index].rstrip()
-        index += 1
-    return line.rstrip()
+    masked = _QUOTED_SCALAR.sub(_mask_quoted, line)
+    comment = _COMMENT.search(masked)
+    return line[: comment.start()].rstrip() if comment else line.rstrip()
 
 
 def _unquote(value: str) -> str:
@@ -217,6 +203,26 @@ def _revision_entries(text: str) -> list[tuple[str, str | None]]:
     return state.entries
 
 
+def _record_revision(
+    revisions: MutableMapping[str, str],
+    owners: MutableMapping[str, str],
+    repository: str,
+    revision: str | None,
+) -> None:
+    """Record one repository's revision, refusing duplicates and a missing revision."""
+    if repository in revisions:
+        message = f".pre-commit-config.yaml lists repository {repository!r} more than once"
+        raise ValueError(message)
+    if revision is None:
+        message = f".pre-commit-config.yaml repository {repository!r} has no rev"
+        raise ValueError(message)
+    if revision in owners:
+        message = f".pre-commit-config.yaml uses rev {revision!r} for both {owners[revision]!r} and {repository!r}"
+        raise ValueError(message)
+    revisions[repository] = revision
+    owners[revision] = repository
+
+
 def parse_pre_commit_revisions(text: str) -> dict[str, str]:
     """
     Parse repository revisions from the repository's ``.pre-commit-config.yaml``.
@@ -229,17 +235,7 @@ def parse_pre_commit_revisions(text: str) -> dict[str, str]:
     revisions: dict[str, str] = {}
     owners: dict[str, str] = {}
     for repository, revision in _revision_entries(text):
-        if repository in revisions:
-            message = f".pre-commit-config.yaml lists repository {repository!r} more than once"
-            raise ValueError(message)
-        if revision is None:
-            message = f".pre-commit-config.yaml repository {repository!r} has no rev"
-            raise ValueError(message)
-        if revision in owners:
-            message = f".pre-commit-config.yaml uses rev {revision!r} for both {owners[revision]!r} and {repository!r}"
-            raise ValueError(message)
-        revisions[repository] = revision
-        owners[revision] = repository
+        _record_revision(revisions, owners, repository, revision)
     if not revisions:
         message = ".pre-commit-config.yaml declares no repository revisions"
         raise ValueError(message)
@@ -258,37 +254,46 @@ def _dev_pins(pyproject_text: str) -> tuple[dict[str, str], list[str]]:
     dev = groups.get("dev")
     if not isinstance(dev, list):
         return {}, ["pyproject.toml has no [dependency-groups].dev list"]
-    pins: dict[str, str] = {}
-    problems: list[str] = []
-    for requirement in dev:
-        if not isinstance(requirement, str):
-            problems.append(f"dev dependency {requirement!r} is not a string")
-            continue
-        match = _DEV_PIN.match(requirement)
-        if match is None:
-            problems.append(f"dev dependency {requirement!r} is not an exact name==version pin")
-            continue
-        pins[match.group("name")] = match.group("version")
+    parsed = [(requirement, _DEV_PIN.match(requirement)) for requirement in dev if isinstance(requirement, str)]
+    problems = [
+        f"dev dependency {requirement!r} is not a string" for requirement in dev if not isinstance(requirement, str)
+    ]
+    problems.extend(
+        f"dev dependency {requirement!r} is not an exact name==version pin"
+        for requirement, match in parsed
+        if match is None
+    )
+    pins: dict[str, str] = {match.group("name"): match.group("version") for _, match in parsed if match is not None}
     return pins, problems
 
 
-def _compare_pins(pins: dict[str, str], revisions: dict[str, str]) -> list[str]:
+def _pin_problem(
+    tool: str,
+    repository: str,
+    pins: Mapping[str, str],
+    revisions: Mapping[str, str],
+) -> str | None:
+    """Return the mismatch between one tool's pin and its repository revision, or ``None``."""
+    if tool not in pins:
+        return f"pyproject.toml has no {tool} pin in [dependency-groups].dev"
+    if repository not in revisions:
+        return f".pre-commit-config.yaml has no {repository!r} repository"
+    expected = f"v{pins[tool]}"
+    if revisions[repository] != expected:
+        return (
+            f".pre-commit-config.yaml revision {revisions[repository]!r} for "
+            f"{repository!r} does not match the {tool} pin {expected!r}"
+        )
+    return None
+
+
+def _compare_pins(pins: Mapping[str, str], revisions: Mapping[str, str]) -> list[str]:
     """Compare each known tool pin with the revision of that tool's own repository."""
-    problems: list[str] = []
-    for tool, repository in HOOK_REPOSITORIES.items():
-        if tool not in pins:
-            problems.append(f"pyproject.toml has no {tool} pin in [dependency-groups].dev")
-            continue
-        if repository not in revisions:
-            problems.append(f".pre-commit-config.yaml has no {repository!r} repository")
-            continue
-        expected = f"v{pins[tool]}"
-        if revisions[repository] != expected:
-            problems.append(
-                f".pre-commit-config.yaml revision {revisions[repository]!r} for "
-                f"{repository!r} does not match the {tool} pin {expected!r}"
-            )
-    return problems
+    return [
+        problem
+        for tool, repository in HOOK_REPOSITORIES.items()
+        if (problem := _pin_problem(tool, repository, pins, revisions)) is not None
+    ]
 
 
 def check_pin_parity(pyproject_text: str, pre_commit_text: str) -> list[str]:
@@ -303,6 +308,15 @@ def check_pin_parity(pyproject_text: str, pre_commit_text: str) -> list[str]:
     return problems
 
 
+def _top_level_imports(tree: ast.AST) -> Iterator[str]:
+    """Yield the top-level module name of every import in ``tree``."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            yield from (alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            yield node.module.split(".", 1)[0]
+
+
 def check_runtime_imports(paths: Sequence[Path]) -> list[str]:
     """Return every non-stdlib import in the runtime harnesses under ``paths``."""
     problems: list[str] = []
@@ -313,15 +327,11 @@ def check_runtime_imports(paths: Sequence[Path]) -> list[str]:
         except (OSError, UnicodeDecodeError, SyntaxError) as error:
             problems.append(f"cannot parse runtime harness {path}: {error}")
             continue
-        for node in ast.walk(tree):
-            names: list[str] = []
-            if isinstance(node, ast.Import):
-                names = [alias.name.split(".", 1)[0] for alias in node.names]
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                names = [node.module.split(".", 1)[0]]
-            problems.extend(
-                f"Non-stdlib import {top!r} in runtime harness {path}" for top in names if top not in allowed
-            )
+        problems.extend(
+            f"Non-stdlib import {top!r} in runtime harness {path}"
+            for top in _top_level_imports(tree)
+            if top not in allowed
+        )
     return problems
 
 

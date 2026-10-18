@@ -10,7 +10,7 @@ import struct
 import subprocess
 import sys
 import unittest
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from types import ModuleType
 from typing import Final
 from unittest.mock import MagicMock, Mock, patch
@@ -1690,7 +1690,7 @@ class HiddenFramesPhaseTest(unittest.TestCase):
             qualification.phase_hidden_frames(device, results, failures)
         return results, failures
 
-    def run_phase(self, windows: list[object]) -> tuple[list[tuple[str, str]], list[str]]:
+    def run_phase(self, windows: Sequence[object]) -> tuple[list[tuple[str, str]], list[str]]:
         device = self.stub_device()
         device.capture_producer_window.side_effect = windows
         return self.run_with(device)

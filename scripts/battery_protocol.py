@@ -452,7 +452,7 @@ class DeviceStateSnapshot:
             self.stay_on,
         )
 
-    def _apply(self, description: str, command: list[str], namespace: str, key: str, expected: int) -> list[str]:
+    def _apply(self, description: str, command: Sequence[str], namespace: str, key: str, expected: int) -> list[str]:
         """Run one restore step and verify it, converting a failure into a reported problem."""
         try:
             self.device.run_adb(command)
@@ -1359,9 +1359,12 @@ def median_luma(device: device_layer.AdbDevice) -> float:
     except device_layer.ScreencapError as error:
         detail = f"the captured screen could not be decoded into a frame: {device_layer.error_detail(error)}"
         raise device_layer.ProbeError(detail) from error
+    # The three channel slices can differ in length at the end of the buffer; the shortest one
+    # covers exactly the complete triples, so the outer zip truncates to it.
+    stride = device_layer.PIXEL_STRIDE * LUMA_STRIDE
     luma = sorted(
-        sum(weight * pixel for weight, pixel in zip(LUMA_WEIGHTS, pixels[index : index + 3], strict=True))
-        for index in range(0, len(pixels) - 2, device_layer.PIXEL_STRIDE * LUMA_STRIDE)
+        sum(weight * channel for weight, channel in zip(LUMA_WEIGHTS, rgb, strict=True))
+        for rgb in zip(pixels[0::stride], pixels[1::stride], pixels[2::stride], strict=False)
     )
     if not luma:
         detail = "the captured frame carried no pixels to measure"

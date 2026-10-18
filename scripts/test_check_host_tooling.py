@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from collections.abc import Callable
 from pathlib import Path
+from typing import Final
 
 import check_host_tooling as subject
 from device_test_fixtures import install_no_real_sleep_guard
@@ -25,7 +26,7 @@ def tearDownModule() -> None:
         _module_cleanups.pop()()
 
 
-PINNED_PYPROJECT = """\
+PINNED_PYPROJECT: Final = """\
 [project]
 name = "fixture"
 version = "0.0.0"
@@ -38,7 +39,7 @@ dev = [
 ]
 """
 
-PINNED_PRE_COMMIT = """\
+PINNED_PRE_COMMIT: Final = """\
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.10
@@ -55,7 +56,7 @@ repos:
       - id: codespell
 """
 
-SWAPPED_PRE_COMMIT = """\
+SWAPPED_PRE_COMMIT: Final = """\
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.0.84
@@ -71,7 +72,7 @@ repos:
       - id: codespell
 """
 
-PREFIX_PRE_COMMIT = """\
+PREFIX_PRE_COMMIT: Final = """\
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.100
@@ -87,7 +88,7 @@ repos:
       - id: codespell
 """
 
-COMMENT_ONLY_PRE_COMMIT = """\
+COMMENT_ONLY_PRE_COMMIT: Final = """\
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     # rev: v0.16.10
@@ -104,7 +105,7 @@ repos:
       - id: codespell
 """
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 
 
 class PreCommitParserTest(unittest.TestCase):
@@ -151,6 +152,17 @@ repos:
 repos:
   - repo: "https://example.invalid/#fragment"
     rev: "v1.0.0"
+"""
+        self.assertEqual(
+            subject.parse_pre_commit_revisions(config),
+            {"https://example.invalid/#fragment": "v1.0.0"},
+        )
+
+    def test_single_quoted_values_preserve_their_hash(self) -> None:
+        config = """\
+repos:
+  - repo: 'https://example.invalid/#fragment'
+    rev: 'v1.0.0'
 """
         self.assertEqual(
             subject.parse_pre_commit_revisions(config),
