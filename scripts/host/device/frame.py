@@ -12,10 +12,11 @@ from typing import Final, Self
 from uuid import uuid4
 
 from host import contract
-
-from . import probes
+from host.device import probes
 
 SCREENCAP_HEADER_BYTES: Final = 16
+
+SIZE_RESTORE_PREFIX: Final = ("shell", "wm", "size")
 
 
 class ScreencapError(RuntimeError):
@@ -170,8 +171,8 @@ def collect_hand_points(width: int, height: int, pixels: bytes, *, is_dark: bool
     cx, cy = layout.cx, layout.cy
     max_radius = layout.radius
     min_radius = layout.radius * contract.HAND_SCAN_INNER_FRACTION / contract.HAND_SCAN_OUTER_FRACTION
-    min_r_sq = min_radius * min_radius
-    max_r_sq = max_radius * max_radius
+    min_r_sq = min_radius**2
+    max_r_sq = max_radius**2
 
     is_hand_pixel = is_dark_hand_pixel if is_dark else is_light_hand_pixel
 
@@ -242,9 +243,7 @@ def choose_recreate_size(physical: str | None, override: str | None) -> str:
 
 def size_restore_command(override: str | None) -> list[str]:
     """Return the `wm size` invocation that puts the display back to the size the run found."""
-    if override:
-        return ["shell", "wm", "size", override]
-    return ["shell", "wm", "size", "reset"]
+    return [*SIZE_RESTORE_PREFIX, override or "reset"]
 
 
 def decode_frame(raw: bytes) -> tuple[int, int, bytes]:

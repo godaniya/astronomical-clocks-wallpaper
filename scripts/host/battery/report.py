@@ -10,9 +10,8 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Final
 
+from host.battery import stats
 from host.device import probes
-
-from . import stats
 
 # A set that mixes these is not comparable. The threshold and noise floor are per device, so the
 # device is part of the identity. `revision` is deliberately excluded: a documentation-only revision
@@ -264,14 +263,9 @@ def report_lines(
         verdicts.extend(stats.Verdict("device restore detail", stats.VerdictStatus.INFO, f"  - {p}") for p in problems)
 
     # A short window is not the measurement its criterion is defined on: fail and drop it first.
-    measured: list[Mapping[str, object]] = []
-    short: list[str] = []
-    for record in records:
-        reason = short_window_reason(record)
-        if reason is None:
-            measured.append(record)
-        else:
-            short.append(str(reason))
+    reasons = [(record, short_window_reason(record)) for record in records]
+    measured: list[Mapping[str, object]] = [record for record, reason in reasons if reason is None]
+    short: list[str] = [str(reason) for _, reason in reasons if reason is not None]
     if short:
         verdicts.append(
             stats.Verdict(
@@ -289,9 +283,13 @@ def report_lines(
     # passing under the zero budget. Wake locks are bounded only by all-types records.
     wake_locks = stats.wake_lock_values(measured)
     verdicts.append(check_budget("B2 wake locks", max(wake_locks) if wake_locks else None, 0.0, ""))
-    for label, key in (("B2 alarms", "alarms"), ("B2 jobs", "jobs")):
-        values = stats.numeric_values(measured, "resources", key, non_negative=True)
-        verdicts.append(check_budget(label, max(values) if values else None, 0.0, ""))
+    budget_values = {
+        label: stats.numeric_values(measured, "resources", key, non_negative=True)
+        for label, key in (("B2 alarms", "alarms"), ("B2 jobs", "jobs"))
+    }
+    verdicts.extend(
+        check_budget(label, max(values) if values else None, 0.0, "") for label, values in budget_values.items()
+    )
 
     hidden = stats.numeric_values(measured, "hidden", "cpu_pct", non_negative=True)
     verdicts.append(check_budget("B3 hidden CPU", max(hidden) if hidden else None, stats.MAX_HIDDEN_CPU_PCT, "%"))

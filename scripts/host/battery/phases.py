@@ -7,36 +7,25 @@ from collections.abc import Callable, Sequence
 from typing import Final, TypedDict
 
 from host import contract
+from host.battery import probes, stats
+from host.battery import snapshot as battery_snapshot
 from host.device import probes as device_probes
 
-from . import probes, stats
-from . import snapshot as battery_snapshot
-
-# The launcher takes a moment to come forward after KEYCODE_HOME, so the readback that the home
-# screen is in front is bounded exactly the way the service-log confirmations in `host.device.probes` are:
-# five reads half a second apart, which covers the transition without holding the phase open.
+# The launcher takes a moment to come forward after KEYCODE_HOME, so the readback is bounded like the
+# service-log confirmations: five reads half a second apart.
 HOME_CONFIRM_ATTEMPTS: Final = 5
 
 HOME_CONFIRM_INTERVAL_SECONDS: Final = 0.5
 
 SAMPLE_INTERVAL_SECONDS: Final = 30.0
 
-# The longest a measurement window will hold the shared device, and the longest a pilot invocation —
-# which is a run of windows rather than one — will. Both are read off `docs/battery-budget.md`, which
-# requires that "no single invocation, and above all no single window, blocks for hours": the longest
-# criterion its matrix documents is thirty minutes, so a window is bounded at forty-five, and the
-# recorded six-pair pilot took ninety minutes, so an invocation is bounded at two hours. A bound is
-# needed at all because a finite duration passes every test arithmetic can pose — `1e15` minutes is
-# finite, positive, and one the sampling loop makes progress through — so neither finiteness nor
-# progress is what makes a phase bounded.
+# `docs/battery-budget.md` requires that "no single invocation, and above all no single window, blocks
+# for hours": the longest documented window is thirty minutes and the six-pair pilot took ninety.
 MAXIMUM_WINDOW_MINUTES: Final = 45.0
 
 MAXIMUM_PILOT_MINUTES: Final = 120.0
 
-# The count the pilot will accept. It cannot bound the invocation on its own — a count at the floor
-# with a window at the ceiling is far past the time bound — so `phase_pilot` checks the product as
-# well; this is what bounds the rates and CPU lists the run accumulates, and what refuses an absurd
-# count at the command line rather than after the device has been reached.
+# A count alone does not bound the invocation; `phase_pilot` checks the product before the first window.
 MAXIMUM_PILOT_RUNS: Final = int(MAXIMUM_PILOT_MINUTES // stats.MINIMUM_WINDOW_MINUTES)
 
 
@@ -44,15 +33,9 @@ def verify_arm(device: device_probes.AdbDevice, arm: stats.Arm, baseline: stats.
     """
     Refuse a window whose device does not match the arm it is about to be recorded against.
 
-    The component is the fact that decides the arm, and it is decidable: the home slot names the live
-    service when the app is bound and the platform's static engine when it is not. Arm B therefore
-    requires the platform engine by name rather than accepting anything that is not this app's
-    service — a third-party live wallpaper satisfies "not this app" and would be recorded as the
-    stock or black baseline. Which *static* image a baseline carries is not decidable this way, and
-    the screen's own luminance does not decide it either — this device's OEM stock wallpaper is a
-    dark starfield, so a brightness threshold would refuse valid stock windows while still not
-    separating the two baselines. The luminance is recorded with every window as an observation and
-    is not used to admit one.
+    Arm B requires the platform engine by name: a third-party live wallpaper satisfies "not this app"
+    and would be recorded as the baseline. Which static image is bound is not decidable here, and the
+    recorded luminance does not gate the window.
     """
     component = device_probes.read_wallpaper_component(device.serial)
     if arm is stats.Arm.LIVE:
@@ -124,12 +107,10 @@ def sample_window_states(
     home_required: bool,
 ) -> tuple[list[bool | None], list[bool], list[bool | None], list[bool | None]]:
     """
-    Sample the display, power source, and — for a visible window — surface and keyguard through it.
+    Sample display, power source, and — for a visible window — surface and keyguard throughout.
 
-    Either can change mid-window, and another app coming forward leaves the bound component unchanged,
-    so a start-only check would record a screen that is not the home screen. A keyguard that appears
-    mid-window covers the wallpaper the same way; an unreadable sample refuses the window. A hidden
-    window passes `home_required=False` and gets empty lists back.
+    A start-only check would miss another app or a lock surface that arrived mid-window; an unreadable
+    sample refuses the window. A hidden window passes `home_required=False` and gets empty lists.
     """
     states: list[bool | None] = []
     on_battery: list[bool] = []
@@ -150,11 +131,7 @@ def sample_window_states(
 
 
 def power_source_problem(on_battery: Sequence[bool]) -> str | None:
-    """
-    Return why a window is not a discharge measurement, or None when every sample was on battery.
-
-    A window that saw a charger is not a discharge measurement.
-    """
+    """Return why a window is not a discharge measurement, or None when every sample was on battery."""
     if not on_battery:
         return "the window took no power-source sample, so it is not known to have run on battery"
     if not all(on_battery):
@@ -170,9 +147,8 @@ def wait_home_in_front(
     """
     Read back that the home screen is in front, bounded the way the service-log confirmations are.
 
-    `show_home` reports nothing about what it did, and every other guard passes with another app in
-    front, so the launcher gets a bounded number of re-reads. None means no read succeeded, which the
-    caller treats as a refusal.
+    `show_home` reports nothing and every other guard passes with another app in front. None means no
+    read succeeded, which the caller treats as a refusal.
     """
     saw_not_in_front = False
     sleep_fn = sleep if sleep is not None else time.sleep
@@ -180,8 +156,7 @@ def wait_home_in_front(
         reading = device.read_home_in_front()
         if reading is True:
             return True
-        # `False` means another package is in front and no later read retracts it; `None` said
-        # nothing. Keeping them apart stops unreadable dumps reading as "another app is in front".
+        # `False` is a positive "another app is in front"; `None` said nothing.
         saw_not_in_front = saw_not_in_front or reading is False
         if attempt + 1 < HOME_CONFIRM_ATTEMPTS:
             sleep_fn(HOME_CONFIRM_INTERVAL_SECONDS)
@@ -196,17 +171,14 @@ def ensure_visible_home(
     """
     Put the device on the home screen with the display on, or refuse the window.
 
-    `wake_screen()` only lights the display, so a locked device or another app in front would be what
-    the window measures while the bound component still matches. The keyguard and foreground reads
-    are independent and three-valued, so an unreadable device is refused. The keyguard is read before
-    `dismiss_keyguard()` mutates the shared device, or the phase could unlock it and then pass its own
-    guard.
+    `wake_screen()` only lights the display, so the keyguard and foreground reads decide what is
+    measured. The keyguard is read before `dismiss_keyguard()` mutates the device, or the phase could
+    unlock it and then pass its own guard.
     """
     if not device.wake_screen():
         detail = "the display could not be woken for a visible window"
         raise device_probes.ProbeError(detail)
-    # Read before mutating: `wm dismiss-keyguard` is never restored, so a later read could not tell
-    # "already unlocked" from "this call unlocked it".
+    # Read before mutating: `wm dismiss-keyguard` is never restored.
     locked = device.read_keyguard_locked()
     if locked is None:
         detail = (
@@ -234,8 +206,7 @@ def ensure_visible_home(
     if keyguard is None:
         detail = "the keyguard state could not be read, so it cannot be shown that the home screen is displayed"
         raise device_probes.ProbeError(detail)
-    # `show_home()` sent the event; this says it landed. KEYCODE_HOME can be dropped with every other
-    # guard still passing, so the readback is three-valued like the keyguard's.
+    # `show_home()` can be dropped with every other guard passing, so the readback is three-valued.
     in_front = wait_home_in_front(device, sleep=sleep)
     if in_front is False:
         detail = (
@@ -261,12 +232,9 @@ def run_window(
     if not screen_on:
         device.run_adb(["shell", "input", "keyevent", "KEYCODE_SLEEP"])
         time.sleep(2.0)
-        # The sleep key event is a request, not the state: `device_probes.sleep_screen` reports that the
-        # event was *delivered*, and a sleep that failed or merely lagged leaves the display on. The
-        # first display sample is a whole sampling interval away from here, so a lag would be invisible
-        # in the readings — every later one would be `False` while the start of the window was lit —
-        # and B3 would be accepted for a window that was not screen-off throughout. This is the same
-        # readback `wake_screen` makes for the opposite transition.
+        # The sleep event is a request, not the state: a lag would leave the display lit for the first
+        # sampling interval while every later read was off, so B3 needs the same readback `wake_screen`
+        # makes for the opposite transition.
         if device.read_screen_on() is not False:
             detail = (
                 "the display did not read back as off after the sleep key event, so the window would "
@@ -275,8 +243,7 @@ def run_window(
             raise device_probes.ProbeError(detail)
     start = probes.take_battery_sample(device, pid, clk_tck)
     seconds = minutes * 60.0
-    # A window whose display is on is a window on the home screen, so the surface in front is sampled
-    # with the rest of the state; see `sample_window_states`.
+    # A lit window is a home-screen window, so the surface in front is sampled with the rest.
     states, on_battery, homes, locks = sample_window_states(device, seconds, home_required=screen_on)
     end = probes.take_battery_sample(device, pid, clk_tck)
     window = battery_snapshot.Window(
@@ -297,9 +264,7 @@ def phase_resources(device: device_probes.AdbDevice) -> battery_snapshot.Record:
     wake_locks = probes.count_held_wakelocks(device, uid)
     alarms = probes.count_alarms(device)
     jobs = probes.count_jobs(device)
-    # The count is only evidence for the all-type budget if the record says so: a legacy partial-only
-    # census wrote the same `wake_locks` key without this stamp, and `report` will not pass it under
-    # the current budget. See `battery_report.WAKE_LOCK_COVERAGE`.
+    # The all-type budget needs this stamp: a legacy partial-only census wrote `wake_locks` without it.
     print(f"$ adb -s {device.serial} shell dumpsys power   (every wake-lock type, uid={uid}) -> {wake_locks}")
     print(f"$ adb -s {device.serial} shell dumpsys alarm   ({contract.PACKAGE_NAME}) -> {alarms}")
     print(f"$ adb -s {device.serial} shell dumpsys jobscheduler   ({contract.PACKAGE_NAME}) -> {jobs}")
@@ -329,8 +294,8 @@ def require_hidden_measurement(
     """
     Refuse a hidden window that is not a B3 measurement, returning the CPU it measured.
 
-    The display, charger, and CPU readbacks are all required. The caller runs this inside the `try`
-    that persists restore problems, because a refusal is an abort with the device possibly changed.
+    The caller runs this inside the `try` that persists restore problems, because a refusal is an
+    abort with the device possibly changed.
     """
     if not states or not all(state is False for state in states):
         detail = f"the display was not off for the whole window: {states}"
@@ -358,10 +323,8 @@ def require_visible_measurement(  # noqa: PLR0913 — the window and the four st
     """
     Refuse a visible window that is not a B4/B5 measurement, returning its discharge rate.
 
-    Surface and keyguard are checked over the whole window, not only before it: another app or a lock
-    surface leaves the bound component unchanged, so every other reading would still pass. Unreadable
-    samples refuse, as in `ensure_visible_home`. `discharge_rate_ua` raises when the pack gained
-    charge, so it is read here rather than at the first print that needs it.
+    Surface and keyguard are checked throughout, because another app or a lock surface leaves the
+    bound component unchanged. `discharge_rate_ua` raises when the pack gained charge.
     """
     if states and not all(state is True for state in states):
         detail = f"the display was not on for the whole visible window: {states}"
@@ -392,10 +355,9 @@ def require_memory_measurement(  # noqa: PLR0913 — the four state samples and 
     keyguard_locked: Sequence[bool | None],
 ) -> int:
     """
-    Refuse a memory window that is not a B6 measurement, returning the total-PSS growth in kB.
+    Refuse a memory window that is not a B6 measurement, returning total-PSS growth in kB.
 
-    Surface and keyguard are checked over the whole window: a different app or lock surface means the
-    recorded growth is not the wallpaper's that the window claims.
+    Surface and keyguard are checked throughout, as in the visible window.
     """
     if states and not all(state is True for state in states):
         detail = f"the display was not on for the whole memory window: {states}"
@@ -433,16 +395,14 @@ def phase_hidden(
             verify_arm(device, stats.Arm.LIVE, None)
             pid = probes.wallpaper_pid(device)
             snapshot.pin()
-            # Record the mode before applying it: the override can take effect and still fail, and a
-            # later read would then skip the reset.
+            # Record the mode before applying it: the override can take effect and still fail.
             power_source = battery_snapshot.power_mode_for(device)
             simulated = power_source == battery_snapshot.POWER_SOURCE_SIMULATED
             battery_snapshot.apply_power_mode(device, power_source)
             window, states, on_battery, _, _ = run_window(device, pid, minutes, screen_on=False, clk_tck=clk_tck)
         finally:
             problems = battery_snapshot.undo_phase_changes(device, snapshot, prior_power, simulated=simulated)
-        # Checks and record build stay inside the `try`, so a refusal after the restore still carries
-        # the restore problems onto disk as an abort.
+        # Inside the `try`, so a post-restore refusal still records the restore problems.
         cpu_pct = require_hidden_measurement(window, states, on_battery)
         print(f"hidden window {window.duration_seconds:.1f}s: screen_on readings={states}")
         print(f"CPU {cpu_pct:.4f}% of one core against the {stats.MAX_HIDDEN_CPU_PCT}% budget")
@@ -599,10 +559,9 @@ def phase_pilot(  # noqa: PLR0913 — the arms, the window shape, and the sink a
     """
     Record the repeated windows whose spread is the device's noise floor.
 
-    Each window is persisted as it completes, so an interruption keeps its evidence. A failed restore
-    stops the run after recording that window: later windows would be measured on a device this run no
-    longer controls. The run is bounded before the first window opens, since neither the count nor the
-    length bound bounds the product (`docs/battery-budget.md` forbids an hours-long invocation).
+    Each window is persisted as it completes; a failed restore stops the run after recording that
+    window. The product of runs and minutes is bounded before the first window opens, because
+    `docs/battery-budget.md` forbids an hours-long invocation.
     """
     if runs * minutes > MAXIMUM_PILOT_MINUTES:
         detail = (
@@ -619,8 +578,7 @@ def phase_pilot(  # noqa: PLR0913 — the arms, the window shape, and the sink a
         record.values["pilot"] = True
         record.values["runs"] = runs
         recorder.emit(record)
-        # Persisted before stopping, so no evidence is lost. A failed restore leaves a device this run
-        # no longer controls; `main` would report it only after the whole (up to two-hour) pilot.
+        # Persisted before stopping, so no evidence is lost.
         restore_problems = record.values.get("restore_problems")
         if isinstance(restore_problems, list) and restore_problems:
             named = "; ".join(str(problem) for problem in restore_problems)
@@ -654,8 +612,7 @@ def phase_pilot(  # noqa: PLR0913 — the arms, the window shape, and the sink a
         print(f"\nwindow discharge rate: mean {mean:.0f} uA, sigma {deviation:.0f} uA, 2 sigma {half_width:.0f} uA")
         print(f"noise floor as a share of the mean: {floor_pct:.2f}%")
     else:
-        # A gauge that never moved is a frozen counter, not zero noise: recording a 0% floor would
-        # present an unmeasured channel as a perfectly quiet one. Emit no floor instead.
+        # A gauge that never moved is a frozen counter, not zero noise: emit no floor instead.
         print(
             f"\nthe discharge channel did not move across {runs} windows (mean {mean:.0f} uA), so it is "
             "unmeasured and no noise floor is emitted for it; a threshold cannot be calibrated from a "

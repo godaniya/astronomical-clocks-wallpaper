@@ -15,8 +15,7 @@ from collections.abc import Mapping
 from typing import Final
 
 from host import contract
-
-from . import frame, trace
+from host.device import frame, trace
 
 # Bound every ADB call: a stalled transport would otherwise block the run forever.
 ADB_TIMEOUT_SECONDS: Final = 30

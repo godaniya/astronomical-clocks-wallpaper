@@ -10,10 +10,9 @@ import time
 from typing import Final
 
 from host import contract
+from host.battery import snapshot
 from host.device import frame
 from host.device import probes as device_probes
-
-from . import snapshot
 
 CHARGE_COUNTER_PATTERN: Final = re.compile(rf"^[ \t]*Charge counter:[ \t]*({snapshot.DIGITS})[ \t]*$", re.MULTILINE)
 
@@ -252,9 +251,8 @@ def census_entry_block(  # noqa: PLR0913 — the dump, the two patterns, and the
     The census alone is not a check: a dump truncated after it still carries the count, and reporting
     a zero then is a fabricated pass. Fewer entries than declared is a truncated dump; more is a shape
     the probe does not know. The block ends at the first line neither shaped as an entry nor indented
-    deeper than the census, because a later section prints entries in the same shape. An unrecognised
-    line inside the block is refused too, since reconciliation alone cannot see it. Indentation is the
-    only structural fact the three dumps share, so continuations are identified by it.
+    deeper than the census, because a later section prints entries in the same shape. Indentation is
+    the only structural fact the three dumps share, so continuations are identified by it.
     """
     census = census_pattern.search(dump)
     if census is None:
@@ -268,34 +266,15 @@ def census_entry_block(  # noqa: PLR0913 — the dump, the two patterns, and the
     census_index = dump.count("\n", 0, census.start())
     census_text = lines[census_index] if census_index < len(lines) else ""
     indent = len(census_text) - len(census_text.lstrip())
-    entries: list[str] = []
-    entry_indent: int | None = None
-    for line in lines[census_index + 1 :]:
-        if not line.strip():
-            continue
-        if entry_pattern.match(line):
-            entries.append(line)
-            entry_indent = len(line) - len(line.lstrip())
-            continue
-        line_indent = len(line) - len(line.lstrip())
-        if line_indent <= indent:
-            break
-        # A line inside the block that is not an entry is a continuation of one — the alarm dump
-        # prints six or more `key=value` lines under each `Alarm{...}` header, and the jobscheduler
-        # dump more below each `JOB`. A continuation is *deeper indented than the entry it belongs
-        # to*, which is what tells it apart from an entry or a header the pattern did not recognise:
-        # such a line either appears before any entry (a block that holds content under a census of
-        # zero) or sits at the entry's own depth. Skipping those silently was the same defect as
-        # reading a count from a line that was never the census: a malformed entry could sit in the
-        # block while the recognised ones reconciled exactly, so the dump was accepted and the
-        # unrecognised entry counted as nothing.
-        if entry_indent is None or line_indent <= entry_indent:
-            detail = (
-                f"the {probe}'s {census_line} census block holds a line that is neither an entry "
-                f"shaped like {entry_shape} nor a continuation of one: {line.strip()!r}; the census "
-                "cannot be reconciled against a block it does not describe"
-            )
-            raise device_probes.ProbeError(detail)
+    entries = _census_entry_lines(
+        lines,
+        census_index + 1,
+        indent,
+        entry_pattern,
+        probe=probe,
+        census_line=census_line,
+        entry_shape=entry_shape,
+    )
     if len(entries) < declared:
         detail = (
             f"the {probe} declares {declared} entries but the block below its {census_line} census "
@@ -309,6 +288,41 @@ def census_entry_block(  # noqa: PLR0913 — the dump, the two patterns, and the
             f"line matching {entry_shape} that the census does not count is inside the block"
         )
         raise device_probes.ProbeError(detail)
+    return entries
+
+
+def _census_entry_lines(  # noqa: PLR0913 — the block's location, its shape, and the names it refuses by
+    lines: list[str],
+    start: int,
+    indent: int,
+    entry_pattern: re.Pattern[str],
+    *,
+    probe: str,
+    census_line: str,
+    entry_shape: str,
+) -> list[str]:
+    """Return the entries of one census block, refusing an unrecognised line inside it."""
+    entries: list[str] = []
+    entry_indent: int | None = None
+    for line in lines[start:]:
+        if not line.strip():
+            continue
+        if entry_pattern.match(line):
+            entries.append(line)
+            entry_indent = len(line) - len(line.lstrip())
+            continue
+        line_indent = len(line) - len(line.lstrip())
+        if line_indent <= indent:
+            break
+        # A continuation is deeper indented than the entry it belongs to; a line before any entry or
+        # at the entry's own depth is a malformed shape, not a continuation.
+        if entry_indent is None or line_indent <= entry_indent:
+            detail = (
+                f"the {probe}'s {census_line} census block holds a line that is neither an entry "
+                f"shaped like {entry_shape} nor a continuation of one: {line.strip()!r}; the census "
+                "cannot be reconciled against a block it does not describe"
+            )
+            raise device_probes.ProbeError(detail)
     return entries
 
 

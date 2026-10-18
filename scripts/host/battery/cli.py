@@ -13,9 +13,8 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from host.battery import phases, probes, report, snapshot, stats
 from host.device import probes as device_probes
-
-from . import phases, probes, report, snapshot, stats
 
 
 def add_window_arguments(parser: argparse.ArgumentParser, minimum_minutes: float) -> None:

@@ -17,8 +17,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from host import contract
 from host.device import frame, probes
-
-from . import checks
+from host.qualification import checks
 
 
 def restore_device(
