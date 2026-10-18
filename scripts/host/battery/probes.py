@@ -1,23 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 """Battery, CPU, PSS, wake-lock, alarm, job, luma, and device-identity probes for the battery protocol."""
 
-from __future__ import annotations
-
 import datetime as dt
 import hashlib
 import re
 import subprocess
 import sys
 import time
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
 from host import contract
-from host.battery import snapshot
 from host.device import frame
 from host.device import probes as device_probes
 
-if TYPE_CHECKING:
-    from collections.abc import Sequence
+from . import snapshot
 
 CHARGE_COUNTER_PATTERN: Final = re.compile(rf"^[ \t]*Charge counter:[ \t]*({snapshot.DIGITS})[ \t]*$", re.MULTILINE)
 
@@ -26,85 +22,50 @@ BATTERY_LEVEL_PATTERN: Final = re.compile(rf"^[ \t]*level:[ \t]*({snapshot.DIGIT
 # Anchored to the field name so that `Max charging voltage:` can never be read as the pack voltage.
 BATTERY_VOLTAGE_PATTERN: Final = re.compile(rf"^[ \t]*voltage:[ \t]*({snapshot.DIGITS})[ \t]*$", re.MULTILINE)
 
-# The separators are `[ \t]` and not `\s` for the reason the census patterns give: `\s` matches a
-# newline, so `\s+` after `TOTAL` would let a truncated `TOTAL` line reach the next line for its number
-# and report an unrelated figure as the app's total PSS. The trailing lookahead is what keeps the
-# *captured* value from doing the same thing: this is the one capture with no other field name or
-# anchor after it, so without a boundary the `123` of a corrupted `TOTAL 123oops` would match and be
-# recorded as a reading. A real line continues with more columns after horizontal whitespace.
+# `[ \t]` rather than `\s`, which matches a newline and would let a truncated `TOTAL` line borrow the
+# next line's number. The trailing lookahead keeps the captured value from doing the same.
 TOTAL_PSS_PATTERN: Final = re.compile(rf"^[ \t]*TOTAL[ \t]+({snapshot.DIGITS})(?=[ \t]|$)", re.MULTILINE)
 
 SDK_PATTERN: Final = re.compile(rf"^({snapshot.DIGITS})$")
 
-# Every shape `dumpsys jobscheduler` prints a job line in, taken from the test device's own dump.
-# The two components at the end of a job line are a `<hash> <component>` pair; the component is
-# either `<pkg>/<class>` or `<ns>@<pkg>/<class>`, and one legacy line on this device is tagged
-# rather than component-shaped (`DownloadManager:<pkg>`). The old pattern recognised the plain
-# `JOB #<uid>/<id>` form only, which matched 74 of the 521 job lines this device lists: the
-# namespaced form (`androidx.work.systemjobscheduler:<uid>/<id>`, `SyncManager:<uid>/<id>`) is where
-# WorkManager and the sync adapters keep their jobs, so an app's own jobs could be silently dropped
-# from the count. Group 1 is the package the job belongs to, which is what attributes it to the app.
+# Every shape `dumpsys jobscheduler` prints a job line in. The component is `<pkg>/<class>` or
+# `<ns>@<pkg>/<class>`, plus one legacy `DownloadManager:<pkg>` form, and group 1 is the owning
+# package. The namespaced forms are where WorkManager and the sync adapters keep their jobs, so a
+# plain `JOB #<uid>/<id>` pattern silently drops them from the count.
 JOB_LINE_PATTERN: Final = re.compile(
     r"^\s*JOB \S+/-?\d+:\s+\S+\s+(?:@[\w.]+@)?(?:[A-Za-z][\w.]*:)?([\w.\-]+)(?:[/:]|$)",
     re.MULTILINE,
 )
 
-# The job *entry* predicate: one line per job, whatever its shape. It is deliberately wider than
-# JOB_LINE_PATTERN, so that a job line the attribution cannot parse shows up as a count mismatch or
-# as an unparsable entry rather than being dropped silently.
+# Wider than JOB_LINE_PATTERN, so an unparsable job line surfaces as a count mismatch rather than
+# being dropped.
 JOB_ENTRY_PATTERN: Final = re.compile(r"^\s*JOB \S+/-?\d+:", re.MULTILINE)
 
-# The wake-lock entry predicate counts every lock type, not `PARTIAL_WAKE_LOCK` alone. The census
-# counts the whole device, and this device's `Wake Locks: size=1` is a `DOZE_WAKE_LOCK`, so an
-# app-scoped count of partial locks can never equal the census and the census could never be
-# checked against it.
+# Every lock type, not `PARTIAL_WAKE_LOCK` alone: the census counts the whole device, and this
+# device's only lock is a `DOZE_WAKE_LOCK`, so a partial-only count could never reconcile with it.
 WAKE_LOCK_ENTRY_PATTERN: Final = re.compile(r"^\s*\w+_WAKE_LOCK\b", re.MULTILINE)
 
-# The alarm entry predicate: the census block prints one `<TYPE> #<n>: Alarm{...}` header per
-# pending alarm. It must be read inside the census block only, because a later section lists alarms
-# of its own in exactly this shape — this device prints `Past-due non-wakeup alarms: 1` followed by
-# `ELAPSED #1: Alarm{...}` — and a whole-dump scan counts that one too.
+# One `<TYPE> #<n>: Alarm{...}` header per pending alarm, read inside the census block only: a later
+# section prints `Past-due non-wakeup alarms:` entries in the same shape.
 ALARM_ENTRY_PATTERN: Final = re.compile(r"^\s*\w+\s*#\d+:\s*Alarm\{", re.MULTILINE)
 
-# A `dumpsys jobscheduler` dump that has been read at all prints a `Registered <n> jobs:` census line
-# before the job list; requiring it is what separates "the app has no jobs" from "this is not a
-# jobscheduler dump", so an unparsable probe is an error rather than a zero.
-#
-# The line must *end* after the count, as the power and alarm census patterns below already require,
-# with the same `[ \t]` trailing class. Anchored at the start only, this matched a malformed line such
-# as `Registered 0 jobs: CORRUPT` and read its leading zero as the census — a count from a line the
-# probe never actually read, which for a zero is a B2 pass.
+# The census line separates "the app has no jobs" from "this is not a jobscheduler dump". It must
+# end after the count: anchored only at the start, `Registered 0 jobs: CORRUPT` reads as a zero.
 JOBSCHEDULER_CENSUS_PATTERN: Final = re.compile(rf"^[ \t]*Registered ({snapshot.DIGITS}) jobs:[ \t]*$", re.MULTILINE)
 
-# A `dumpsys power` that has been read at all prints its wake-lock census before listing the locks,
-# the same way `dumpsys jobscheduler` prints its job census. Requiring it is what separates "the app
-# holds no wake locks" from "this is not a power dump", so a truncated or reshaped dump is an error
-# rather than a zero.
-#
-# The leading and trailing whitespace classes are `[ \t]` and not `\s`. `\s` matches a newline, so a
-# pattern anchored `^\s*` on a census line can begin its match at the blank line *above* the census and
-# run into it — the match then starts one line early, and a parser that locates the censused block from
-# the match start reads the block from the wrong line. Requiring a line's own spaces keeps the match on
-# the census line.
+# The census separates "no wake locks" from "not a power dump". `[ \t]` rather than `\s`, which would
+# let a match begin on the blank line above and locate the census block from the wrong line.
 POWER_WAKELOCK_CENSUS_PATTERN: Final = re.compile(rf"^[ \t]*Wake Locks: size=({snapshot.DIGITS})[ \t]*$", re.MULTILINE)
 
-# `dumpsys alarm` likewise prints a census before listing the pending alarms, and that census is what
-# makes an alarm count trustworthy. The line is taken from the test device's own dump, which reads
-# `  164 pending alarms: ` — count first, no `Pending alarm batches:` line anywhere in it. The count
-# is a count of entries and not the highest entry index: the block below this census is numbered `#1`
-# onwards, and on five consecutive reads of one device the declared count and the number of entry
-# lines agreed exactly, which is what `census_entry_block` holds them to.
+# `<n> pending alarms:` is a count of entries, not the highest entry index; the device's own dump
+# (no `Pending alarm batches:` line) confirms that reading.
 ALARM_CENSUS_PATTERN: Final = re.compile(rf"^[ \t]*({snapshot.DIGITS}) pending alarms:[ \t]*$", re.MULTILINE)
 
-# A count a device prints that cannot be negative — a UID from `stat -c %u`, or the utime and stime
-# ticks from `/proc/<pid>/stat`. It is a pattern of its own rather than the signed one above, because a
-# read that failed or was malformed can answer `-1` and `int()` would take it. Both callers then treat a
-# negative reading as a measurement: `phase_resources` refuses only `None` and would build the wake-lock
-# predicate `uid=-1`, which matches no lock and reports a B2 pass the app did not earn, while a negative
-# utime makes a window's CPU delta larger than the CPU the process actually spent.
+# A device count that cannot be negative. A failed read can answer `-1`, and `int()` would take it: a
+# negative UID builds a wake-lock predicate matching nothing (a B2 pass), and a negative utime inflates
+# a window's CPU delta.
 UNSIGNED_INT_PATTERN: Final = re.compile(snapshot.DIGITS)
 
-COMMAND_TIMEOUT_SECONDS: Final = 60
 
 PROC_STAT_UTIME_INDEX: Final = 11
 
@@ -112,26 +73,18 @@ PROC_STAT_INDEX_STIME: Final = 12
 
 MIN_PROC_STAT_FIELDS: Final = 13
 
-# `/proc/<pid>/stat` counts CPU in kernel clock ticks, and the ticks per second is a kernel constant
-# (`getconf CLK_TCK`) that is not 100 on every device. It is probed per run through
-# `device_probes.AdbDevice.read_process_cpu_clock_ticks` and the run fails when the probe cannot
-# answer, because scaling a CPU percentage by an assumed rate misreports every CPU criterion.
+# Ticks per second is a per-device kernel constant (`getconf CLK_TCK`), probed once per run; scaling
+# by an assumed rate would misreport every CPU criterion.
 
 
-# The arm guard's two provable facts. The live component is a deterministic read — the home slot
-# names it in full — while which static image a baseline carries is not, so the baseline's identity is
-# bounded by the median luminance of the home screen, which refuses rather than guesses when it lands
-# between the two. The live arm is compared as a whole component rather than by a substring of its
-# text: another package shipping a service with the same class name would otherwise be admitted as the
-# wallpaper under test, and every CPU and drain figure this protocol records would be attributed to
-# the wrong process.
+# The live arm is compared as a whole component, not a substring: another package shipping the same
+# class name would otherwise be admitted as the wallpaper under test.
 COMPONENT_INFO_PATTERN: Final = re.compile(r"^ComponentInfo\{(.*)\}$")
 
 LUMA_STRIDE: Final = 8
 
 LUMA_WEIGHTS: Final = (0.2126, 0.7152, 0.0722)
 
-LUMA_MAX: Final = 255.0
 
 MEDIAN_LUMA_NOTE: Final = "recorded, not gated: the OEM stock wallpaper on this device is a dark image"
 
@@ -143,24 +96,19 @@ DEVICE_ID_CHARS: Final = 12
 
 
 def parse_battery_output(output: str) -> tuple[int, int, int]:
-    """
-    Extract charge counter (uAh), level (%), and voltage (mV) from `dumpsys battery`.
+    """Extract charge counter (uAh), level (%), and voltage (mV); a missing field is refused, not zeroed."""
 
-    Every field is required. A missing field is raised rather than defaulted, because a battery
-    probe that stopped reporting would otherwise look like a device drawing nothing.
-    """
-    values: list[int] = []
-    for pattern, name in (
-        (CHARGE_COUNTER_PATTERN, "Charge counter"),
-        (BATTERY_LEVEL_PATTERN, "level"),
-        (BATTERY_VOLTAGE_PATTERN, "voltage"),
-    ):
-        match = pattern.search(output)
-        if match is None:
+    def value(pattern: re.Pattern[str], name: str) -> int:
+        if (match := pattern.search(output)) is None:
             detail = f"dumpsys battery output carried no {name} field; refusing to read it as zero"
             raise device_probes.ProbeError(detail)
-        values.append(int(match.group(1)))
-    return values[0], values[1], values[2]
+        return int(match.group(1))
+
+    return (
+        value(CHARGE_COUNTER_PATTERN, "Charge counter"),
+        value(BATTERY_LEVEL_PATTERN, "level"),
+        value(BATTERY_VOLTAGE_PATTERN, "voltage"),
+    )
 
 
 def parse_unsigned_int(raw: str) -> int | None:
@@ -169,12 +117,7 @@ def parse_unsigned_int(raw: str) -> int | None:
 
 
 def parse_proc_stat_cpu_seconds(stat_content: str, clk_tck: int) -> float | None:
-    """
-    Parse utime + stime from a `/proc/<pid>/stat` line and return total CPU seconds.
-
-    `clk_tck` is required rather than defaulted: the tick rate is a kernel constant that is not 100 on
-    every device, and scaling by a guess would misreport every CPU percentage the budget is judged on.
-    """
+    """Parse utime + stime from `/proc/<pid>/stat` as CPU seconds; `clk_tck` is required, never assumed."""
     if clk_tck <= 0:
         detail = f"a CPU-tick rate of {clk_tck} cannot scale a tick count"
         raise device_probes.ProbeError(detail)
@@ -217,17 +160,9 @@ def wallpaper_pid(device: device_probes.AdbDevice) -> int | None:
     """
     Read the wallpaper process id, refusing an answer that cannot be read as one.
 
-    `device_probes.get_wallpaper_pid` reads `pidof` and answers `None` when nothing matches. A token
-    that is *not* a process id is a different thing, and that reader converts it with `int()` after
-    an `isdigit()` test, so a digit run past `int()`'s limit raises `ValueError` from inside it.
-    `ValueError` is not one `main` catches, so a corrupted response reached the operator as a
-    traceback rather than the `ERROR:` line every other unreadable probe produces.
-
-    The translation is made here rather than in the device-layer reader because that reader is shared
-    with the repository's other harnesses and carries the same unbounded conversion at four sites;
-    widening its contract is its own change, and this slice owes its own callers the named refusal.
-    `None` still means exactly what it means there — no live wallpaper process — because a response
-    nobody could read is not evidence of one.
+    The shared reader converts an oversized digit run with `int()`, whose `ValueError` `main` does not
+    catch; translating it here keeps this harness's named `ERROR` line. `None` still means no live
+    wallpaper process, because an unreadable answer is not evidence of one.
     """
     try:
         return device.get_wallpaper_pid()
@@ -244,10 +179,8 @@ def read_process_uid(device: device_probes.AdbDevice, pid: int | None) -> int | 
     """
     Read the owning UID of a process from `/proc/<pid>`, or None when it cannot be read.
 
-    A UID is non-negative, so a negative read is a failed or malformed one rather than a process's
-    owner. Returning it would not stop at this function: `phase_resources` refuses only `None`, and the
-    wake-lock predicate would be built as `uid=-1`, which matches no lock and reports the app as
-    holding none — a B2 pass from a read that answered nothing.
+    A negative read is malformed, not an owner: `uid=-1` matches no wake lock and would report a B2
+    pass from a read that answered nothing.
     """
     if pid is None or pid <= 0:
         return None
@@ -259,17 +192,8 @@ def require_clk_tck(device: device_probes.AdbDevice) -> int:
     """
     Probe the device's kernel clock-tick rate, refusing to run without a real one.
 
-    `device_probes.read_process_cpu_clock_ticks` reads `getconf CLK_TCK`. When it cannot answer, the
-    CPU criteria cannot be scaled correctly, so the run fails loudly instead of assuming 100.
-
-    "Cannot answer" includes answering with something that cannot be converted: that reader tests the
-    text with `str.isdigit()` and then hands it to `int()`, so a digit run past `int()`'s limit — or a
-    character `isdigit()` accepts and `int()` does not, such as `"²"` — raises `ValueError` from
-    inside it. `ValueError` is not one `main` catches, so a corrupted response reached the operator as
-    a traceback rather than the `ERROR:` line this refusal is. The translation is made here rather
-    than in the device-layer reader because that reader is shared with the repository's other
-    harnesses and carries the same unbounded conversion at four sites; widening its contract is its
-    own change, and this slice owes its own callers the named refusal.
+    An unreadable answer includes one `isdigit()` accepts and `int()` does not (such as `"²"`); that
+    `ValueError` is translated here so the operator sees the named refusal, not a traceback.
     """
     try:
         clk_tck = device.read_process_cpu_clock_ticks()
@@ -325,31 +249,12 @@ def census_entry_block(  # noqa: PLR0913 — the dump, the two patterns, and the
     """
     Return the entry lines of a censused dump section, refusing unless they account for the census.
 
-    The census alone is not a check. A dump truncated after its census line still carries the count,
-    and a parser that reads only "does the census exist" then reports a legitimate zero from output
-    that lists nothing at all — a fabricated pass for the budget that measures it. Requiring the
-    enumerated entries to *equal* the declared count is what makes the census mean something, and it
-    fails in both directions: fewer entries is a truncated dump, more is a shape the probe does not
-    know that the count was never meant to include.
-
-    The block runs from the census line to the first line that is neither an entry nor indented
-    deeper than the census, so a later section cannot inflate it. That boundary is not hypothetical:
-    this device's alarm dump prints `Past-due non-wakeup alarms: 1` followed by
-    `ELAPSED #1: Alarm{...}` in exactly the entry shape, four hundred lines below the pending-alarm
-    census, and a scan of the whole dump counts it. Multi-line entries are why the boundary is drawn
-    by indentation rather than by "the first line that is not an entry": an alarm entry is an
-    `Alarm{...}` header followed by six or more `key=value` continuation lines, none of which are
-    entries.
-
-    A line inside the block that is neither an entry nor a continuation of one is a third failure and
-    is refused too, because reconciliation alone cannot see it: a block holding a malformed entry
-    beside exactly the declared number of recognised ones reconciles perfectly. A continuation is
-    identified by indentation — it is deeper than the entry it belongs to — which is the only
-    structural fact the three dumps share, so it is what the check is built on.
-
-    `probe` names the dump for the message, `census_line` is the literal line required of it, and
-    `entry_shape` is what one entry looks like, so that a refusal says which failure it is rather
-    than only that something was wrong.
+    The census alone is not a check: a dump truncated after it still carries the count, and reporting
+    a zero then is a fabricated pass. Fewer entries than declared is a truncated dump; more is a shape
+    the probe does not know. The block ends at the first line neither shaped as an entry nor indented
+    deeper than the census, because a later section prints entries in the same shape. An unrecognised
+    line inside the block is refused too, since reconciliation alone cannot see it. Indentation is the
+    only structural fact the three dumps share, so continuations are identified by it.
     """
     census = census_pattern.search(dump)
     if census is None:
@@ -411,15 +316,8 @@ def parse_wakelock_count(dump: str, app_uid: int) -> int:
     """
     Count the wake locks a `dumpsys power` dump attributes to one UID.
 
-    The dump's own `Wake Locks: size=<n>` census is required *and* the enumerated locks must account
-    for it, for the reason `census_entry_block` gives. A dump that carries the census and no lock for
-    this UID is a real zero.
-
-    Every lock type is counted before the UID is applied, not `PARTIAL_WAKE_LOCK` alone. The census
-    counts the whole device and this device's `Wake Locks: size=1` is a `DOZE_WAKE_LOCK`, so a
-    partial-only scan could never be reconciled with the census and the census would go unchecked.
-    The B2 budget is about locks the app holds, whatever their type, so widening the predicate to
-    match the census also matches the budget.
+    The census and the entry count must reconcile, per `census_entry_block`; a reconciled dump with no
+    lock for this UID is a real zero. Every lock type is counted, because the census counts them all.
     """
     entries = census_entry_block(
         dump,
@@ -440,9 +338,7 @@ def parse_alarm_count(dump: str, package: str = contract.PACKAGE_NAME) -> int:
     """
     Count the pending alarms a `dumpsys alarm` dump attributes to one package.
 
-    As with the power and jobscheduler probes, the dump's own `<n> pending alarms:` census is
-    required *and* the enumerated alarms must account for it, for the reason `census_entry_block`
-    gives.
+    The `<n> pending alarms:` census and the entry count must reconcile, per `census_entry_block`.
     """
     entries = census_entry_block(
         dump,
@@ -483,14 +379,8 @@ def parse_job_count(dump: str, package: str = contract.PACKAGE_NAME) -> int:
     """
     Count the JobScheduler jobs a package holds in a `dumpsys jobscheduler` dump.
 
-    The dump's own `Registered <n> jobs:` census is required *and* the enumerated jobs must account
-    for it, for the reason `census_entry_block` gives. A dump that carries the census and no job for
-    the package is a real zero.
-
-    Every job line must also be attributable to a package. The census check counts entries, so a job
-    line the attribution cannot parse would otherwise be counted towards the census, dropped from the
-    per-package total, and reported as "the app holds no such job" — the silent drop this refusal
-    replaces.
+    The census and entry count must reconcile, per `census_entry_block`, and every line must be
+    attributable: a dropped unparsable entry would otherwise read as "the app holds no job".
     """
     entries = census_entry_block(
         dump,
@@ -542,16 +432,9 @@ def read_apk_sha256(device: device_probes.AdbDevice) -> str:
     """
     Read the SHA-256 of the APK as it is *installed on the device*, or refuse.
 
-    The record's `apk_sha256` is the identity of the build a window measured, and every report row
-    that aggregates windows is gated on it: `check_measurement_identity` refuses a set that mixes
-    two. Hashing the host checkout's `app/build/outputs/apk/debug/app-debug.apk` answered a
-    different question — the digest of the artifact on this machine, which need not be the build the
-    device is running — and answered it with `None` on a machine that never built the APK, so a
-    record could carry "unknown build" as though that were an identity.
-
-    Both steps are required to answer: a package that is not installed has no `base.apk` to hash, and
-    a device without `sha256sum` returns a shell error that is not a digest. Either is a refusal
-    rather than a null, because a null is what the field must never carry for a window that ran.
+    This is the identity every aggregating report row is gated on; the host artifact answers a
+    different question and can be absent. An uninstalled package or missing `sha256sum` is refused
+    rather than recorded as an unknown build.
     """
     digest = device.read_installed_apk_sha256()
     if digest is None:
@@ -582,10 +465,8 @@ def read_hardware_serial(device: device_probes.AdbDevice) -> str | None:
     """
     Read the device's own serial property, or None when no stable handle can be read.
 
-    This is the identity behind a transport selector rather than a second opinion on a USB serial:
-    `adb devices` reports a wirelessly-debugged device as `host:port` or as an mDNS service name,
-    which are endpoints of the transport and not properties of the hardware. The serial property is
-    the handle the device itself reports, and it survives a reconnect that changes either.
+    The property is a hardware handle, unlike a `host:port` or mDNS transport selector, and survives
+    a reconnect that changes either.
     """
     for prop in ("ro.serialno", "ro.boot.serialno"):
         try:
@@ -607,19 +488,10 @@ def device_identity(device: device_probes.AdbDevice) -> str:
     """
     Name the device a record was measured on, without naming the device.
 
-    The serial is the only stable handle the harness has on which physical device a window ran on,
-    and it cannot be recorded as it stands: `docs/device-testing.md` keeps the model, OEM, and serial
-    off public surfaces, and `phase_report` prints every identity field. A salted digest distinguishes
-    one device from another while disclosing neither, and it is what stops two devices' records from
-    aggregating into one verdict.
-
-    A `host:port` serial or an `adb-…._adb-tls-connect._tcp` service name is adb's wireless-debugging
-    *transport selector*, not a device handle: the port and the service suffix change on every
-    reconnect, and an address can be reused by another device. Hashing either would make one
-    physical device's records look like several devices' — which `report` refuses as a mixed set —
-    and two devices' records look like one. When the serial is a selector, the digest is taken from
-    the hardware serial the device reports; when that cannot be read, the record is refused rather
-    than stamped with a selector that says nothing about the device.
+    The serial is kept off public surfaces, so a salted digest distinguishes devices without
+    disclosing one. A transport selector changes on reconnect and can be reused, so it is replaced by
+    the hardware serial; when that cannot be read the record is refused rather than stamped with a
+    selector that says nothing about the device.
     """
     serial = device.serial
     if not serial:
@@ -662,22 +534,14 @@ def emit_aborted_restore_record(
     device: device_probes.AdbDevice,
     phase: str,
     error: BaseException,
-    problems: Sequence[str],
+    problems: list[str],
 ) -> None:
     """
     Persist a failed phase's restore problems when it aborted before building its own record.
 
-    A phase collects its restore problems in a `finally` so that a failing write cannot skip the rest,
-    but an exception raised by the measurement itself leaves through that same `finally` and takes the
-    collected problems with it: the device is left changed and nothing on disk says so, so `report`
-    cannot flag it and the next phase measures a device nobody restored. This writes the problems as a
-    record of their own, named for the phase that did not finish, which is all `report` needs to print
-    its device-restore failure.
-
-    A record is written only when there is at least one problem: the record exists to carry them, and
-    an empty one would look like a measurement of a phase that never ran. Building it can itself fail
-    when the abort was the device going away, so that is swallowed — the original error is the one
-    worth reporting, and `main` still exits non-zero on it.
+    An exception through the restore `finally` would otherwise leave the device changed with nothing
+    on disk for `report`. Only a non-empty problem list is written; a failed build is swallowed so the
+    original error stands, and `main` still exits non-zero.
     """
     if not problems:
         return
@@ -699,15 +563,8 @@ def median_luma(device: device_probes.AdbDevice) -> float:
     """
     Return the median luminance of a freshly captured screen, a bounded proxy for what is shown.
 
-    This reads the raw screencap rather than the dial-validated capture, because a baseline arm has
-    no dial to validate: the validated read raises when the live wallpaper is not the one on screen,
-    which is exactly the state the baseline arms are in.
-
-    A capture that cannot be decoded is refused as a probe error. `decode_frame` raises
-    `frame.ScreencapError`, which is this module's sibling in `host.device.frame` rather than one of
-    the refusals `main` catches, so it would leave the CLI printing a traceback instead of the named
-    `ERROR` a garbled capture deserves — and a truncated `screencap` payload is exactly the transport
-    wobble this must survive as a report rather than as a stack trace.
+    The raw screencap is used because a baseline arm has no dial to validate. A decode failure is
+    translated to `ProbeError`, so a truncated payload is the named `ERROR` rather than a traceback.
     """
     try:
         _, _, pixels = frame.decode_frame(device.run_adb(["exec-out", "screencap"]))
@@ -740,9 +597,8 @@ def component_is_live(component: str) -> bool:
     """
     Report whether a home-wallpaper component is exactly this app's live service.
 
-    The comparison is on the whole `package/class`, not on whether the text contains the service's
-    class name: `ComponentInfo{other.pkg/…AstronomicalClocksWallpaperService}` is a different
-    wallpaper, and admitting it as arm A would attribute its CPU and drain to this app.
+    A substring test would admit `ComponentInfo{other.pkg/…AstronomicalClocksWallpaperService}` and
+    attribute another wallpaper's CPU and drain to this app.
     """
     return component_name(component) == contract.SERVICE_NAME
 
@@ -751,11 +607,7 @@ def component_is_static(component: str) -> bool:
     """
     Report whether a home-wallpaper component is the platform's own static wallpaper engine.
 
-    Arm B accepts a component on the strength of it not being this app's live service, which admits
-    *another package's* live wallpaper: a third-party live service is neither this app nor a static
-    image, and a window measured on one would be recorded as the stock or black baseline while
-    draining whatever that service costs. Requiring the platform engine closes that, and it is the
-    strongest statement the component supports — which static *image* the engine carries is a
-    separate, undecidable question, so this predicate does not claim one.
+    Without this, arm B would admit another package's live wallpaper as a baseline. Which static
+    *image* the engine carries is a separate, undecidable question this predicate does not claim.
     """
     return component_name(component) == contract.PLATFORM_STATIC_WALLPAPER

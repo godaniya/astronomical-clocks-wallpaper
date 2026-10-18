@@ -1,41 +1,26 @@
 # SPDX-License-Identifier: Apache-2.0
 """
-Judgement half of the battery protocol: records in, verdicts out.
+Judgement half of the battery protocol: record dicts in, verdicts and an exit status out.
 
-`scripts/battery_protocol.py` measures; this module decides. Everything here takes the record dicts
-a phase wrote and turns them into the lines `docs/battery-budget.md` is read against — the committed
-budgets and their arithmetic, the pairing rule, the measurement identity a set has to share, and the
-report's own exit status. None of it touches a device, and it imports nothing from the measuring
-half, so the decision rules can be read and tested without one.
-
-The dependency runs one way. `host.battery.cli` imports this module; this module imports only the
-standard library, `host.battery.stats`, and `host.device.probes`.
+Nothing here touches a device; `host.battery.cli` imports this module, and this module imports only
+the standard library, `host.battery.stats`, and `host.device.probes`.
 """
 
-from __future__ import annotations
-
 import math
-from typing import TYPE_CHECKING, Final
+from collections.abc import Mapping, Sequence
+from typing import Final
 
-from host.battery import stats
 from host.device import probes
 
-if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+from . import stats
 
-# The fields that say a record was taken from the same device, build, configuration, and channel, so
-# aggregating a set that mixes them would combine measurements that are not comparable. Both the
-# threshold and the noise floor behind it are per device, so the device itself is part of the
-# identity: two devices at the same build and API level are still two measurements. `revision` is
-# deliberately not one of them: a harness revision that changes only documentation or the report's
-# own aggregation does not change how a window was measured, and the reports say when that happened.
+# A set that mixes these is not comparable. The threshold and noise floor are per device, so the
+# device is part of the identity. `revision` is deliberately excluded: a documentation-only revision
+# does not change how a window was measured.
 IDENTITY_FIELDS: Final = ("device_id", "apk_sha256", "api_level", "power_source", "clk_tck")
 
-# The identity fields the phases write as integers; the other three are text. The reader below checks
-# the kind against this, because the report is fed a state file it did not write: a scalar of the
-# *other* kind — `"clk_tck": "100"`, `"power_source": 7` — is a value no phase produces, and reading
-# it as an identity puts a value the run never measured at the head of the report's own verdicts. The
-# kinds are the writers' own, checked against the records of the 2026-10-16 device pass.
+# The fields written as integers; the other three are text. A scalar of the wrong kind is a value no
+# phase produces.
 INTEGER_IDENTITY_FIELDS: Final = ("api_level", "clk_tck")
 
 
@@ -43,39 +28,10 @@ def identity_value(record: Mapping[str, object], identity_field: str) -> object:
     """
     Return one record's value for an identity field, refusing a value that is not a scalar.
 
-    The identity readers below all compare their field through a set, so the set *is* the
-    deduplication: a value it cannot hold cannot be compared with any other, and one it can hold but
-    no record writes — a boolean — would be compared as though it named a build or a tick rate.
-    Either way the field cannot be shown to agree, which is the only thing the checks are for, so
-    both are refused here rather than read.
-
-    It is refused here rather than at each set, because the refusal is not one site's business:
-    `check_measurement_identity` builds a set that raises `TypeError: unhashable type` out of a
-    traceback for a list, dict or set — not the named `ERROR` this module's readers promise for
-    state it did not write — and `phase_report` builds two more from `IDENTITY_FIELDS` whose
-    validity today rests only on that first check happening to run before them. Stating the rule
-    once means no site depends on call ordering to be correct.
-
-    What it admits is exactly what the phase writers put in these fields, because the report is fed a
-    state file it did not write. Each field is written as one kind of thing — `api_level` and
-    `clk_tck` are integers, `device_id`, `apk_sha256` and `power_source` are text, and any of them may
-    be `null` — so a scalar of the *other* kind is refused for the reason a `bool` is: it is a value
-    no record writes. `"clk_tck": "100"` and `"power_source": 7` are the cases, and admitting them
-    would let a corrupt state file pass the gate while the report printed the value as the identity
-    the run was measured under — the complaint the identity check already makes about a set whose
-    every value is `null`.
-
-    That check settles the non-finite case without a rule of its own: `NaN` and `inf` are floats, and
-    no identity field is written as one. It is not a hypothetical — the state file is JSON Lines read
-    with `json.loads`, which accepts `NaN` and `Infinity` by default, so a hand-edited file reaches
-    here with a float in an identity field.
-
-    `bool` is refused for the reason `finite_number` gives: it is an `int` in Python, so
-    `"clk_tck": true` would read as one tick and `"api_level": false` as API 0. It is, strictly, a
-    scalar, and that is exactly why it has to be named: nothing a record writes for an identity
-    field is a truth value. A null is admitted, because `"apk_sha256": null` is the legitimate
-    "unknown build" every pre-build record carries — refusing an unknown identity is the identity
-    check's decision, not this reader's.
+    The callers compare through a set, so an unhashable value is a traceback rather than the named
+    refusal, and a bool is an `int` (`true` would read as one tick). Each field is written as one
+    kind — integer or text — so the other kind is refused too. A null is admitted: it is the
+    legitimate "unknown build", and refusing it is the identity check's decision.
     """
     value = record.get(identity_field)
     if isinstance(value, bool) or (value is not None and not isinstance(value, str | int | float)):
@@ -99,27 +55,16 @@ def check_measurement_identity(records: Sequence[Mapping[str, object]]) -> None:
     """
     Refuse a record set that mixes builds, API levels, power modes, or tick rates.
 
-    Every record names the identity it was measured under. Aggregating records that disagree on any of
-    it would combine measurements that are not comparable, so the report refuses and names the
-    distinct values instead of producing one verdict from two builds. A field a record does not carry
-    at all is not a disagreement: an older phase record that never recorded the field simply does not
-    bound it. A field the record *does* carry with a null value is a value, not an absence — a record
-    written before the APK was built carries `"apk_sha256": null`, meaning "unknown build", and that
-    must not aggregate with a named one.
-
-    A value that is not a scalar of the kind the field is written as is neither compared nor skipped:
-    `identity_value` refuses it, because the set is the comparison, and a value the set cannot hold,
-    or holds without that value being an identity of that field, cannot be shown to agree with the
-    others.
+    Disagreeing records are not comparable, so the report names the distinct values instead of
+    producing one verdict from two builds. An absent field does not bound the identity; a present null
+    is a value and must not aggregate with a named one. Non-scalars are refused by `identity_value`.
     """
     for identity_field in IDENTITY_FIELDS:
         values = {identity_value(record, identity_field) for record in records if identity_field in record}
         if not values:
             continue
         if values == {None}:
-            # Every record that carries the field says "unknown", which is not an identity any more
-            # than two disagreements are: the set is homogeneous and still cannot say which build it
-            # measured, so aggregating it would produce a verdict whose subject is unnamed.
+            # A homogeneous "unknown" set still cannot say which build it measured.
             detail = (
                 f"every record that carries {identity_field} records no value for it, so the set cannot "
                 "say which measurement identity it was taken under; re-run the phases against one build "
@@ -151,16 +96,9 @@ def collect_restore_problems(records: Sequence[Mapping[str, object]]) -> list[st
     """
     Collect every restore problem the records carry, so a failed restore is never silent.
 
-    A record that does not carry the field is a record whose phase collected no problems, which is
-    what the field being absent means. That absence is a membership test and not `record.get(...) is
-    None`, because `dict.get` conflates the two cases: it answers `None` for a record that never had
-    the key and for an explicit `"restore_problems": null` alike, so a null would have been skipped as
-    though the phase had written a list of no problems. The key being present is what makes its value
-    readable, and a present value has to be a list. A record that carries it with something other than
-    a list is refused rather than ignored: a failed restore is the one thing on a record that says the
-    device was left changed, and reading `"airplane mode was not restored"` — a string where the
-    phases write a list — as no problem would let the report exit zero over an explicitly recorded
-    one.
+    Absence is a membership test, not `get(...) is None`: a present null must not read as "no
+    problems". A present non-list is refused, since a string would otherwise hide an explicitly
+    recorded failure.
     """
     problems: list[str] = []
     for record in records:
@@ -181,11 +119,8 @@ def short_window_reason(record: Mapping[str, object]) -> str | None:
     """
     Return why a record's window is not the length its criterion documents, or None when it is.
 
-    The CLI refuses a `--minutes` below the documented minimum, but the report is fed a state file it
-    did not write: it may have been recorded by an older harness, by a hand-edit, or by a phase whose
-    clock was not the one asked for. A record that cannot be shown to have run for its documented
-    length is not the measurement the criterion is defined on, so it is named and excluded from the
-    aggregation rather than averaged in as though a six-second window were a fifteen-minute one.
+    The state file may predate the CLI's minimum check, so a record that cannot be shown to have run
+    for its documented length is named and excluded rather than averaged in.
     """
     phase = str(record.get("phase"))
     minimum = stats.MINIMUM_SECONDS_BY_PHASE.get(phase)
@@ -193,21 +128,14 @@ def short_window_reason(record: Mapping[str, object]) -> str | None:
         return None
     duration = record.get("duration_seconds")
     threshold = minimum * stats.MINIMUM_DURATION_TOLERANCE
-    # This reader is deliberately not routed through `finite_number`: its refusal is a returned reason
-    # rather than a raised `ProbeError`, and a negative duration is a legitimate input that the
-    # below-threshold branch already names. The `bool` check is still `finite_number`'s first rule, for
-    # the same reason — `true` is an `int`, so it would reach the threshold comparison below as a
-    # 1.0-second window and be reported as a window that ran one second, a length the record does not
-    # record. The guard covers absence and a value that is not a length of time alike, so its message
-    # names the value it saw rather than asserting the field is missing.
+    # Not routed through `finite_number`: this refusal is a returned reason, and a negative duration
+    # is named by the threshold branch. `true` is an `int` and would read as a 1.0-second window.
     if isinstance(duration, bool) or not isinstance(duration, int | float):
         return (
             f"a {phase} record carries {duration!r} for `duration_seconds`, which is not a length of "
             f"time, so its window cannot be shown to be the documented {minimum / 60.0:.0f} minutes"
         )
-    # `inf` and `nan` are written by a hand-edit or a corrupt record and neither is below the
-    # threshold — `nan` is not below anything — so a comparison alone would admit them as windows of
-    # the documented length. The CLI refuses them by name for the same reason; so does this.
+    # `nan` is not below anything, so a bare comparison would admit it as a documented-length window.
     if not math.isfinite(duration):
         return (
             f"a {phase} record's window ran {duration!r}s, which is not a finite length of time, so it "
@@ -225,13 +153,9 @@ def black_baseline_verdict(declared_reason: str | None) -> stats.Verdict:
     """
     Build B4's secondary-baseline verdict from the run's declaration, or from its absence.
 
-    The black static baseline is required only where the device permits setting one, and the harness
-    cannot tell "this device cannot set a static wallpaper" from "this run did not try": both leave the
-    state file without those windows. Inferring the exemption from that absence is what let a run skip
-    the document's secondary baseline and still exit zero, so the exemption is a declaration instead \u2014
-    `report --black-unavailable <reason>`. A run without one carries the criterion as unmeasured, which
-    gates like any other unmeasured criterion; a run with one has the reason quoted into the line, so
-    the declaration is part of the output the report document carries.
+    An absent window cannot distinguish "the device cannot set one" from "the run skipped it", so the
+    exemption is the explicit `--black-unavailable <reason>` declaration, quoted into the output. A
+    run without one carries the criterion as unmeasured.
     """
     if declared_reason:
         return stats.Verdict(
@@ -257,20 +181,11 @@ def b4_baseline_verdicts(
     black_unavailable: str | None = None,
 ) -> list[stats.Verdict]:
     """
-    Build B4's verdicts, one block per documented baseline rather than one per recorded baseline.
+    Build B4's verdicts, one block per documented baseline rather than one per observed baseline.
 
-    A block per *observed* baseline is what let a stock-only state file carry a complete-looking
-    verdict: the secondary comparison was simply absent, and nothing in the report said so. The stock
-    comparison is the one B4 is gated on. The black static baseline is the document's secondary one, so
-    a run without those windows says so explicitly instead of leaving the reader to notice a missing
-    block \u2014 and says whether the device or the run is the reason (see `black_baseline_verdict`).
-
-    That one-block-per-documented-baseline shape is also why a label the document does not name is
-    refused rather than skipped: an arm B window labeled something else is selected by no block, so the
-    pair and every measurement in it would be absent from the whole report. The label is the one field
-    here whose *absence* is refused too. Everywhere else a missing field means an older revision had
-    nothing to record, but an arm B window's baseline is what places the pair in a comparison at all,
-    and inferring the primary baseline from a missing label would be guessing what the file meant.
+    Otherwise a stock-only file would carry a complete-looking verdict while the secondary comparison
+    silently vanished. A label the document does not name is refused: no block would select its pair,
+    so its measurements would be missing from the whole report.
     """
     verdicts: list[stats.Verdict] = []
     baseline_labels = (stats.Baseline.STOCK.value, stats.Baseline.BLACK.value)
@@ -348,10 +263,15 @@ def report_lines(
         )
         verdicts.extend(stats.Verdict("device restore detail", stats.VerdictStatus.INFO, f"  - {p}") for p in problems)
 
-    # A window below its documented length is not the measurement its criterion is defined on, so it
-    # is failed and dropped before anything is aggregated from it.
-    measured = [record for record in records if short_window_reason(record) is None]
-    short = [str(reason) for record in records if (reason := short_window_reason(record)) is not None]
+    # A short window is not the measurement its criterion is defined on: fail and drop it first.
+    measured: list[Mapping[str, object]] = []
+    short: list[str] = []
+    for record in records:
+        reason = short_window_reason(record)
+        if reason is None:
+            measured.append(record)
+        else:
+            short.append(str(reason))
     if short:
         verdicts.append(
             stats.Verdict(
@@ -364,13 +284,9 @@ def report_lines(
             stats.Verdict("window duration detail", stats.VerdictStatus.INFO, f"  - {problem}") for problem in short
         )
 
-    # B2 is a maximum across every resources record, not the last one: the state file is append-only,
-    # so a rerun after a nonzero census must not hide the earlier failure behind a later clean run.
-    # A count and a percentage of one core are non-negative, so `-1` is a corrupt reading rather than a
-    # comfortably passing one: it sorts under B2's zero budget and under B3's 0.1% alike, so an
-    # otherwise clean set carrying one would exit zero over a value the device cannot have produced.
-    # The wake-lock row is bounded only by records that measured the all-type census; see
-    # `wake_lock_values` for why a partial-only count is not evidence for this budget.
+    # B2 is the maximum over every resources record, not the last: the file is append-only, so a rerun
+    # must not hide an earlier failure. Counts are non-negative, so `-1` must be refused rather than
+    # passing under the zero budget. Wake locks are bounded only by all-types records.
     wake_locks = stats.wake_lock_values(measured)
     verdicts.append(check_budget("B2 wake locks", max(wake_locks) if wake_locks else None, 0.0, ""))
     for label, key in (("B2 alarms", "alarms"), ("B2 jobs", "jobs")):
@@ -383,8 +299,7 @@ def report_lines(
     try:
         pairs = stats.alternation_pairs(measured)
     except probes.ProbeError as error:
-        # Only B4 needs the pairing. The refusal is reported under B4's own label rather than a joint
-        # one, because B5 is measured from the live windows themselves and is reported either way.
+        # Only B4 needs the pairing; B5 is measured from live windows and reported either way.
         verdicts.append(
             stats.Verdict("B4 pairing", stats.VerdictStatus.NOT_MEASURED, f"B4 pairing: NOT MEASURED - {error}")
         )
@@ -392,9 +307,8 @@ def report_lines(
 
     verdicts.extend(b4_baseline_verdicts(pairs, black_unavailable=black_unavailable))
 
-    # B5 is the average visible CPU of the document's matrix, so the average is what is checked — one
-    # line per outcome, so an unreadable reading and an absent window cannot both be reported as the
-    # reason B5 has no verdict. The worst window is reported beside the mean as the observation it is.
+    # B5 checks the duration-weighted mean; the worst window is an observation beside it. One line
+    # per outcome keeps an unreadable reading distinct from an absent window.
     windows = stats.live_windows(measured)
     if not windows:
         verdicts.append(
@@ -425,9 +339,7 @@ def report_lines(
                 )
             )
 
-    # B6's growth is signed on purpose — memory can shrink over a window, and a negative growth is the
-    # best result the criterion can have — so this reader is the one that does not ask for the
-    # non-negative refusal.
+    # B6's growth is signed: memory can shrink, and negative growth is the best result.
     growth_values = stats.numeric_values(measured, "memory", "pss_growth_kb")
     verdicts.append(
         check_budget(
@@ -450,13 +362,9 @@ def report_exit_code(verdicts: Sequence[stats.Verdict]) -> int:
     """
     Derive the report's exit status from its verdicts rather than from its text.
 
-    Every verdict that is not one of `NON_GATING_STATUSES` is non-zero: a criterion that was never
-    measured has not established the acceptance. The exceptions are the two statuses that name *why*
-    the absence is not a failure of this run — a criterion explicitly out of scope for it (B1, which is
-    #125's), and a criterion the device cannot measure at all (the black static baseline, and only
-    where the run has declared the device the reason). Both are printed by the report rather than
-    dropped, so the absence is recorded even though it does not gate. The rule lives on `Verdict` so
-    that this function and `Verdict.is_failure` cannot disagree about it.
+    Only `NON_GATING_STATUSES` let a run exit zero: unmeasured criteria gate. Out-of-scope (B1) and
+    device-limited (declared black baseline) absences are still printed. The rule lives on `Verdict`
+    so it cannot disagree with `is_failure`.
     """
     return 1 if any(verdict.is_failure for verdict in verdicts) else 0
 

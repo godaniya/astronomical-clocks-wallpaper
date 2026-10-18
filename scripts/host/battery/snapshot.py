@@ -1,57 +1,33 @@
 # SPDX-License-Identifier: Apache-2.0
-"""
-Device settings snapshot, power-mode pinning, restore verification, and JSONL record persistence.
-
-Captures the device state a battery measurement phase touches, pins settings for the window,
-verifies every restored setting on exit, and persists phase records to the JSON Lines state file.
-"""
-
-from __future__ import annotations
+"""Device snapshot, power-mode pinning, restore verification, and JSONL record persistence."""
 
 import json
 import re
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from typing import Final, Self
 
 from host.device import probes as device_probes
 
-if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
-
-# A run of digits as a device prints one, bounded. Every pattern below that captures a number is handed
-# to `int()`, and `int()` refuses a value of more than about 4300 digits by *raising* rather than
-# converting it — so an unbounded `\d+` turns a dump that lost its mind into a traceback instead of the
-# named refusal the harness promises. No field, census, or tick count this harness reads is 18 digits
-# wide, so the bound costs nothing that a real dump has.
-#
-# The trailing lookahead is what makes the bound a refusal rather than a truncation: in a pattern with
-# no trailing anchor — `TOTAL_PSS_PATTERN` is the one — `\d{1,18}` would happily match the first
-# eighteen digits of a longer run and report them as the reading, which is the silent misreading the
-# bound exists to prevent. `(?!\d)` refuses the run instead.
+# A bounded digit run: `int()` raises above ~4300 digits, and no field this harness reads is 18 wide.
+# The trailing lookahead makes the bound a refusal rather than a truncation of a longer run.
 DIGITS: Final = r"\d{1,18}(?!\d)"
 
 POWERED_LINE_PATTERN: Final = re.compile(r"^\s*(\w+) powered:\s*(true|false)\s*$", re.MULTILINE)
 
-# The four power sources `dumpsys battery` reports. A reading is only complete when all four are
-# present: a dump that lost three of them must not be read as "the remaining one is false, so the
-# device is on battery", which is what a per-line scan would conclude from a truncated dump.
+# All four sources are required: a truncated dump must not read as "the remaining one is false, so
+# the device is on battery".
 EXPECTED_POWER_SOURCES: Final = ("AC", "USB", "Wireless", "Dock")
 
-# A decimal integer as a device prints one, bounded so that a long run of digits is refused rather
-# than handed to `int()`. `str.isdigit()` is not the same question: `"²"` is a digit but not a decimal
-# one, and it reaches `int()` as a `ValueError`, as does any value of more than a few thousand digits.
-# A device setting is never 18 digits wide, so the bound costs nothing and makes "unreadable" the
-# answer for everything the pattern does not match. The sign is accepted here because
-# `screen_brightness` is legitimately `-1` on a device using automatic brightness.
+# A signed decimal integer, bounded so `int()` cannot raise on it. `isdigit()` accepts `"²"`, which
+# `int()` refuses; the sign is accepted because brightness is legitimately `-1` in auto mode.
 DECIMAL_INT_PATTERN: Final = re.compile(rf"[+-]?{DIGITS}")
 
-# What `settings get <namespace> <key>` prints for a key that was never set. It is the only reading
-# that means "unset", which is why it is a literal of its own rather than "anything that is not a
-# decimal integer" — that reading is also what a settings service that did not answer looks like, and
-# treating the two alike loses a value the restore was supposed to put back.
+# The only reading that means "never set"; a settings service that did not answer also fails to look
+# like a decimal, and conflating the two loses a value the restore was supposed to put back.
 UNSET_SETTING_TEXT: Final = "null"
 
 DEFAULT_STATE_DIR: Final = Path("build/reports/battery")
@@ -69,10 +45,8 @@ LONG_SCREEN_TIMEOUT_MS: Final = 3_600_000
 
 RESTORE_SETTLE_SECONDS: Final = 2.0
 
-# The discharge window's power source. A device that is genuinely on its own battery has a live fuel
-# gauge and its counter moves; a device held on USB only reports battery when `cmd battery unplug`
-# overrides the power source, and on some devices that freezes the gauge. Which one a window was
-# measured under is part of the measurement's identity, so it is recorded and checked.
+# A genuinely discharging device has a live gauge; `cmd battery unplug` can freeze it, so which mode
+# a window ran under is part of the measurement's identity.
 POWER_SOURCE_DEVICE: Final = "device"
 
 POWER_SOURCE_SIMULATED: Final = "simulated"
@@ -108,10 +82,8 @@ class Window:
         """
         Average current draw over the window, in microamperes.
 
-        The counter must have fallen. A gauge that reports the pack gaining charge across a window is
-        not measuring a discharge at all — the device was charging, or the gauge recalibrated — and
-        returning the negative draw would let that window enter the comparison as a live arm that
-        looked cheaper, so it is refused at the source rather than judged downstream.
+        The counter must have fallen: a pack that gained charge is not a discharge measurement, and a
+        negative draw would enter the comparison as a cheaper live arm.
         """
         if self.duration_seconds <= 0:
             detail = "a window with no elapsed time has no discharge rate"
@@ -158,8 +130,7 @@ class DeviceStateSnapshot:
     """
     The device state a phase changes, captured so it can be put back and checked.
 
-    The screen's own power state is part of it: a hidden window turns the display off, and a phase
-    that returned that way would leave the device dark.
+    The display's power state is included: a hidden window turns it off.
     """
 
     def __init__(  # noqa: PLR0913
@@ -190,17 +161,13 @@ class DeviceStateSnapshot:
         device: device_probes.AdbDevice,
         *,
         sleep: Callable[[float], None] | None = None,
-    ) -> DeviceStateSnapshot:
+    ) -> Self:
         """
-        Read the state a measurement phase pins, including the display's own power state.
+        Read the state a measurement phase pins, including the display's power state.
 
-        Four of the settings `pin()` writes are required rather than best-effort: a value that could
-        not be read is a value the restore cannot put back, and skipping it would leave the shared
-        device changed by a phase that reported success. The stay-awake setting is the one exception —
-        it is legitimately unset on a device that never had it, and an unset value *is* captured, as
-        `None`, and restored by deleting the key. The exception is only for the setting's *unset*
-        reading, not for an unreadable one: `read_unsettable_int_setting` tells the device's `null`
-        from a service that did not answer, and refuses the second before anything is pinned.
+        Four settings are required, because the restore can only put back what was read. The stay-awake
+        setting may legitimately be unset (`None`, restored by deleting the key), but an unreadable
+        reading is refused before anything is pinned.
         """
         return cls(
             device,
@@ -218,10 +185,8 @@ class DeviceStateSnapshot:
         self.device.run_adb(["shell", "settings", "put", "system", "screen_brightness_mode", "0"])
         self.device.run_adb(["shell", "settings", "put", "system", "screen_brightness", str(PINNED_BRIGHTNESS)])
         self.device.run_adb(["shell", "settings", "put", "system", "screen_off_timeout", str(LONG_SCREEN_TIMEOUT_MS)])
-        # The timeout alone does not hold the display: a device that reports itself as running on
-        # battery ignores the plugged-in stay-awake setting, which is exactly the state a discharge
-        # simulation puts it in. Staying awake on every power source is what keeps a visible window
-        # visible, and it is restored below like everything else.
+        # A device reporting itself on battery ignores the plugged-in stay-awake setting, which is the
+        # state a discharge simulation creates; staying awake on every source keeps the window lit.
         self.device.run_adb(["shell", "settings", "put", "global", "stay_on_while_plugged_in", str(STAY_ON_ALWAYS)])
         set_airplane_mode(self.device, enabled=True)
 
@@ -273,10 +238,12 @@ class DeviceStateSnapshot:
                 self.screen_timeout,
             ),
         ]
-        for description, command, namespace, key, expected in steps:
-            if expected is None:
-                continue
-            problems.extend(self._apply(description, command, namespace, key, expected))
+        problems.extend(
+            problem
+            for description, command, namespace, key, expected in steps
+            if expected is not None
+            for problem in self._apply(description, command, namespace, key, expected)
+        )
         problems.extend(self._restore_stay_on())
         return problems
 
@@ -287,12 +254,9 @@ class DeviceStateSnapshot:
                 self.device.run_adb(["shell", "settings", "delete", "global", "stay_on_while_plugged_in"])
             except (subprocess.SubprocessError, OSError) as error:
                 return [f"stay-awake restore failed: {device_probes.error_detail(error)}"]
-            # The readback is inside its own guard: a transport failure here used to escape the whole
-            # restore and skip the display step that follows it. The reader's refusal is caught here
-            # with it, and that is the point of using this reader rather than `read_int_setting`: a
-            # readback of `""` or any other unreadable text reads as `None` there — indistinguishable
-            # from the unset value the delete was meant to produce — so a delete nobody could verify
-            # was reported as a clean restore. Here it is a problem like any other.
+            # Guarded so a transport failure cannot skip the display restore. This reader is used
+            # rather than `read_int_setting` because that one reads unreadable text as `None`, which
+            # would report an unverifiable delete as a clean restore.
             try:
                 remaining = read_unsettable_int_setting(self.device, "global", "stay_on_while_plugged_in")
             except (subprocess.SubprocessError, OSError, device_probes.ProbeError) as error:
@@ -316,8 +280,7 @@ class DeviceStateSnapshot:
             sleep_fn(RESTORE_SETTLE_SECONDS)
         except (subprocess.SubprocessError, OSError) as error:
             return [f"{description} restore failed: {device_probes.error_detail(error)}"]
-        # The readback is guarded too: an uncaught transport failure here used to escape the whole
-        # restore and skip the display restoration.
+        # Guarded too, so a transport failure cannot skip the display restore.
         try:
             actual = read_int_setting(self.device, namespace, key)
         except (subprocess.SubprocessError, OSError) as error:
@@ -330,10 +293,8 @@ class DeviceStateSnapshot:
         """
         Return the display to the power state it was found in.
 
-        The reads are guarded the way the settings steps are, and for the same reason. `restore()` is
-        reached from `undo_phase_changes` through `problems.extend(...)`, so a read that raised here
-        would discard every problem the settings steps had already collected — `extend` never runs and
-        the caller reports one generic failure in their place — and the sleep below would be skipped.
+        Reads are guarded so a raise cannot discard the problems the settings steps collected or skip
+        the sleep.
         """
         if self.screen_on is None:
             return ["the display state could not be read before the phase, so it cannot be restored"]
@@ -363,22 +324,15 @@ class DeviceStateSnapshot:
 def undo_phase_changes(
     device: device_probes.AdbDevice,
     snapshot: DeviceStateSnapshot,
-    prior_power: tuple[str, ...] | None = None,
+    prior_power: list[str] | None = None,
     *,
     simulated: bool = False,
 ) -> list[str]:
     """
     Undo a phase's device changes, isolating each step so none can skip the others.
 
-    The `cmd battery` reset runs only when this phase applied the override. A device that was already
-    on its own battery is never put under the override, so there is nothing to clear, and clearing it
-    would be a write to a device whose state is already correct.
-
-    The reset and the readback that verifies it are two steps rather than one. `power_source_restored`
-    reads a battery dump, and a dump that cannot be parsed raises `ProbeError` from there; sharing the
-    reset's guard meant an unparsable readback escaped this function entirely, so the settings restore
-    below never ran and the problems list stayed empty — the shared device left pinned with nothing on
-    disk for `report` to print.
+    The battery reset runs only when this phase applied the override. Reset and readback are separate
+    steps: sharing a guard let an unparsable readback escape and skip the settings restore.
     """
     problems: list[str] = []
     if simulated:
@@ -410,14 +364,8 @@ def read_int_setting(device: device_probes.AdbDevice, namespace: str, key: str) 
     """
     Read one integer device setting, or None when it is unset or not a decimal integer.
 
-    The readback runs inside the restore as well as before it, and the restore's contract is that no
-    step can abort the ones after it. A readback that raised here would do exactly that — the settings
-    restore would stop at this step and the display restore would never run — so text that cannot be
-    read is `None`, which the restore already reports as a value that did not read back.
-
-    That conflation is the right reading for a *comparison* — `None` is never the value a step wrote,
-    so it fails one — but not for deciding what a setting was worth. `read_unsettable_int_setting` is
-    the reader that tells the two apart, and the stay-awake setting is captured through it.
+    `None` keeps the restore running and fails its comparison, but it conflates unset with unreadable;
+    `read_unsettable_int_setting` is the capture reader that separates them.
     """
     return parse_signed_int(read_setting_text(device, namespace, key))
 
@@ -426,15 +374,9 @@ def read_unsettable_int_setting(device: device_probes.AdbDevice, namespace: str,
     """
     Read one integer device setting that is legitimately unset, refusing an unreadable reading.
 
-    `settings get` prints `null` for a key that was never set, and a decimal integer for one that was,
-    so those are the only two readings that say anything about the setting's value. Anything else is
-    a settings service that did not answer — and `read_int_setting` reports it as `None`, which is
-    exactly the sentinel for "never set". Nothing downstream can tell them apart afterwards: the
-    capture stores it, `pin()` overwrites the setting anyway, and the restore then *deletes* a key
-    that may have held a real value, reporting a clean restore of a device it left changed. The
-    distinction has to be made where the text is, so it is made here and an unreadable reading stops
-    the phase before it pins anything — the same refusal `require_int_setting` makes for the four
-    settings that cannot be captured as unset, for the same reason.
+    `null` and a decimal integer are the only two readings that say anything. Anything else is a
+    settings service that did not answer; treating it as "unset" would delete a real value and report
+    a clean restore, so the phase stops before it pins anything.
     """
     raw = read_setting_text(device, namespace, key)
     if raw == UNSET_SETTING_TEXT:
@@ -454,9 +396,8 @@ def require_int_setting(device: device_probes.AdbDevice, namespace: str, key: st
     """
     Read one device setting the pre-phase capture cannot do without.
 
-    `pin()` overwrites every one of these, and the restore can only put back a value that was
-    captured. A phase that pinned a setting it could not read would leave the shared device changed
-    and still report success, so an unreadable value stops the phase before it touches anything.
+    `pin()` overwrites it and the restore can only put back what was captured, so an unreadable value
+    stops the phase before it touches anything.
     """
     value = read_int_setting(device, namespace, key)
     if value is None:
@@ -473,13 +414,12 @@ def set_airplane_mode(device: device_probes.AdbDevice, *, enabled: bool) -> None
     device.run_adb(["shell", "cmd", "connectivity", "airplane-mode", "enable" if enabled else "disable"])
 
 
-def require_complete_power_sources(lines: Sequence[str]) -> None:
+def require_complete_power_sources(lines: list[str]) -> None:
     """
-    Refuse a power-source reading that is missing any of the four sources `dumpsys battery` reports.
+    Refuse a power-source reading missing any of the four sources.
 
-    One `powered:` line is not a reading. A dump that named only `Dock powered: false` would look
-    exactly like a device on its own battery to a per-line scan, and the identity of a discharge
-    measurement rests on this reading, so an incomplete one is raised rather than filled in.
+    One `powered:` line is not a reading: `Dock powered: false` alone looks like a device on battery,
+    and the discharge measurement's identity rests on this reading.
     """
     present = {match.group(1) for match in POWERED_LINE_PATTERN.finditer("\n".join(lines))}
     missing = [source for source in EXPECTED_POWER_SOURCES if source not in present]
@@ -491,31 +431,29 @@ def require_complete_power_sources(lines: Sequence[str]) -> None:
         raise device_probes.ProbeError(detail)
 
 
-def read_power_source_lines(device: device_probes.AdbDevice) -> tuple[str, ...]:
+def read_power_source_lines(device: device_probes.AdbDevice) -> list[str]:
     """Read the battery dump's power-source lines, which `cmd battery unplug` rewrites."""
     output = device.run_adb(["shell", "dumpsys", "battery"]).decode(errors="replace")
-    lines = tuple(line.strip() for line in output.splitlines() if POWERED_LINE_PATTERN.match(line.strip()))
+    lines = [line.strip() for line in output.splitlines() if POWERED_LINE_PATTERN.match(line.strip())]
     require_complete_power_sources(lines)
     return lines
 
 
-def power_source_restored(device: device_probes.AdbDevice, before: tuple[str, ...]) -> bool:
+def power_source_restored(device: device_probes.AdbDevice, before: list[str]) -> bool:
     """
-    Report whether the reported power sources match what they were before the simulation.
+    Report whether the power sources match their pre-simulation reading.
 
-    Comparing against the pre-simulation reading is what separates "the override is gone" from
-    "this device happens to be running on its own battery", which look identical in the dump.
+    That separates "the override is gone" from "this device happens to be on its own battery", which
+    look identical in the dump.
     """
     return read_power_source_lines(device) == before
 
 
-def power_lines_show_battery(lines: Sequence[str]) -> bool:
+def power_lines_show_battery(lines: list[str]) -> bool:
     """
-    Report whether a battery dump's `powered:` fields all read false, i.e. the device is on battery.
+    Report whether all of a dump's `powered:` fields read false, i.e. the device is on battery.
 
-    Every source is required. A dump that named fewer than the four sources is raised rather than
-    read as "no charger is connected", because a probe that stopped reporting some of them would
-    otherwise look like a device that is discharging.
+    Every source is required: a probe that stopped reporting some must not look like a discharge.
     """
     require_complete_power_sources(lines)
     return all(match.group(2) == "false" for match in POWERED_LINE_PATTERN.finditer("\n".join(lines)))
@@ -530,15 +468,9 @@ def power_mode_for(device: device_probes.AdbDevice) -> str:
     """
     Name the discharge state a window needs, reading the device without changing it.
 
-    A device that is genuinely discharging already has the live fuel gauge this measurement wants,
-    and `cmd battery unplug` would replace that with a frozen override — the very artefact the
-    simulation was invented to work around. The override is therefore chosen only when the device is
-    on a charger, and the mode is recorded in the window as part of its identity.
-
-    Deciding is separate from applying because applying can fail *after* the device has obeyed: a
-    dropped transport or a timeout on `cmd battery unplug` leaves the override on the device while the
-    call raises. The caller records what this returned before anything is written, so the restore
-    knows a reset is owed even when the call that applied it came back with an error.
+    A genuinely discharging device has the live gauge the measurement wants, so the override is chosen
+    only on a charger. Deciding is separate from applying because the apply call can fail after the
+    device obeyed; the recorded mode tells the restore a reset is owed.
     """
     return POWER_SOURCE_DEVICE if device_on_own_battery(device) else POWER_SOURCE_SIMULATED
 
@@ -553,9 +485,8 @@ def parse_signed_int(raw: str) -> int | None:
     """
     Read a device's signed decimal integer, or None when the text is not one.
 
-    A parse rather than a `str.isdigit()` test: `isdigit()` answers a different question, and the
-    guard built on it here — `raw.lstrip("-").isdigit()` — accepted `"--5"` and `"²"`, both of which
-    then raised `ValueError` from `int()` at a call site whose caller treats "unreadable" as a value.
+    A parse, not `lstrip("-").isdigit()`: that guard accepted `"--5"` and `"²"`, which `int()` raises
+    on.
     """
     return int(raw) if DECIMAL_INT_PATTERN.fullmatch(raw) else None
 
@@ -595,9 +526,7 @@ def load_records(state_dir: Path) -> list[dict[str, object]]:
     if not path.is_file():
         detail = f"no records at {path}; run the measurement phases before the report"
         raise device_probes.ProbeError(detail)
-    # The decode is guarded like the parse below it. An append interrupted mid-character leaves a
-    # partial UTF-8 sequence, which `read_text` raises `UnicodeDecodeError` on — the same corrupt
-    # state file the JSON branch names, failing one step earlier and as a traceback.
+    # An append interrupted mid-character leaves a partial UTF-8 sequence; name it like a corrupt line.
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as error:
@@ -610,10 +539,8 @@ def load_records(state_dir: Path) -> list[dict[str, object]]:
         try:
             parsed = json.loads(line)
         except ValueError as error:
-            # A truncated write is a state file the run can be told about, not a traceback: the
-            # phases append as they go, so the last line is the one an interrupted run leaves short.
-            # `JSONDecodeError` is caught here as the `ValueError` it is, and so is the other
-            # `ValueError` `json` raises — a number with more digits than `int()` will convert.
+            # A truncated append leaves the last line short; `ValueError` also covers an integer
+            # `json` cannot convert. Name it as a corrupt record, not a traceback.
             detail = f"{path}:{number} is not valid JSON ({error}); the record is truncated or corrupt"
             raise device_probes.ProbeError(detail) from error
         if not isinstance(parsed, dict):
@@ -625,11 +552,10 @@ def load_records(state_dir: Path) -> list[dict[str, object]]:
 
 class Recorder:
     """
-    Writes each record to the state file as it is produced, and keeps them for the caller.
+    Writes each record as it is produced, and keeps them for the caller.
 
-    Persisting per record is what makes the phases resumable: a phase interrupted part-way leaves the
-    records it completed on disk rather than holding them in a list until a `main` that may never
-    reach its append loop.
+    Persisting per record makes a phase resumable: an interrupted run leaves its completed records on
+    disk.
     """
 
     def __init__(self, state_dir: Path) -> None:

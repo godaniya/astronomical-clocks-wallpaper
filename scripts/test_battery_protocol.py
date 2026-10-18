@@ -128,12 +128,12 @@ def _window(*, cpu: float | None) -> battery_snapshot.Window:
 # The four `powered:` fields `dumpsys battery` prints, all false: the device is on its own battery.
 # Every source is required, so a phase's power read is stubbed with the whole reading rather than one
 # line of it.
-ON_BATTERY_POWER_LINES: Final = (
+ON_BATTERY_POWER_LINES: Final = [
     "AC powered: false",
     "USB powered: false",
     "Wireless powered: false",
     "Dock powered: false",
-)
+]
 
 
 # A digit run longer than `int()` will convert — it raises above about 4300 digits rather than
@@ -143,12 +143,12 @@ OVERSIZED_DIGITS: Final = "9" * 5000
 
 # The same four fields with a charger on USB: the state that puts a window under the `cmd battery
 # unplug` override rather than leaving it on the device's own gauge.
-ON_CHARGER_POWER_LINES: Final = (
+ON_CHARGER_POWER_LINES: Final = [
     "AC powered: false",
     "USB powered: true",
     "Wireless powered: false",
     "Dock powered: false",
-)
+]
 
 
 def make_temp_dir() -> Path:
@@ -1236,11 +1236,11 @@ class ArmGuardTest(unittest.TestCase):
         device = MagicMock()
         device.serial = "serial"
         device.run_adb.return_value = b"screencap"
-        with (
-            patch.object(device_probes, "read_wallpaper_component", return_value=STOCK_COMPONENT),
-            patch.object(device_frame, "decode_frame", return_value=BLACK_FRAME),
-        ):
-            conditions = battery_phases.arm_conditions(device, battery_stats.Arm.BASELINE, battery_stats.Baseline.STOCK)
+        with patch.object(device_frame, "decode_frame", return_value=BLACK_FRAME):
+            conditions = battery_phases.arm_conditions(
+                device, battery_stats.Arm.BASELINE, battery_stats.Baseline.STOCK, STOCK_COMPONENT
+            )
+        self.assertEqual(STOCK_COMPONENT, conditions["wallpaper_component"])
         self.assertEqual(0.0, conditions["median_luma"])
         self.assertIn("not gated", str(conditions["median_luma_note"]))
 
@@ -1856,7 +1856,7 @@ class RestoreTest(unittest.TestCase):
         device = MagicMock()
         snapshot = MagicMock()
         snapshot.restore.return_value = []
-        prior_power = ("AC powered: false", "USB powered: false", "Wireless powered: false", "Dock powered: false")
+        prior_power = ["AC powered: false", "USB powered: false", "Wireless powered: false", "Dock powered: false"]
         with patch.object(
             battery_snapshot, "power_source_restored", side_effect=device_probes.ProbeError("the dump lost a field")
         ):

@@ -13,20 +13,14 @@ The shared device layer owns the ADB primitives, the dial/frame analysis, and th
 identity; this module keeps the smoke scenario, its restore policy, and its report.
 """
 
-from __future__ import annotations
-
 import argparse
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from host import contract
 from host.device import frame, probes
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
 
 
 @dataclass(frozen=True)
@@ -64,7 +58,7 @@ class SmokeOutcome:
     initial_reset_confirmed: bool
     measurement: AdvanceMeasurement | None
     recreation: SurfaceRecreation
-    warnings: Sequence[str]
+    warnings: list[str]
     log_collection_error: str | None = None
 
 
@@ -326,7 +320,7 @@ def print_results(baseline: SmokeBaseline, recreate_size: str, outcome: SmokeOut
     print("---------------------------------------------------------------------------\n")
 
 
-def finish_run(failures: Sequence[str], *, log_scan_inconclusive: bool) -> None:
+def finish_run(failures: list[str], *, log_scan_inconclusive: bool) -> None:
     """Exit non-zero when any check failed, or report the pass and what it did not establish."""
     if failures:
         for failure in failures:

@@ -19,7 +19,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Final
 
-from host.device import probes
+from . import probes
 
 # A trace dump moves the whole trace buffer over the transport, which a plain shell call cannot.
 ADB_TRACE_TIMEOUT_SECONDS: Final = 120

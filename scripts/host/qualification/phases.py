@@ -10,20 +10,15 @@ The shared device layer owns the ADB primitives, the dial/frame analysis, and th
 identity; this module keeps the qualification phases, its restore policy, and its report.
 """
 
-from __future__ import annotations
-
 import subprocess
 import sys
 import time
-from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from host import contract
 from host.device import frame, probes
-from host.qualification import checks
 
-if TYPE_CHECKING:
-    from collections.abc import Sequence
+from . import checks
 
 
 def restore_device(
@@ -317,7 +312,7 @@ def phase_process_rebind(device: probes.AdbDevice, results: list[tuple[str, str]
 
 
 def measure_hand_advance(
-    device: probes.AdbDevice, offset_args: Sequence[str], expected_message: str
+    device: probes.AdbDevice, offset_args: list[str], expected_message: str
 ) -> tuple[bool, float | None]:
     """Advance the virtual clock by one debug offset, returning (confirmed, hand angle after)."""
     if not device.send_debug_clock_broadcast(offset_args, expected_message):
@@ -594,7 +589,6 @@ def read_device_baseline(requested_serial: str | None) -> checks.DeviceBaseline:
         size_override=size_override,
         screen_was_on=screen_was_on,
         night_mode=night_mode,
-        wallpaper_pid=pid_start,
     )
 
 

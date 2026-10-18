@@ -1,23 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 """Evaluation rules, baseline state, rollover geometry, and producer-window checks for qualification."""
 
-from __future__ import annotations
-
 import argparse
 import subprocess
 import sys
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
-from typing import TYPE_CHECKING, Final
+from typing import Final
+from zoneinfo import ZoneInfo
 
 from host import contract
 from host.device import frame, probes, trace
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-    from zoneinfo import ZoneInfo
 
 REBIND_POLL_COUNT: Final = 10
 
@@ -75,7 +71,6 @@ class DeviceBaseline:
     size_override: str | None
     screen_was_on: bool
     night_mode: str
-    wallpaper_pid: int
 
 
 def non_negative_int(value: str) -> int:
@@ -264,10 +259,9 @@ def evaluate_screen_off_cpu(
     """
     Return (tick delta, failure message) for one endpoint-bracketed screen-off sample window.
 
-    A delta of D whole ticks cannot exceed D+1 ticks of CPU time, so the decision compares that upper
-    bound against the budget. A clock whose single tick is wider than the budget can never show the
-    sample within budget, so it is reported as unmeasured rather than passed. Both comparisons are
-    strict: one tick exactly equal to the budget still bounds the true CPU time below the budget.
+    A delta of D ticks cannot exceed D+1 ticks of CPU, so the decision compares that bound. A clock
+    whose single tick is wider than the budget can never establish it, and both comparisons are
+    strict: one tick equal to the budget still bounds the true CPU below it.
     """
     if ticks_start is None or ticks_end is None:
         return None, "Failed to sample wallpaper CPU ticks during confirmed screen-off state"
@@ -296,9 +290,8 @@ def resolve_rollover_zone(device: probes.AdbDevice) -> tuple[str, str] | None:
     """
     Resolve the zone the service renders with: the saved site's, else the device's.
 
-    A probes.ProbeError from the saved-site read propagates: a None saved zone means a
-    successful read confirmed no saved record, so the device timezone is the correct fallback, but a
-    failed read must not be read as absence.
+    A `ProbeError` from the saved-site read propagates: only a successful read returning none means
+    "no saved record", where the device timezone is the fallback.
     """
     saved_site_zone = device.read_saved_site_zone_id()
     if saved_site_zone:
@@ -404,14 +397,9 @@ def evaluate_producer_control(window: trace.ProducerWindow | None, failures: lis
             "recorded beside it would be an unread counter rather than a measured zero"
         )
         return False
-    # The control validates the instrument as well as the tracer. It is the window this phase knows
-    # was lit before the hidden one, so it is the only check on the display reader in the direction
-    # the hidden window's claim rests on that comes before that window: the sleep gate between the
-    # two only confirms the reader reports off after the screen was slept, which a reader stuck on
-    # False would also satisfy. (The closing control checks the reader in the same direction, but
-    # only after the window it brackets.) A control whose display evidence is invalid has therefore
-    # not validated that reading, so — like the blind control above — it refuses rather than letting
-    # the phase record a hidden zero inside a bracket it has just declared invalid.
+    # The control validates the display reader too: it is the only check in the direction the hidden
+    # claim rests on before that window. The sleep gate only confirms an off reading, which a reader
+    # stuck on False would also satisfy, so invalid display evidence refuses the window.
     if not window.display_on_at_every_sample:
         failures.append(f"The {description} display was not on for every sample taken inside it")
         return False
@@ -422,10 +410,8 @@ def producer_window_summary(window: trace.ProducerWindow) -> str:
     """
     Format the one line of evidence recorded for, and printed about, a producer window.
 
-    The display label is read off the samples rather than chosen as the complement of the window's
-    verdicts: "mixed" claims that an on sample and an off sample were both seen, and it is used only
-    when both were. A window whose samples were all unreadable observed neither state, and one whose
-    readable samples were all on observed no off state, so neither is called mixed.
+    The label is read off the samples: "mixed" is used only when both an on and an off sample were
+    seen, so an all-unreadable window is never called mixed.
     """
     states = window.display_states
     on_samples = sum(1 for state in states if state is True)
@@ -445,9 +431,8 @@ def producer_window_summary(window: trace.ProducerWindow) -> str:
     )
 
 
-# device, pid, seconds, results, failures and the description all have to reach the one call site
-# that both records and fails the check; bundling them into a carrier type would not make the call
-# clearer, so the argument count is the honest shape here.
+# The six inputs all reach the one call site that records and fails the check; a carrier type would
+# not make it clearer, so the argument count is the honest shape.
 def measure_producer_window(  # noqa: PLR0913
     device: probes.AdbDevice,
     pid: int | None,
@@ -484,17 +469,14 @@ def evaluate_closing_control(window: trace.ProducerWindow | None, failures: list
     """
     Fail unless the closing control both produced frames and was on screen throughout.
 
-    Its frame count is what carries the tracer's claim — the hidden zero is only a measurement if the
-    tracer still produced frames after the hidden window — while its display state is what makes it
-    the visible control it is named as. A window with frames but samples that were off or unreadable
-    has confirmed neither, so it is judged on both, as the opening control is.
+    The frames carry the tracer's claim and the display state makes it the visible control, so it is
+    judged on both, as the opening control is.
     """
     if window is None:
         return
     if window.frame_count == 0:
-        # The observation, not a cause: a process recreated during the wake produces the same empty
-        # window with a working tracer, and a hidden window whose trace failed or whose row was
-        # discarded for an unattributable pid leaves no zero for this failure to be about.
+        # The observation, not a cause: a recreated process yields the same empty window with a
+        # working tracer.
         failures.append(
             "The visible control window after the hidden one produced no producer frames on the pid "
             "traced after the wake, so the tracer is not confirmed to have been working across the "
@@ -511,8 +493,7 @@ def accept_hidden_window(window: trace.ProducerWindow | None, failures: list[str
     """
     Announce and judge a hidden window whose pid check held.
 
-    The announcement waits for this point rather than happening as the window is traced, because a
-    window the pid check then abandons is removed from the results and a line printed earlier could
+    Printing waits for this point, because a line about a window the pid check then abandons could
     not be retracted.
     """
     if window is None:
@@ -530,9 +511,8 @@ def evaluate_hidden_window(window: trace.ProducerWindow | None, failures: list[s
             "The display was not off for every sample inside the hidden producer window, so its "
             "frame count does not describe a screen-off window"
         )
-        # The budget is not applied to a window whose samples were not all off: the count is not
-        # attributable to a screen-off window, so reporting the frames as rendered with the display
-        # off would claim more than the samples support. The failure above is the whole verdict.
+        # The budget is not applied: the count is not attributable to a screen-off window, so the
+        # failure above is the whole verdict.
         return
     if window.frame_count != 0:
         failures.append(

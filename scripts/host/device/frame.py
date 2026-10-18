@@ -12,7 +12,8 @@ from typing import Final, Self
 from uuid import uuid4
 
 from host import contract
-from host.device import probes
+
+from . import probes
 
 SCREENCAP_HEADER_BYTES: Final = 16
 
@@ -173,24 +174,19 @@ def collect_hand_points(width: int, height: int, pixels: bytes, *, is_dark: bool
     max_r_sq = max_radius * max_radius
 
     is_hand_pixel = is_dark_hand_pixel if is_dark else is_light_hand_pixel
-    row_stride = width * contract.PIXEL_STRIDE
-    points: list[tuple[float, float]] = []
-    for y in range(int(cy - max_radius), int(cy + max_radius), contract.HAND_SCAN_STEP_PX):
-        if y < 0 or y >= height:
-            continue
-        dy = y - cy
-        row_offset = y * row_stride
-        for x in range(int(cx - max_radius), int(cx + max_radius), contract.HAND_SCAN_STEP_PX):
-            if x < 0 or x >= width:
-                continue
-            dx = x - cx
-            dist_sq = dx * dx + dy * dy
-            if min_r_sq <= dist_sq <= max_r_sq:
-                px = row_offset + x * contract.PIXEL_STRIDE
-                rgb = undim_rgb((pixels[px], pixels[px + 1], pixels[px + 2]), layout.brightness)
-                if is_hand_pixel(*rgb):
-                    points.append((dx, dy))
-    return points
+
+    def is_hand_at(x: int, y: int) -> bool:
+        offset = (y * width + x) * contract.PIXEL_STRIDE
+        rgb = undim_rgb((pixels[offset], pixels[offset + 1], pixels[offset + 2]), layout.brightness)
+        return is_hand_pixel(*rgb)
+
+    return [
+        (x - cx, y - cy)
+        for y in range(int(cy - max_radius), int(cy + max_radius), contract.HAND_SCAN_STEP_PX)
+        if 0 <= y < height
+        for x in range(int(cx - max_radius), int(cx + max_radius), contract.HAND_SCAN_STEP_PX)
+        if 0 <= x < width and min_r_sq <= (x - cx) ** 2 + (y - cy) ** 2 <= max_r_sq and is_hand_at(x, y)
+    ]
 
 
 def civil_hand_angle_deg(seconds_since_local_midnight: float) -> float:

@@ -774,7 +774,6 @@ class DeviceQualificationTest(unittest.TestCase):
             size_override=None,
             screen_was_on=True,
             night_mode="auto",
-            wallpaper_pid=123,
         )
         phase_names = (
             "phase_baseline_capture",
@@ -3543,7 +3542,6 @@ class PhasePrerequisiteTest(unittest.TestCase):
             size_override=None,
             screen_was_on=True,
             night_mode="auto",
-            wallpaper_pid=123,
         )
         for wake_ok, wake_error in ((True, None), (False, None), (False, RuntimeError("wake probe failed"))):
             with contextlib.ExitStack() as stack:
@@ -3679,7 +3677,6 @@ class PhasePrerequisiteTest(unittest.TestCase):
                 size_override=None,
                 screen_was_on=True,
                 night_mode="auto",
-                wallpaper_pid=123,
             )
             stack.enter_context(patch.object(module, "read_device_baseline", return_value=baseline))
             stack.enter_context(patch.object(module, "phase_environment_setup", return_value=True))

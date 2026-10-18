@@ -5,21 +5,18 @@ ADB command transport, system/window/process/site state probes, and the AdbDevic
 Provides `AdbDevice`, `ProbeError`, and shared ADB inspection and control primitives.
 """
 
-from __future__ import annotations
-
 import json
 import re
 import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
-from typing import TYPE_CHECKING, Final
+from collections.abc import Mapping
+from typing import Final
 
 from host import contract
-from host.device import frame, trace
 
-if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+from . import frame, trace
 
 # Bound every ADB call: a stalled transport would otherwise block the run forever.
 ADB_TIMEOUT_SECONDS: Final = 30
@@ -166,7 +163,7 @@ def captured_text(match: re.Match[str], group: int) -> str:
     return str(match.group(group))
 
 
-def run_adb(args: Sequence[str], serial: str | None = None, timeout: int = ADB_TIMEOUT_SECONDS) -> bytes:
+def run_adb(args: list[str], serial: str | None = None, timeout: int = ADB_TIMEOUT_SECONDS) -> bytes:
     """Run one `adb` invocation and return its stdout, raising on a non-zero exit or a timeout."""
     cmd = ["adb"]
     if serial:
@@ -600,7 +597,7 @@ def wake_screen(serial: str) -> bool:
         return False
 
 
-def run_restore_command(serial: str, command: Sequence[str]) -> bool:
+def run_restore_command(serial: str, command: list[str]) -> bool:
     """Run one restore command, reporting a failure without raising so the remaining ones still run."""
     try:
         run_adb(command, serial=serial, timeout=ADB_RESTORE_TIMEOUT_SECONDS)
@@ -622,7 +619,7 @@ def count_service_log_messages(serial: str, message: str) -> int:
     return sum(message in line and f"{contract.SERVICE_LOG_TAG}: " in line for line in output.splitlines())
 
 
-def send_debug_clock_broadcast(serial: str, extras: Sequence[str], expected_message: str) -> bool:
+def send_debug_clock_broadcast(serial: str, extras: list[str], expected_message: str) -> bool:
     """Send a debug-clock broadcast and report whether the service logged a new acceptance line."""
     before = count_service_log_messages(serial, expected_message)
     run_adb(
@@ -659,7 +656,7 @@ class AdbDevice:
         """Initialize an AdbDevice with the target device serial."""
         self.serial: Final = serial
 
-    def run_adb(self, args: Sequence[str], timeout: int = ADB_TIMEOUT_SECONDS) -> bytes:
+    def run_adb(self, args: list[str], timeout: int = ADB_TIMEOUT_SECONDS) -> bytes:
         """Run an adb invocation targeting this device serial."""
         return run_adb(args, serial=self.serial, timeout=timeout)
 
@@ -759,7 +756,7 @@ class AdbDevice:
         """
         self.run_adb(["shell", "input", "keyevent", "KEYCODE_HOME"])
 
-    def run_restore_command(self, command: Sequence[str]) -> bool:
+    def run_restore_command(self, command: list[str]) -> bool:
         """Run one restore command on this device."""
         return run_restore_command(self.serial, command)
 
@@ -767,7 +764,7 @@ class AdbDevice:
         """Count service-tagged logcat lines containing the given message."""
         return count_service_log_messages(self.serial, message)
 
-    def send_debug_clock_broadcast(self, extras: Sequence[str], expected_message: str) -> bool:
+    def send_debug_clock_broadcast(self, extras: list[str], expected_message: str) -> bool:
         """Send a debug-clock broadcast and verify the expected log message."""
         return send_debug_clock_broadcast(self.serial, extras, expected_message)
 
