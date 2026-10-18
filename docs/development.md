@@ -174,9 +174,15 @@ reproduces one exact environment across local machines and CI. The approved pyte
 packages (`typing_extensions`, `numpy`, `scipy`, `pandas`, `hypothesis`) are not permitted. Coverage
 via `pytest-cov` is used as migration-parity evidence for the #148 (H4) and #149 (H5) test refactors
 rather than as a hard CI fail-under gate, preserving [test scope and proportionality](../CONTRIBUTING.md#test-scope-and-proportionality).
-While the existing `unittest.TestCase` modules await the pilot-gated #148 migration, `uv run pytest`
-and `python3 -I -m unittest discover` both run the suite and `PT009`, `PT019`, and `PT027` stay
-relaxed on those five files.
+Under the #148 H4a pilot (`scripts/test_battery_report.py`), [`scripts/conftest.py`](../scripts/conftest.py)
+installs the module-scoped autouse `no_real_sleep` fixture wrapping `install_no_real_sleep_guard()` from
+`scripts/device_test_fixtures.py`, and the migrated test module uses plain `def test_*` functions, typed
+`TypedDict` record builders with one explicit corrupt-record helper, bare `assert` (`S101` relaxed for
+every `scripts/test_*.py` module), `almost_equal(...)` with `assertAlmostEqual`'s places semantics for
+numeric parity, `pytest.raises(..., match=...)`, `capsys` / `mocker` fixtures, and
+`@pytest.mark.parametrize` with all `flake8-pytest-style` (`PT`) rules enforced. While the four remaining
+`unittest.TestCase` modules await H4b/H4c, `uv run pytest` and `python3 -I -m unittest discover` both run
+the suite and `PT009`, `PT019`, and `PT027` stay relaxed on those files.
 
 **Parity and import checks in `scripts/check_host_tooling.py`.** The checker is development tooling,
 not one of the runtime harnesses. Its pre-commit scanner strips comments with a quote-aware
@@ -280,7 +286,8 @@ colors.
 | Ruff `T201` | The harnesses and the device layer print output or diagnostic errors to stdout/stderr; there is no logger to convert to, and adding one would be a dependency. | `scripts/host/**/*.py` |
 | Ruff `INP001` | `scripts/` deliberately has no `__init__.py` at its top level: the CLI wrappers are run as scripts, while `scripts/host/` is a proper package where `INP001` remains enabled. | Top-level wrapper, fixture, and test files in `scripts/*.py` |
 | Ruff `D102`, `D103` | Test methods and helpers in the suite are described by their names and their docstrings, not by a summary line restating the name. | `scripts/test_battery_protocol.py`, `scripts/test_battery_report.py`, `scripts/test_device_smoke.py`, `scripts/test_device_qualification.py`, `scripts/test_check_host_tooling.py` |
-| Ruff `PT009`, `PT019`, `PT027` | These flake8-pytest-style rules remain relaxed on the existing `unittest.TestCase` files until they are migrated under #148: `PT009` and `PT027` flag `assertEqual`/`assertRaises`, and `PT019` reads positionally injected `unittest.mock.patch` parameters as pytest fixtures. | `scripts/test_battery_protocol.py`, `scripts/test_battery_report.py`, `scripts/test_device_smoke.py`, `scripts/test_device_qualification.py`, `scripts/test_check_host_tooling.py` |
+| Ruff `S101` | Every host test module uses pytest now or after H4b/H4c, and bare `assert` statements are rewritten by pytest's assertion introspection (`PT009` forbids `unittest.TestCase` assertion helpers). The rule is relaxed repository-wide for test modules rather than per migrated file. | Every `scripts/test_*.py` module |
+| Ruff `PT009`, `PT019`, `PT027` | These flake8-pytest-style rules remain relaxed on the existing `unittest.TestCase` files until they are migrated under #148: `PT009` and `PT027` flag `assertEqual`/`assertRaises`, and `PT019` reads positionally injected `unittest.mock.patch` parameters as pytest fixtures. | `scripts/test_battery_protocol.py`, `scripts/test_device_smoke.py`, `scripts/test_device_qualification.py`, `scripts/test_check_host_tooling.py` |
 | Ruff `S603` | `run_adb` executes the developer's own `adb` from `PATH` with an argv built from literals and parsed device output, `check=True`, and no shell, so there is no untrusted input to validate. `S607` is not raised because the executable is not written at the call site. The fresh-interpreter import-order test runs the same Python executable with a fixed script and a literal module name. | `run_adb` in `scripts/host/device/probes.py` and the import-order test, annotated in source |
 | Ruff `CPY001` (via `notice-rgx`) | The rule looks for a copyright line; this repository marks licensing with an SPDX identifier instead, and the Kotlin sources, the shell scripts, and the maintained Python files all use that form. | Ruff config, `scripts/` |
 
