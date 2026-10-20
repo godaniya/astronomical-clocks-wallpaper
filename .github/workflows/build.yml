@@ -107,12 +107,12 @@ jobs:
           git diff --exit-code uv.lock
           uv sync --frozen --group dev
           uv run --frozen python scripts/check_host_tooling.py
-      - name: Lint host scripts (Ruff)
-        run: uv run --frozen ruff check --output-format=github scripts
-      - name: Check host script formatting (Ruff)
-        run: uv run --frozen ruff format --check --output-format=github scripts
-      - name: Type-check host scripts (ty)
-        run: uv run --frozen ty check --output-format=github scripts
+      - name: Lint host scripts and tests (Ruff)
+        run: uv run --frozen ruff check --output-format=github scripts tests
+      - name: Check host script and test formatting (Ruff)
+        run: uv run --frozen ruff format --check --output-format=github scripts tests
+      - name: Type-check host scripts and tests (ty)
+        run: uv run --frozen ty check --output-format=github scripts tests
       - name: Spell-check text files (codespell)
         run: uv run --frozen codespell
       - name: Test host device harnesses

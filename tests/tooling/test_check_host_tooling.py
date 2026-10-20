@@ -13,9 +13,11 @@ from pathlib import Path
 from typing import Final
 
 import check_host_tooling as subject
-from device_test_fixtures import install_no_real_sleep_guard
+from tests.support.device import install_no_real_sleep_guard
 
 _module_cleanups: list[Callable[[], None]] = []
+
+REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 
 
 def setUpModule() -> None:
@@ -107,8 +109,6 @@ repos:
     hooks:
       - id: codespell
 """
-
-REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 
 
 class PreCommitParserTest(unittest.TestCase):
@@ -353,7 +353,7 @@ class PackageInitializerTest(unittest.TestCase):
     """Package initializers stay docstring-only, so importing one submodule loads no siblings."""
 
     def test_every_package_initializer_has_no_imports(self) -> None:
-        root = Path(__file__).resolve().parent
+        root = REPO_ROOT / "scripts"
         initializers = sorted((root / "host").rglob("__init__.py"))
         self.assertIn(root / "host" / "__init__.py", initializers)
         self.assertGreaterEqual(len(initializers), 4)
@@ -368,7 +368,7 @@ class TopLevelImportOrderTest(unittest.TestCase):
     """Each package module imports first in a fresh interpreter, whatever order the graph is entered."""
 
     def test_each_device_module_imports_first(self) -> None:
-        root = Path(__file__).resolve().parent.parent
+        root = REPO_ROOT
         for module in ("host.device.trace", "host.device.frame", "host.device.probes", "host.battery.cli"):
             with self.subTest(module=module):
                 # S603: this runs the same interpreter with a fixed script; the module name is one of

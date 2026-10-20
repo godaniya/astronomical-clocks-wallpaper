@@ -30,13 +30,13 @@ dev = [
 package = false
 
 [tool.pytest.ini_options]
-testpaths = ["scripts"]
+testpaths = ["tests"]
 python_files = ["test_*.py"]
-pythonpath = ["scripts"]
+pythonpath = ["scripts", "."]
 
 [tool.ruff]
 line-length = 120
-src = ["scripts"]
+src = ["scripts", "."]
 # Python 3.12 is the interpreter the CI runner's `python3` resolves to, and nothing in scripts/
 # uses syntax newer than it. A newer target with an older runtime would be incoherent.
 target-version = "py312"
@@ -71,28 +71,22 @@ notice-rgx = "# SPDX-License-Identifier: Apache-2\\.0"
 "scripts/battery_report.py" = ["INP001"]
 "scripts/device_qualification.py" = ["INP001"]
 "scripts/device_smoke.py" = ["INP001"]
-# Every host test module uses pytest now or after H4b/H4c, so bare `assert` (`S101`) is allowed
-# repository-wide for `scripts/test_*.py`. The split test modules are not packages either; their
-# methods are described by their docstrings and names rather than a per-method summary line. The PT
-# rules are flake8-pytest-style: while the remaining unittest.TestCase modules await the #148
-# migration, PT009 and PT027 flag assertEqual/assertRaises and PT019 reads positionally injected
-# unittest.mock.patch parameters as pytest fixtures.
-"scripts/test_*.py" = ["S101"]
-"scripts/test_battery_protocol.py" = ["INP001", "D102", "D103", "PT009", "PT019", "PT027"]
-"scripts/test_battery_report.py" = ["INP001", "D103"]
-"scripts/test_device_smoke.py" = ["INP001", "D102", "D103", "PT009", "PT019", "PT027"]
-"scripts/test_device_qualification.py" = ["INP001", "D102", "D103", "PT009", "PT019", "PT027"]
-"scripts/test_host_contract.py" = ["INP001", "D102", "D103", "PT009", "PT019", "PT027"]
-
-# The shared pytest configuration and test-only RGBA fixture helpers are also standalone scripts/
-# modules.
-"scripts/conftest.py" = ["INP001"]
-"scripts/device_test_fixtures.py" = ["INP001"]
+# Every host test module uses pytest now or after H4b/H4c, so bare `assert` (`S101`) is allowed for
+# `tests/**/test_*.py`. Test methods are described by their docstrings and names rather than a
+# per-method summary line. The PT rules are flake8-pytest-style: while the remaining unittest.TestCase
+# modules await the #148 migration, PT009 and PT027 flag assertEqual/assertRaises and PT019 reads
+# positionally injected unittest.mock.patch parameters as pytest fixtures.
+"tests/**/test_*.py" = ["S101"]
+"tests/host/unit/test_battery_protocol.py" = ["D102", "D103", "PT009", "PT019", "PT027"]
+"tests/host/unit/test_battery_report.py" = ["D103"]
+"tests/host/qualification/test_device_smoke.py" = ["D102", "D103", "PT009", "PT019", "PT027"]
+"tests/host/qualification/test_device_qualification.py" = ["D102", "D103", "PT009", "PT019", "PT027"]
+"tests/host/contract/test_host_contract.py" = ["D102", "D103", "PT009", "PT019", "PT027"]
 
 # The host tooling checker is dev tooling run as a script, and its tests follow the same unittest
 # conventions as the modules above until the #148 migration.
 "scripts/check_host_tooling.py" = ["INP001"]
-"scripts/test_check_host_tooling.py" = ["INP001", "D102", "D103", "PT009", "PT019", "PT027"]
+"tests/tooling/test_check_host_tooling.py" = ["D102", "D103", "PT009", "PT019", "PT027"]
 
 [tool.codespell]
 # Domain vocabulary and local identifiers that codespell's dictionary flags; see the 2026-10-07
@@ -110,7 +104,7 @@ error-on-warning = true
 
 [tool.ty.environment]
 # Matches Ruff's target-version and the CI runner's python3. `extra-paths` matches Ruff's `src` so
-# `ty check scripts` resolves `host.*` imports the same way `python3 scripts/<wrapper>.py` and
-# `uv run pytest` (through `pythonpath = ["scripts"]`) do.
+# `ty check scripts tests` resolves `host.*` and `tests.*` imports the same way
+# `python3 scripts/<wrapper>.py` and `uv run pytest` (through `pythonpath = ["scripts", "."]`) do.
 python-version = "3.12"
-extra-paths = ["scripts"]
+extra-paths = ["scripts", "."]

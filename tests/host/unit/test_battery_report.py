@@ -10,7 +10,6 @@ it, which is what lets a criterion be tested without running one.
 """
 
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 from typing import Final, NotRequired, TypedDict
 
 import pytest
@@ -217,9 +216,9 @@ def full_pass_records() -> list[Record]:
 
 
 @pytest.fixture(scope="session")
-def b2_row() -> str:
+def b2_row(pytestconfig: pytest.Config) -> str:
     """Return the acceptance matrix's B2 row."""
-    budget = Path(__file__).resolve().parent.parent / "docs" / "battery-budget.md"
+    budget = pytestconfig.rootpath / "docs" / "battery-budget.md"
     return next(line for line in budget.read_text(encoding="utf-8").splitlines() if line.startswith("| **B2:"))
 
 

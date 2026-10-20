@@ -6,9 +6,9 @@ repos:
     rev: v0.16.10
     hooks:
       - id: ruff-check
-        files: ^scripts/
+        files: ^(scripts|tests)/
       - id: ruff-format
-        files: ^scripts/
+        files: ^(scripts|tests)/
   - repo: https://github.com/astral-sh/ty-pre-commit
     rev: v0.0.84
     hooks:

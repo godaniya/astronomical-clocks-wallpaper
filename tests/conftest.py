@@ -5,7 +5,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from device_test_fixtures import install_no_real_sleep_guard
+from tests.support.device import install_no_real_sleep_guard
 
 
 @pytest.fixture(autouse=True, scope="module")
