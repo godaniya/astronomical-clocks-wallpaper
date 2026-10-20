@@ -2,7 +2,7 @@
 
 Current-build physical-device check of the two observable process-death paths in #36: an
 explicit force-stop and a non-stopping process kill. It also records the recovery flow through
-**Open wallpaper preview** and the low-memory branch this pass did not exercise.
+**Open wallpaper preview** and the low-memory path this pass did not exercise.
 
 Test build: local debug `app-debug.apk` built from this branch's tree with
 `./gradlew qualityGate :app:assembleDebug`. The branch carries documentation only, so the

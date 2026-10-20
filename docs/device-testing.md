@@ -68,7 +68,7 @@ paths matter:
 | Path | Observed behavior |
 | --- | --- |
 | Force-stop (`am force-stop` or Settings → Apps → Force stop) | Android marks the package stopped and the system falls back to the built-in `ImageWallpaper`. Returning home does not rebind the live wallpaper. Launching **Astro Clocks** clears the stopped state; **Open wallpaper preview** re-applies the wallpaper. The saved observing site and dial settings survive. |
-| Non-stopping process death (for example `run-as ... kill -9`) | The package remains unstopped and `WallpaperManagerService` rebinds the service; rendering resumes and saved state is preserved. |
+| Non-stopping process death (for example `run-as ... kill -9`) | The package remains unstopped and `WallpaperManagerService` rebinds the service; rendering resumes. |
 | Low-memory kill (`REASON_LOW_MEMORY`) | On Android 16, the framework delays rebind while memory remains low and can revert to the built-in wallpaper after repeated low-memory exits. This path is **not verified on the device**. |
 
 These observations are from one Android 16 device; another OEM's wallpaper manager may treat the
