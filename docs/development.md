@@ -112,9 +112,9 @@ locally as:
 uv lock --check
 uv sync --frozen --group dev
 uv run --frozen python scripts/check_host_tooling.py
-uv run --frozen ruff check --output-format=github scripts
-uv run --frozen ruff format --check --output-format=github scripts
-uv run --frozen ty check --output-format=github scripts
+uv run --frozen ruff check --output-format=github scripts tests
+uv run --frozen ruff format --check --output-format=github scripts tests
+uv run --frozen ty check --output-format=github scripts tests
 uv run --frozen codespell
 uv run --frozen pytest
 ```
@@ -122,8 +122,8 @@ uv run --frozen pytest
 Ruff runs `select = ["ALL"]` on stable rules at a 120-column line length, and ty promotes every rule to
 an error and fails on a warning. All tools are pinned to exact versions in `[dependency-groups].dev`
 and `uv.lock`, and target Python 3.12, which is what the runner's `python3` resolves to. The checks
-cover `scripts/` only: the unit tests exercise parsing and decision helpers, and neither they nor the
-static checks connect to a device or establish Android lifecycle, rendering, battery, or CPU behavior.
+cover `scripts/` and `tests/`: the unit tests exercise parsing and decision helpers, and neither they nor
+the static checks connect to a device or establish Android lifecycle, rendering, battery, or CPU behavior.
 
 These development tools are never imported by the runtime harnesses (the
 [`scripts/check_host_tooling.py`](../scripts/check_host_tooling.py) AST audit verifies that the four
@@ -150,16 +150,29 @@ lives in the `scripts/host/` package (`host.contract`, `host.device.{probes,fram
 `host.battery.{stats,report,snapshot,probes,phases,cli}`, and
 `host.qualification.{checks,phases,smoke}`), while the top-level `scripts/*.py` entry points remain
 thin CLI wrappers. `python3 scripts/<wrapper>.py` places `scripts/` on `sys.path` natively; pytest
-does the same through `pythonpath = ["scripts"]` in `[tool.pytest.ini_options]`, so `host.*` is
+does the same through `pythonpath = ["scripts", "."]` in `[tool.pytest.ini_options]`, so `host.*` is
 imported under one canonical module identity (`host.<subpackage>.<module>`) without `sys.path`
 mutation or an editable install, and `unittest.mock.patch` targets never split across duplicate
-module objects. The `INP001` exception below applies only to the top-level wrapper and test files in
-`scripts/`, while `INP001` stays enabled across `scripts/host/**/*.py`.
+module objects. The `INP001` exception below applies only to the top-level wrapper files in
+`scripts/`, while `INP001` stays enabled across `scripts/host/**/*.py` and the `tests/` package.
+
+**Tests under `tests/` (#147 H3b).** The host suite is a package: `tests/__init__.py` plus
+`tests/host/{unit,contract,qualification}/`, `tests/tooling/`, and `tests/fixtures/`. pytest is the
+sole host runner. `pythonpath = ["scripts", "."]` in `[tool.pytest.ini_options]` keeps `host.*` under
+one canonical module identity and makes `tests.fixtures.*` importable without an editable install;
+`[tool.uv] package = false` stays. `tests/conftest.py` owns the module-scoped autouse `no_real_sleep`
+fixture, `tests/fixtures/device.py` owns the synthetic-frame builders and the no-sleep guard, and
+`tests/fixtures/paths.py` exposes `REPO_ROOT` for tests that read repository files or run a
+subprocess from the repository root. Ruff, ty, pre-commit, and CI cover both `scripts/` and `tests/`.
 
 The smoke and qualification suites are separate; synthetic RGBA fixtures live in
-`scripts/device_test_fixtures.py`. The qualification suite checks that shared constants live in a
+`tests/fixtures/device.py`. The qualification suite checks that shared constants live in a
 single canonical module across `host.contract`, `host.device.frame`, and `host.device.probes`. None
 of this adds production shared-device helpers.
+
+**Historical runner commands.** Reports dated before #147 H3b quote
+`python3 -I -m unittest discover -s scripts -p 'test_*.py'`, which was accurate at the time. pytest is
+the current host runner; the historical commands are not rewritten.
 
 **Locked `[dependency-groups].dev`, stdlib-only runtime (#146 owner decision).** Runtime harnesses in
 `scripts/` remain strictly standard-library Python (`dependencies = []`, `[tool.uv] package = false`)
@@ -172,11 +185,11 @@ reproduces one exact environment across local machines and CI. The approved pyte
 packages (`typing_extensions`, `numpy`, `scipy`, `pandas`, `hypothesis`) are not permitted. Coverage
 via `pytest-cov` is used as migration-parity evidence for the #148 (H4) and #149 (H5) test refactors
 rather than as a hard CI fail-under gate, preserving [test scope and proportionality](../CONTRIBUTING.md#test-scope-and-proportionality).
-Under the #148 H4a pilot (`scripts/test_battery_report.py`), [`scripts/conftest.py`](../scripts/conftest.py)
+Under the #148 H4a pilot (`tests/host/unit/test_battery_report.py`), [`tests/conftest.py`](../tests/conftest.py)
 installs the module-scoped autouse `no_real_sleep` fixture wrapping `install_no_real_sleep_guard()` from
-`scripts/device_test_fixtures.py`, and the migrated test module uses plain `def test_*` functions, typed
+`tests/fixtures/device.py`, and the migrated test module uses plain `def test_*` functions, typed
 `TypedDict` record builders with one explicit corrupt-record helper, bare `assert` (`S101` relaxed for
-every `scripts/test_*.py` module), `almost_equal(...)` with `assertAlmostEqual`'s places semantics for
+every `tests/**/test_*.py` module), `almost_equal(...)` with `assertAlmostEqual`'s places semantics for
 numeric parity, `pytest.raises(..., match=...)`, `capsys` / `mocker` fixtures, and
 `@pytest.mark.parametrize` with all `flake8-pytest-style` (`PT`) rules enforced. While the remaining
 `unittest.TestCase` modules await H4b/H4c, `uv run pytest` collects both native pytest and legacy
@@ -210,8 +223,8 @@ no tool version can drift between the action input and `uv.lock`.
 review round, so the repository carries all three, pinned to the same versions as `[dependency-groups].dev`
 (checked in CI). Install and run locally with `pre-commit install` and `pre-commit run --all-files`,
 or with no local install via `uvx --from pre-commit==4.6.2 pre-commit run --all-files`. The Ruff hooks
-are scoped to `scripts/` to mirror the CI invocation; the ty hook checks the project (its upstream
-design), needs `uv` on PATH, and runs in uv's isolated mode so hook execution cannot mutate `.venv` or
+are scoped to `scripts/` and `tests/` to mirror the CI invocation; the ty hook checks the project (its
+upstream design), needs `uv` on PATH, and runs in uv's isolated mode so hook execution cannot mutate `.venv` or
 `uv.lock`. codespell reads its four-word allowlist and skip list from `[tool.codespell]` in
 [`pyproject.toml`](../pyproject.toml); it is a GPL-2.0 development-time tool (not bundled, linked, or
 distributed), recorded in [dependencies.md](dependencies.md). CI stays authoritative and does not run
@@ -251,7 +264,7 @@ in the `host-checks` CI job without invoking Gradle first. `HostContractTest` (r
 Kotlin constants. Host-only vision/probe tolerances (`DARK_HAND_RGB_BOUNDS`, `LIGHT_HAND_RGB_BOUNDS`,
 `DARK_HAND_MIN_RED_MINUS_BLUE`, `HAND_SCAN_INNER_FRACTION`, `RIM_PROBE_RADIUS_FRACTION`, and ADB timeouts)
 remain in `scripts/host/contract.py` because Kotlin production code does not use them, and
-`scripts/test_host_contract.py` verifies that the antialiased RGB bounds cover the contract's exact hand
+`tests/host/contract/test_host_contract.py` verifies that the antialiased RGB bounds cover the contract's exact hand
 colors.
 
 ## Rule exceptions
@@ -277,17 +290,17 @@ colors.
 | detekt `TooGenericExceptionCaught` | `dialGeometryOrNull` catches `RuntimeException` around `dialGeometry` to fall back to the 24-hour civil dial rather than blanking the frame on geometry calculation failures. | Only `ClockEngine.dialGeometryOrNull`, annotated in source |
 | Lint `UnspecifiedRegisterReceiverFlag` | `registerDebugReceiver` calls the 2-argument `registerReceiver` on API < 33 when `RECEIVER_EXPORTED` is unavailable; lint requires annotating the API 33+ branch guard. | Only `AstronomicalClocksWallpaperService.registerDebugReceiver`, annotated in source |
 | detekt `TooManyFunctions` | `ClockEngine` keeps platform lifecycle, appearance/display callbacks, layout diagnostics and the tick loop together so rendering retains its lifecycle guards. Splitting solely for the function budget would separate those contracts. | Only `AstronomicalClocksWallpaperService.ClockEngine`, annotated in source |
-| Ruff `D203`, `D212` | Mutually exclusive pairs with the enabled rules: `D203` (one blank line before a class docstring) contradicts enabled `D211`, and `D212` (multi-line summary on the first line) conflicts with the `D213` layout used throughout `scripts/`. Exactly one rule of each pair can be enabled. | Ruff config, `scripts/` |
-| Ruff `D300` | Triple double quotes. The formatter preserves the one triple-single-quoted docstring (`scripts/test_device_qualification.py:576`) because converting it would introduce escapes, so enabling `D300` would flag formatter-stable output. | Ruff config, `scripts/` |
-| Ruff `COM812` | Trailing-comma missing. The formatter omits trailing commas in compact multi-line calls (`scripts/host/device/probes.py`), so enabling `COM812` makes Ruff emit its own formatter-conflict warning and findings on formatter-stable code. | Ruff config, `scripts/` |
-| Ruff formatter-conflict audit (2026-10-07) | The pinned toolchain was audited against Ruff's documented [formatter-conflict list](https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules): every other listed rule (`W191`, `E111`, `E114`, `E117`, `D206`, `Q000`–`Q004`, `COM819`) was enabled in a temporary config and cleared both `ruff format --check` (no conflict warnings) and `ruff check` (0 findings), on the formatter-stable tree and on a formatting torture fixture (tabs, 2-space indentation, over-indentation, comment indentation, tab-indented docstring paragraph, trailing commas, mixed quotes, escaped quotes). ISC002 is not relaxed: its documented condition (`ISC001` disabled and `allow-multiline = false`) does not apply because `ISC001` stays enabled. The four rules above are the only Ruff ignores left; re-run the audit whenever the Ruff pin changes. | Ruff config, `scripts/` |
+| Ruff `D203`, `D212` | Mutually exclusive pairs with the enabled rules: `D203` (one blank line before a class docstring) contradicts enabled `D211`, and `D212` (multi-line summary on the first line) conflicts with the `D213` layout used throughout `scripts/` and `tests/`. Exactly one rule of each pair can be enabled. | Ruff config, `scripts/` and `tests/` |
+| Ruff `D300` | Triple double quotes. The formatter preserves triple-single-quoted docstrings when converting them would introduce escapes, so enabling `D300` would flag formatter-stable output. The concrete example first cited here is no longer present in `tests/host/qualification/test_device_qualification.py`; the formatter behavior, not that example, is the reason the rule stays ignored. | Ruff config, `scripts/` and `tests/` |
+| Ruff `COM812` | Trailing-comma missing. The formatter omits trailing commas in compact multi-line calls (`scripts/host/device/probes.py`), so enabling `COM812` makes Ruff emit its own formatter-conflict warning and findings on formatter-stable code. | Ruff config, `scripts/` and `tests/` |
+| Ruff formatter-conflict audit (2026-10-07) | The pinned toolchain was audited against Ruff's documented [formatter-conflict list](https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules): every other listed rule (`W191`, `E111`, `E114`, `E117`, `D206`, `Q000`–`Q004`, `COM819`) was enabled in a temporary config and cleared both `ruff format --check` (no conflict warnings) and `ruff check` (0 findings), on the formatter-stable tree and on a formatting torture fixture (tabs, 2-space indentation, over-indentation, comment indentation, tab-indented docstring paragraph, trailing commas, mixed quotes, escaped quotes). ISC002 is not relaxed: its documented condition (`ISC001` disabled and `allow-multiline = false`) does not apply because `ISC001` stays enabled. The four rules above are the only Ruff ignores left; re-run the audit whenever the Ruff pin changes. | Ruff config, `scripts/` and `tests/` |
 | Ruff `T201` | The harnesses and the device layer print output or diagnostic errors to stdout/stderr; there is no logger to convert to, and adding one would be a dependency. | `scripts/host/**/*.py` |
-| Ruff `INP001` | `scripts/` deliberately has no `__init__.py` at its top level: the CLI wrappers are run as scripts, while `scripts/host/` is a proper package where `INP001` remains enabled. | Top-level wrapper, fixture, and test files in `scripts/*.py` |
-| Ruff `D102`, `D103` | Test methods and helpers in the suite are described by their names and their docstrings, not by a summary line restating the name. | `scripts/test_battery_protocol.py`, `scripts/test_device_smoke.py`, `scripts/test_device_qualification.py`, `scripts/test_check_host_tooling.py`, `scripts/test_host_contract.py` (`D102`, `D103`); `scripts/test_battery_report.py` (`D103` only) |
-| Ruff `S101` | Every host test module uses pytest now or after H4b/H4c, and bare `assert` statements are rewritten by pytest's assertion introspection (`PT009` forbids `unittest.TestCase` assertion helpers). The rule is relaxed repository-wide for test modules rather than per migrated file. | Every `scripts/test_*.py` module |
-| Ruff `PT009`, `PT019`, `PT027` | These flake8-pytest-style rules remain relaxed on the existing `unittest.TestCase` files until they are migrated under #148: `PT009` and `PT027` flag `assertEqual`/`assertRaises`, and `PT019` reads positionally injected `unittest.mock.patch` parameters as pytest fixtures. | `scripts/test_battery_protocol.py`, `scripts/test_device_smoke.py`, `scripts/test_device_qualification.py`, `scripts/test_check_host_tooling.py`, `scripts/test_host_contract.py` |
-| Ruff `S603` | `run_adb` executes the developer's own `adb` from `PATH` with an argv built from literals and parsed device output, `check=True`, and no shell, so there is no untrusted input to validate. `S607` is not raised because the executable is not written at the call site. The fresh-interpreter import-order test runs the same Python executable with a fixed script and a literal module name. | `run_adb` in `scripts/host/device/probes.py` and the import-order test, annotated in source |
-| Ruff `CPY001` (via `notice-rgx`) | The rule looks for a copyright line; this repository marks licensing with an SPDX identifier instead, and the Kotlin sources, the shell scripts, and the maintained Python files all use that form. | Ruff config, `scripts/` |
+| Ruff `INP001` | `scripts/` deliberately has no `__init__.py` at its top level: the CLI wrappers are run as scripts, while `scripts/host/` is a proper package. `tests/` is a package as well, so `INP001` remains enabled there. | Top-level wrapper files in `scripts/*.py` and `scripts/check_host_tooling.py` |
+| Ruff `D102`, `D103` | Test methods and helpers in the suite are described by their names and their docstrings, not by a summary line restating the name. | `tests/host/unit/test_battery_protocol.py`, `tests/host/qualification/test_device_smoke.py`, `tests/host/qualification/test_device_qualification.py`, `tests/tooling/test_check_host_tooling.py`, `tests/host/contract/test_host_contract.py` (`D102`, `D103`); `tests/host/unit/test_battery_report.py` (`D103` only) |
+| Ruff `S101` | Every host test module uses pytest now or after H4b/H4c, and bare `assert` statements are rewritten by pytest's assertion introspection (`PT009` forbids `unittest.TestCase` assertion helpers). The rule is relaxed repository-wide for test modules rather than per migrated file. | Every `tests/**/test_*.py` module |
+| Ruff `PT009`, `PT019`, `PT027` | These flake8-pytest-style rules remain relaxed on the existing `unittest.TestCase` files until they are migrated under #148: `PT009` and `PT027` flag `assertEqual`/`assertRaises`, and `PT019` reads positionally injected `unittest.mock.patch` parameters as pytest fixtures. | `tests/host/unit/test_battery_protocol.py`, `tests/host/qualification/test_device_smoke.py`, `tests/host/qualification/test_device_qualification.py`, `tests/tooling/test_check_host_tooling.py`, `tests/host/contract/test_host_contract.py` |
+| Ruff `S603` | `run_adb` executes the developer's own `adb` from `PATH` with an argv built from literals and parsed device output, `check=True`, and no shell, so there is no untrusted input to validate. `S607` is not raised because the executable is not written at the call site. The fresh-interpreter import-order test runs the same Python executable with a fixed script and a literal module name. | `run_adb` in `scripts/host/device/probes.py` and the import-order test in `tests/tooling/test_check_host_tooling.py`, annotated in source |
+| Ruff `CPY001` (via `notice-rgx`) | The rule looks for a copyright line; this repository marks licensing with an SPDX identifier instead, and the Kotlin sources, the shell scripts, and the maintained Python files all use that form. | Ruff config, `scripts/` and `tests/` |
 
 Upstream defaults remain the starting point, including per-rule defaults for test documentation and
 magic numbers. Tests are still compiled with the same strict compiler and analyzed with type resolution;
