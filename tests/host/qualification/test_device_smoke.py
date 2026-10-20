@@ -17,7 +17,7 @@ from host import contract
 from host.device import frame as device_frame
 from host.device import probes as device_probes
 from host.qualification import smoke as device_smoke
-from tests.fixtures.device import (
+from tests.support.device import (
     BYTES_PER_PIXEL,
     FRAME_HEIGHT,
     FRAME_WIDTH,

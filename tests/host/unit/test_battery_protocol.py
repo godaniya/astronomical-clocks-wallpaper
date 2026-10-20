@@ -34,7 +34,7 @@ from host.battery import (
 )
 from host.device import frame as device_frame
 from host.device import probes as device_probes
-from tests.fixtures.device import install_no_real_sleep_guard
+from tests.support.device import install_no_real_sleep_guard
 
 _module_cleanups: list[Callable[[], None]] = []
 _temp_directories: list[tempfile.TemporaryDirectory[str]] = []

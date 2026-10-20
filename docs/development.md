@@ -157,16 +157,21 @@ module objects. The `INP001` exception below applies only to the top-level wrapp
 `scripts/`, while `INP001` stays enabled across `scripts/host/**/*.py` and the `tests/` package.
 
 **Tests under `tests/` (#147 H3b).** The host suite is a package: `tests/__init__.py` plus
-`tests/host/{unit,contract,qualification}/`, `tests/tooling/`, and `tests/fixtures/`. pytest is the
+`tests/host/{unit,contract,qualification}/`, `tests/tooling/`, and `tests/support/`. pytest is the
 sole host runner. `pythonpath = ["scripts", "."]` in `[tool.pytest.ini_options]` keeps `host.*` under
-one canonical module identity and makes `tests.fixtures.*` importable without an editable install;
+one canonical module identity and makes `tests.support.*` importable without an editable install;
 `[tool.uv] package = false` stays. `tests/conftest.py` owns the module-scoped autouse `no_real_sleep`
-fixture, `tests/fixtures/device.py` owns the synthetic-frame builders and the no-sleep guard, and
-`tests/fixtures/paths.py` exposes `REPO_ROOT` for tests that read repository files or run a
-subprocess from the repository root. Ruff, ty, pre-commit, and CI cover both `scripts/` and `tests/`.
+fixture, and `tests/support/device.py` owns the synthetic-frame builders and the no-sleep guard.
+Repository-root access uses `pytestconfig.rootpath` in pytest-native tests and a local module constant
+in the remaining `unittest.TestCase` module. Ruff, ty, pre-commit, and CI cover both `scripts/` and
+`tests/`.
+
+`tests/` is an internal test package, not a distribution. `pythonpath = ["scripts", "."]` is a
+deliberate bridge for `[tool.uv] package = false`, not an installable-package design. Production code
+under `scripts/` must not import `tests`.
 
 The smoke and qualification suites are separate; synthetic RGBA fixtures live in
-`tests/fixtures/device.py`. The qualification suite checks that shared constants live in a
+`tests/support/device.py`. The qualification suite checks that shared constants live in a
 single canonical module across `host.contract`, `host.device.frame`, and `host.device.probes`. None
 of this adds production shared-device helpers.
 
@@ -187,7 +192,7 @@ via `pytest-cov` is used as migration-parity evidence for the #148 (H4) and #149
 rather than as a hard CI fail-under gate, preserving [test scope and proportionality](../CONTRIBUTING.md#test-scope-and-proportionality).
 Under the #148 H4a pilot (`tests/host/unit/test_battery_report.py`), [`tests/conftest.py`](../tests/conftest.py)
 installs the module-scoped autouse `no_real_sleep` fixture wrapping `install_no_real_sleep_guard()` from
-`tests/fixtures/device.py`, and the migrated test module uses plain `def test_*` functions, typed
+`tests/support/device.py`, and the migrated test module uses plain `def test_*` functions, typed
 `TypedDict` record builders with one explicit corrupt-record helper, bare `assert` (`S101` relaxed for
 every `tests/**/test_*.py` module), `almost_equal(...)` with `assertAlmostEqual`'s places semantics for
 numeric parity, `pytest.raises(..., match=...)`, `capsys` / `mocker` fixtures, and

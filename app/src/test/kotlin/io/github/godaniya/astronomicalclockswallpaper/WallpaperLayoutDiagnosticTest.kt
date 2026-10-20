@@ -59,7 +59,8 @@ class WallpaperLayoutDiagnosticTest {
             // Mirror the parser's own fit check: scripts/device_layer.py rejects a report whose drawn
             // disc, radius * STROKED_EXTENT, leaves the frame. This fixture sits about 68 px clear of
             // the frame, so it shows acceptance, not the boundary. The boundary is pinned by
-            // tests/host/qualification/test_device_smoke.py::test_reports_reject_a_clipped_outer_stroke and by
+            // tests/host/qualification/test_device_smoke.py::
+            // DisplayDiagnosticTest::test_reports_reject_a_clipped_outer_stroke and by
             // DialDisplayRenderTest.nativeCornerPlacement, which already uses STROKED_EXTENT.
             val extent = radius * DialViewport.STROKED_EXTENT
             assertTrue(cx - extent >= -EXTENT_TOLERANCE_PX)

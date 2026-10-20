@@ -24,7 +24,7 @@ from host.device import trace as device_trace
 from host.qualification import checks as qual_checks
 from host.qualification import phases as qual_phases
 from host.qualification import smoke as device_smoke
-from tests.fixtures.device import (
+from tests.support.device import (
     BYTES_PER_PIXEL,
     FRAME_HEIGHT,
     FRAME_WIDTH,

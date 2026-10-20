@@ -13,10 +13,11 @@ from pathlib import Path
 from typing import Final
 
 import check_host_tooling as subject
-from tests.fixtures.device import install_no_real_sleep_guard
-from tests.fixtures.paths import REPO_ROOT
+from tests.support.device import install_no_real_sleep_guard
 
 _module_cleanups: list[Callable[[], None]] = []
+
+REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 
 
 def setUpModule() -> None:

@@ -19,7 +19,6 @@ from host.battery import cli as battery_cli
 from host.battery import report as battery_report
 from host.battery import stats as battery_stats
 from host.device import probes as device_probes
-from tests.fixtures.paths import REPO_ROOT
 
 
 class VisibleRecord(TypedDict):
@@ -217,9 +216,9 @@ def full_pass_records() -> list[Record]:
 
 
 @pytest.fixture(scope="session")
-def b2_row() -> str:
+def b2_row(pytestconfig: pytest.Config) -> str:
     """Return the acceptance matrix's B2 row."""
-    budget = REPO_ROOT / "docs" / "battery-budget.md"
+    budget = pytestconfig.rootpath / "docs" / "battery-budget.md"
     return next(line for line in budget.read_text(encoding="utf-8").splitlines() if line.startswith("| **B2:"))
 
 
