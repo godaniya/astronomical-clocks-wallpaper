@@ -68,16 +68,20 @@ paths matter:
 | Path | Observed behavior |
 | --- | --- |
 | Force-stop (`am force-stop` or Settings → Apps → Force stop) | Android marks the package stopped and the system falls back to the built-in `ImageWallpaper`. Returning home does not rebind the live wallpaper. Launching **Astro Clocks** clears the stopped state; **Open wallpaper preview** re-applies the wallpaper. The saved observing site and dial settings survive. |
-| Non-stopping process death (for example `run-as ... kill -9`) | The package remains unstopped and `WallpaperManagerService` rebinds the service; rendering resumes from persisted state. |
-| Low-memory kill (`REASON_LOW_MEMORY`) | On Android 16, the framework delays rebind while memory remains low and can revert to the built-in wallpaper after repeated low-memory exits. This branch is **not verified on the device**. |
+| Non-stopping process death (for example `run-as ... kill -9`) | The package remains unstopped and `WallpaperManagerService` rebinds the service; rendering resumes and saved state is preserved. |
+| Low-memory kill (`REASON_LOW_MEMORY`) | On Android 16, the framework delays rebind while memory remains low and can revert to the built-in wallpaper after repeated low-memory exits. This path is **not verified on the device**. |
 
-The app cannot re-apply the wallpaper from the background: `SET_WALLPAPER_COMPONENT` is a
-`signature|privileged` permission. After a force-stop, launch **Astro Clocks** and use
+These observations are from one Android 16 device; another OEM's wallpaper manager may treat the
+stopped state differently.
+
+The app cannot re-apply the wallpaper from the background:
+[`SET_WALLPAPER_COMPONENT`](https://github.com/aosp-mirror/platform_frameworks_base/blob/android16-release/core/res/AndroidManifest.xml#L7196-L7197)
+is a `signature|privileged` permission. After a force-stop, launch **Astro Clocks** and use
 **Open wallpaper preview**; the system asks the user to confirm the change.
 
 No public adb command in the documented procedure produces `REASON_LOW_MEMORY`:
 `am kill` reports `REASON_USER_REQUESTED`, and a direct `SIGKILL` is not an lmkd kill.
-Real memory pressure is outside the shared-device procedure. The branch is carried by
+Real memory pressure is outside the shared-device procedure. This path is carried by
 [#160](https://github.com/godaniya/astronomical-clocks-wallpaper/issues/160).
 
 Evidence: [force-stop and process-death report](testing/reports/2026-10-20-test-36-force-stop-current-build.md)
@@ -171,7 +175,7 @@ The expected behavior describes the implementation contract; diagnostics describ
 it. Historical observations apply only to each report's recorded source revision, APK, sites, instants,
 and measurement method. They do not qualify the current build. The current-build force-stop and
 non-stopping process-death pass is recorded in
-[the 2026-10-20 report](testing/reports/2026-10-20-test-36-force-stop-current-build.md). The pending
+[the force-stop and process-death report](testing/reports/2026-10-20-test-36-force-stop-current-build.md). The pending
 column names gaps in the recorded evidence; a later device pass must also re-check the applicable
 expectations against its own identified build.
 
