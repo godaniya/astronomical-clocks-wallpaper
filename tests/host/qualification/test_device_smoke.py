@@ -13,7 +13,11 @@ from types import ModuleType
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-from device_test_fixtures import (
+from host import contract
+from host.device import frame as device_frame
+from host.device import probes as device_probes
+from host.qualification import smoke as device_smoke
+from tests.fixtures.device import (
     BYTES_PER_PIXEL,
     FRAME_HEIGHT,
     FRAME_WIDTH,
@@ -22,10 +26,6 @@ from device_test_fixtures import (
     install_no_real_sleep_guard,
     palette_frame,
 )
-from host import contract
-from host.device import frame as device_frame
-from host.device import probes as device_probes
-from host.qualification import smoke as device_smoke
 
 _module_cleanups: list[Callable[[], None]] = []
 

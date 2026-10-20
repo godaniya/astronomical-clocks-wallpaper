@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-from device_test_fixtures import install_no_real_sleep_guard
 from host import contract
 from host.battery import (
     cli as battery_cli,
@@ -35,6 +34,7 @@ from host.battery import (
 )
 from host.device import frame as device_frame
 from host.device import probes as device_probes
+from tests.fixtures.device import install_no_real_sleep_guard
 
 _module_cleanups: list[Callable[[], None]] = []
 _temp_directories: list[tempfile.TemporaryDirectory[str]] = []

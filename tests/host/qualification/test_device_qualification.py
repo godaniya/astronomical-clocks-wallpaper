@@ -17,7 +17,14 @@ from unittest.mock import MagicMock, Mock, patch
 from xml.sax.saxutils import escape as xml_escape
 from zoneinfo import ZoneInfo
 
-from device_test_fixtures import (
+from host import contract
+from host.device import frame as device_frame
+from host.device import probes as device_probes
+from host.device import trace as device_trace
+from host.qualification import checks as qual_checks
+from host.qualification import phases as qual_phases
+from host.qualification import smoke as device_smoke
+from tests.fixtures.device import (
     BYTES_PER_PIXEL,
     FRAME_HEIGHT,
     FRAME_WIDTH,
@@ -27,13 +34,6 @@ from device_test_fixtures import (
     install_no_real_sleep_guard,
     palette_frame,
 )
-from host import contract
-from host.device import frame as device_frame
-from host.device import probes as device_probes
-from host.device import trace as device_trace
-from host.qualification import checks as qual_checks
-from host.qualification import phases as qual_phases
-from host.qualification import smoke as device_smoke
 
 _module_cleanups: list[Callable[[], None]] = []
 
